@@ -19,9 +19,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
-[assembly: AssemblyInformationalVersion("1.2.0")]
+[assembly: AssemblyVersion("1.3.0.0")]
+[assembly: AssemblyFileVersion("1.3.0.0")]
+[assembly: AssemblyInformationalVersion("1.3.0")]
 
 namespace HexGuide.Desktop
 {
@@ -79,7 +79,7 @@ namespace HexGuide.Desktop
         private readonly Timer refreshTimer;
         private readonly bool startHidden;
         private bool sidebarEnabled = true, previewSidebar, explicitActivation, trayHintShown;
-        private bool fetching, scanChanging, confirmChanging, hotKeyRegistered;
+        private bool fetching, scanChanging, confirmChanging, hotKeyRegistered, appearanceRequested, appearanceOpening;
         private string sessionToken;
         private IntPtr lastGame;
         private DateTime nextFetch = DateTime.MinValue;
@@ -90,7 +90,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             previewSidebar = preview;
-            Text = "海克斯指南 1.2.0 · 实时助手";
+            Text = "海克斯指南 1.3.0 · 实时助手";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -115,6 +115,8 @@ namespace HexGuide.Desktop
             sidebarButton.Click += delegate { ToggleSidebar(); };
             var gameButton = new ToolStripButton("返回游戏");
             gameButton.Click += delegate { ReturnToGame(); };
+            var appearanceButton = new ToolStripButton("界面设置");
+            appearanceButton.Click += async delegate { await OpenAppearanceAsync(); };
             reload = new ToolStripButton("刷新页面");
             reload.Enabled = false;
             reload.Click += delegate { if (browser.CoreWebView2 != null) browser.Reload(); };
@@ -123,6 +125,7 @@ namespace HexGuide.Desktop
             toolbar.Items.Add(hideButton);
             toolbar.Items.Add(sidebarButton);
             toolbar.Items.Add(gameButton);
+            toolbar.Items.Add(appearanceButton);
             toolbar.Items.Add(reload);
             shortcutStatus = new ToolStripLabel("Alt + Shift + H：切换侧栏");
             shortcutStatus.ForeColor = Color.FromArgb(163, 178, 196);
@@ -148,6 +151,7 @@ namespace HexGuide.Desktop
             sidebar.OfferConfirmed += async delegate(string id) { await ConfirmOfferAsync(id); };
             var menu = new ContextMenuStrip();
             menu.Items.Add("打开完整助手", null, delegate { ShowMain(); });
+            menu.Items.Add("界面设置", null, async delegate { await OpenAppearanceAsync(); });
             menu.Items.Add("显示 / 收起游戏侧栏", null, delegate { ToggleSidebar(); });
             menu.Items.Add("预览侧栏（不切换窗口）", null, delegate { sidebarEnabled = true; previewSidebar = true; UpdateSidebarVisibility(); });
             scanMenu = new ToolStripMenuItem("后台识别海克斯");
@@ -165,6 +169,7 @@ namespace HexGuide.Desktop
             {
                 UpdateSidebarVisibility();
                 if (DateTime.UtcNow >= nextFetch) { nextFetch = DateTime.UtcNow.AddSeconds(2); await FetchSidebarAsync(); }
+                if (appearanceRequested) await OpenRequestedAppearanceAsync();
             };
             refreshTimer.Start();
             Shown += async delegate { if (startHidden) Hide(); await StartAsync(); };
@@ -233,6 +238,30 @@ namespace HexGuide.Desktop
             sidebarEnabled = !visible;
             previewSidebar = !visible && !GameWindow.IsGameForeground();
             UpdateSidebarVisibility();
+        }
+
+        private async Task OpenAppearanceAsync()
+        {
+            if (closing) return;
+            appearanceRequested = true;
+            ShowMain();
+            await OpenRequestedAppearanceAsync();
+        }
+
+        private async Task OpenRequestedAppearanceAsync()
+        {
+            if (!appearanceRequested || appearanceOpening || closing || browser.CoreWebView2 == null || !browser.Visible) return;
+            appearanceOpening = true;
+            try
+            {
+                // The fixed script is the only bridge; user-controlled settings are never evaluated.
+                string result = await browser.CoreWebView2.ExecuteScriptAsync("Boolean(window.hexguideAppearance && (window.hexguideAppearance.open(), true))");
+                if (string.Equals(result, "true", StringComparison.Ordinal)) appearanceRequested = false;
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+            catch (COMException) { }
+            finally { appearanceOpening = false; }
         }
 
         private void UpdateSidebarVisibility()
@@ -337,12 +366,13 @@ namespace HexGuide.Desktop
                 browser.CoreWebView2.NavigationStarting += OnNavigation;
                 browser.CoreWebView2.NewWindowRequested += delegate(object sender, CoreWebView2NewWindowRequestedEventArgs args)
                 { args.Handled = true; OpenExternal(args.Uri); };
-                browser.CoreWebView2.NavigationCompleted += delegate(object sender, CoreWebView2NavigationCompletedEventArgs args)
+                browser.CoreWebView2.NavigationCompleted += async delegate(object sender, CoreWebView2NavigationCompletedEventArgs args)
                 {
                     if (!args.IsSuccess) { ShowFailure("页面未能打开，请点击刷新或重启软件。"); return; }
                     status.Visible = false;
                     browser.Visible = true;
                     reload.Enabled = true;
+                    await OpenRequestedAppearanceAsync();
                 };
                 // The token stays in this process and the fragment, never an HTTP query or log.
                 browser.Source = new Uri(localOrigin, "#session=" + Uri.EscapeDataString(token));
@@ -519,17 +549,71 @@ namespace HexGuide.Desktop
         [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr handle, int id);
     }
 
+    internal sealed class SidebarAppearance
+    {
+        internal string FontFamily = "system", Side = "right";
+        internal int Scale = 100, Width = 324, Opacity = 100;
+        internal string[] Sections = new[] { "hero", "owned", "offers", "plan" };
+        internal string FontName
+        {
+            get { return FontFamily == "dengxian" ? "等线" : FontFamily == "simsun" ? "宋体" : FontFamily == "yahei" ? "Microsoft YaHei" : "Microsoft YaHei UI"; }
+        }
+        internal static SidebarAppearance FromModel(Dictionary<string, object> model)
+        {
+            var result = new SidebarAppearance();
+            var settings = ModelValue.Object(ModelValue.Object(model, "appearance"), "sidebar");
+            string family = ModelValue.Text(settings, "fontFamily"), side = ModelValue.Text(settings, "side");
+            if (family == "system" || family == "yahei" || family == "dengxian" || family == "simsun") result.FontFamily = family;
+            if (side == "left" || side == "right") result.Side = side;
+            result.Scale = BoundedInteger(settings, "scale", 100, 85, 130);
+            result.Width = BoundedInteger(settings, "width", 324, 280, 460);
+            result.Opacity = BoundedInteger(settings, "opacity", 100, 75, 100);
+            ArrayList sections = ModelValue.Array(settings, "sections");
+            if (sections.Count == 4)
+            {
+                var selected = new List<string>();
+                foreach (object section in sections)
+                {
+                    string value = section as string;
+                    if ((value == "hero" || value == "owned" || value == "offers" || value == "plan") && !selected.Contains(value)) selected.Add(value);
+                }
+                if (selected.Count == 4) result.Sections = selected.ToArray();
+            }
+            return result;
+        }
+        private static int BoundedInteger(Dictionary<string, object> model, string key, int fallback, int minimum, int maximum)
+        {
+            double value;
+            if (!double.TryParse(ModelValue.Text(model, key), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value)
+                || double.IsNaN(value) || double.IsInfinity(value)) return fallback;
+            return (int)Math.Round(Math.Max(minimum, Math.Min(maximum, value)));
+        }
+    }
+
     // The painted sidebar has no text controls or WebView that can take keyboard focus.
     internal sealed class SidebarWindow : Form
     {
-        private readonly Font headingFont = new Font("Microsoft YaHei UI", 14F, FontStyle.Bold);
-        private readonly Font normalFont = new Font("Microsoft YaHei UI", 9F);
-        private readonly Font smallFont = new Font("Microsoft YaHei UI", 8F);
+        private Font headingFont, normalFont, smallFont;
+        private SidebarAppearance appearance = new SidebarAppearance();
+        private Dictionary<string, object> model = ModelValue.Failure("正在连接本地助手…");
         private readonly Color muted = Color.FromArgb(154, 171, 192);
         private readonly Color accent = Color.FromArgb(128, 222, 193);
-        private Rectangle hideButton, detailsButton, gameButton;
+        private Rectangle hideButton, detailsButton, gameButton, viewport, scrollTrack, scrollThumb;
+        private int scrollOffset, contentHeight;
+        private readonly List<string> paintedSections = new List<string>();
         private readonly Dictionary<Rectangle, string> offerButtons = new Dictionary<Rectangle, string>();
-        internal Dictionary<string, object> Model = ModelValue.Failure("正在连接本地助手…");
+        internal Dictionary<string, object> Model
+        {
+            get { return model; }
+            set
+            {
+                model = value;
+                offerButtons.Clear();
+                // A transient connection error must not reset the user's last saved layout.
+                if (ModelValue.Object(value, "appearance") != null) ApplyAppearance(SidebarAppearance.FromModel(value));
+                else Invalidate();
+            }
+        }
         internal string Notice = "";
         internal event EventHandler HideRequested, DetailsRequested, GameRequested;
         internal event Action<string> OfferConfirmed;
@@ -542,7 +626,7 @@ namespace HexGuide.Desktop
             TopMost = true;
             BackColor = Color.FromArgb(14, 22, 32);
             ForeColor = Color.FromArgb(229, 236, 245);
-            Font = normalFont;
+            UpdateFonts();
             Size = new Size(324, 720);
             AutoScaleMode = AutoScaleMode.Dpi;
             DoubleBuffered = true;
@@ -559,11 +643,38 @@ namespace HexGuide.Desktop
         }
         internal void Place(Rectangle area)
         {
-            int width = Math.Min(324, area.Width);
-            int height = Math.Min(750, Math.Max(340, area.Height - 36));
-            Rectangle desired = new Rectangle(area.Right - width - 12, area.Top + 18, width, height);
+            int margin = Math.Min(12, Math.Max(0, (area.Width - 1) / 2));
+            int top = Math.Min(18, Math.Max(0, (area.Height - 1) / 2));
+            int width = Math.Min(appearance.Width, Math.Max(1, area.Width - margin * 2));
+            int height = Math.Min(750, Math.Max(1, area.Height - top * 2));
+            int left = appearance.Side == "left" ? area.Left + margin : area.Right - width - margin;
+            Rectangle desired = new Rectangle(left, area.Top + top, width, height);
             if (Bounds != desired) Bounds = desired;
         }
+        private void ApplyAppearance(SidebarAppearance next)
+        {
+            bool fontsChanged = appearance.FontFamily != next.FontFamily || appearance.Scale != next.Scale;
+            bool sectionsChanged = string.Join(",", appearance.Sections) != string.Join(",", next.Sections);
+            appearance = next;
+            if (fontsChanged) UpdateFonts();
+            if (sectionsChanged) scrollOffset = 0;
+            double opacity = next.Opacity / 100.0;
+            if (Math.Abs(Opacity - opacity) > 0.001) Opacity = opacity;
+            Invalidate();
+        }
+        private void UpdateFonts()
+        {
+            Font oldHeading = headingFont, oldNormal = normalFont, oldSmall = smallFont;
+            float scale = appearance.Scale / 100F;
+            headingFont = new Font(appearance.FontName, 14F * scale, FontStyle.Bold);
+            normalFont = new Font(appearance.FontName, 9F * scale);
+            smallFont = new Font(appearance.FontName, 8F * scale);
+            Font = normalFont;
+            if (oldHeading != null) oldHeading.Dispose();
+            if (oldNormal != null) oldNormal.Dispose();
+            if (oldSmall != null) oldSmall.Dispose();
+        }
+        private int S(int value) { return Math.Max(1, (int)Math.Round(value * appearance.Scale / 100.0)); }
         internal void ShowPassive()
         {
             if (!Visible) Show();
@@ -574,67 +685,115 @@ namespace HexGuide.Desktop
             base.OnPaint(e);
             Graphics g = e.Graphics;
             using (var border = new Pen(Color.FromArgb(55, 77, 97))) g.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
-            int x = 17, width = Width - 34, y = 16;
-            Write(g, "海克斯指南", headingFont, ForeColor, new Rectangle(x, y, width, 29)); y += 34;
-            Write(g, "Alt + Shift + H  显示 / 收起", smallFont, muted, new Rectangle(x, y, width, 20)); y += 28;
+            int x = 17, width = Math.Max(1, Width - 34), y = 16;
+            Write(g, "海克斯指南", headingFont, ForeColor, new Rectangle(x, y, width, S(29))); y += S(34);
+            Write(g, "Alt + Shift + H  显示 / 收起", smallFont, muted, new Rectangle(x, y, width, S(20))); y += S(28);
+            viewport = new Rectangle(x, y, width, Math.Max(1, Height - S(82) - y));
+            contentHeight = 0;
+            foreach (string section in appearance.Sections) contentHeight += SectionHeight(section);
+            scrollOffset = Math.Max(0, Math.Min(scrollOffset, Math.Max(0, contentHeight - viewport.Height)));
+            offerButtons.Clear(); paintedSections.Clear();
+            var previousClip = g.Save();
+            g.SetClip(viewport);
+            y -= scrollOffset;
+            foreach (string section in appearance.Sections)
+            {
+                paintedSections.Add(section);
+                DrawSection(g, section, x, y, width);
+                y += SectionHeight(section);
+            }
+            g.Restore(previousClip);
+            scrollTrack = scrollThumb = Rectangle.Empty;
+            if (contentHeight > viewport.Height)
+            {
+                scrollTrack = new Rectangle(Width - 9, viewport.Top, 4, viewport.Height);
+                using (var trackBrush = new SolidBrush(Color.FromArgb(35, 56, 69))) g.FillRectangle(trackBrush, scrollTrack);
+                int thumbHeight = Math.Max(24, viewport.Height * viewport.Height / contentHeight);
+                int thumbY = viewport.Top + scrollOffset * (viewport.Height - thumbHeight) / Math.Max(1, contentHeight - viewport.Height);
+                scrollThumb = new Rectangle(scrollTrack.Left, thumbY, scrollTrack.Width, thumbHeight);
+                using (var thumbBrush = new SolidBrush(muted)) g.FillRectangle(thumbBrush, scrollThumb);
+            }
+            int buttonY = Height - S(67), gap = 6, buttonWidth = Math.Max(1, (width - gap * 2) / 3);
+            hideButton = new Rectangle(x, buttonY, buttonWidth, S(31));
+            detailsButton = new Rectangle(x + buttonWidth + gap, buttonY, buttonWidth, S(31));
+            gameButton = new Rectangle(x + (buttonWidth + gap) * 2, buttonY, buttonWidth, S(31));
+            PaintButton(g, hideButton, "收起"); PaintButton(g, detailsButton, "打开详细"); PaintButton(g, gameButton, "返回游戏");
+            string footer = Notice.Length > 0 ? Notice : contentHeight > viewport.Height ? "滚轮或右侧滚动条可查看全部内容" : "只读游戏 · 不替你点击或操作";
+            Write(g, footer, smallFont, muted, new Rectangle(x, Height - S(28), width, S(18)));
+        }
+        private int SectionHeight(string section)
+        {
+            if (section == "hero") return S(29) + S(39) + S(28);
+            if (section == "owned") return S(25) + S(46);
+            if (section == "offers")
+            {
+                int count = Math.Min(3, ModelValue.Array(Model, "offers").Count);
+                return S(27) + S(22) + (count == 0 ? S(59) : S(74) * count);
+            }
+            return S(100);
+        }
+        private void DrawSection(Graphics g, string section, int x, int y, int width)
+        {
+            if (section == "hero") { DrawHero(g, x, y, width); return; }
+            if (section == "owned") { DrawOwned(g, x, y, width); return; }
+            if (section == "offers") { DrawOffers(g, x, y, width); return; }
+            var plan = ModelValue.Object(Model, "plan");
+            string title = ModelValue.Text(plan, "title"), summary = ModelValue.Text(plan, "summary");
+            Write(g, title.Length > 0 ? title : "本局玩法参考", normalFont, accent, new Rectangle(x, y, width, S(23)));
+            Write(g, summary.Length > 0 ? summary : "等待英雄与本局选择，推荐将自动更新。", smallFont, muted, new Rectangle(x, y + S(27), width, S(62)));
+        }
+        private void DrawHero(Graphics g, int x, int y, int width)
+        {
             var champion = ModelValue.Object(Model, "champion");
             string hero = ModelValue.Text(champion, "name");
             string level = ModelValue.Text(Model, "level");
             if (hero.Length == 0) hero = "等待英雄同步";
-            Write(g, hero + (level.Length > 0 && level != "0" ? "  ·  " + level + " 级" : ""), headingFont, accent, new Rectangle(x, y, width, 27)); y += 29;
+            Write(g, hero + (level.Length > 0 && level != "0" ? "  ·  " + level + " 级" : ""), headingFont, accent, new Rectangle(x, y, width, S(27))); y += S(29);
             string connection = ModelValue.Text(ModelValue.Object(Model, "connection"), "message");
-            Write(g, connection.Length > 0 ? connection : "只读本机数据 · 不操作游戏", smallFont, muted, new Rectangle(x, y, width, 34)); y += 39;
+            Write(g, connection.Length > 0 ? connection : "只读本机数据 · 不操作游戏", smallFont, muted, new Rectangle(x, y, width, S(34))); y += S(39);
             string ocrText = ModelValue.Boolean(ModelValue.Object(Model, "ocr"), "enabled") ? "后台识别已开启 · 结果需核对" : "后台识别未开启 · 可在托盘开启";
-            Write(g, ocrText, smallFont, muted, new Rectangle(x, y, width, 20)); y += 28;
+            Write(g, ocrText, smallFont, muted, new Rectangle(x, y, width, S(20)));
+        }
+        private void DrawOwned(Graphics g, int x, int y, int width)
+        {
             ArrayList owned = ModelValue.Array(Model, "owned");
-            Write(g, "本局已选  " + owned.Count, normalFont, accent, new Rectangle(x, y, width, 22)); y += 25;
+            Write(g, "本局已选  " + owned.Count, normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(25);
             var names = new List<string>();
             foreach (object item in owned) { string name = ModelValue.Text(item as Dictionary<string, object>, "name"); if (name.Length > 0) names.Add(name); }
-            Write(g, names.Count > 0 ? string.Join(" · ", names.ToArray()) : "尚未记录，选择后请在完整助手确认", smallFont, muted, new Rectangle(x, y, width, 38)); y += 46;
+            Write(g, names.Count > 0 ? string.Join(" · ", names.ToArray()) : "尚未记录，选择后请在完整助手确认", smallFont, muted, new Rectangle(x, y, width, S(38)));
+        }
+        private void DrawOffers(Graphics g, int x, int y, int width)
+        {
             ArrayList offers = ModelValue.Array(Model, "offers");
-            Write(g, "三选一参考", normalFont, accent, new Rectangle(x, y, width, 22)); y += 27;
-            Write(g, "先在游戏选好，再点「记为已选」", smallFont, muted, new Rectangle(x, y, width, 18)); y += 22;
-            offerButtons.Clear();
+            Write(g, "三选一参考", normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(27);
+            Write(g, "先在游戏选好，再点「记为已选」", smallFont, muted, new Rectangle(x, y, width, S(18))); y += S(22);
             if (offers.Count == 0)
             {
-                Write(g, "等待完整卡片出现。\r\n识别结果只作候选，使用前需核对名称。", normalFont, muted, new Rectangle(x, y, width, 52)); y += 59;
+                Write(g, "等待完整卡片出现。\r\n识别结果只作候选，使用前需核对名称。", normalFont, muted, new Rectangle(x, y, width, S(52)));
             }
             else
             {
                 int index = 0;
                 foreach (object item in offers)
                 {
-                    if (index++ >= 3 || y + 68 > Height - 102) break;
+                    if (index++ >= 3) break;
                     var offer = item as Dictionary<string, object>;
-                    using (var brush = new SolidBrush(Color.FromArgb(23, 36, 48))) g.FillRectangle(brush, new Rectangle(x, y, width, 65));
+                    using (var brush = new SolidBrush(Color.FromArgb(23, 36, 48))) g.FillRectangle(brush, new Rectangle(x, y, width, S(65)));
                     string rank = ModelValue.Text(offer, "rank");
-                    Write(g, (rank.Length > 0 ? rank + ". " : "") + ModelValue.Text(offer, "name"), normalFont, ForeColor, new Rectangle(x + 9, y + 6, width - 94, 23));
-                    Rectangle confirm = new Rectangle(x + width - 76, y + 5, 68, 23);
-                    PaintButton(g, confirm, "记为已选");
+                    int confirmWidth = S(68);
+                    Write(g, (rank.Length > 0 ? rank + ". " : "") + ModelValue.Text(offer, "name"), normalFont, ForeColor, new Rectangle(x + 9, y + S(6), Math.Max(1, width - confirmWidth - 26), S(23)));
+                    Rectangle confirm = new Rectangle(x + width - confirmWidth - 8, y + S(5), confirmWidth, S(23));
                     string offerId = ModelValue.Text(offer, "id");
-                    if (offerId.Length > 0) offerButtons[confirm] = offerId;
+                    if (viewport.Contains(confirm)) { PaintButton(g, confirm, "记为已选"); if (offerId.Length > 0) offerButtons[confirm] = offerId; }
                     string reason = ModelValue.Text(offer, "reason");
-                    Write(g, reason.Length > 0 ? reason : "请核对识别名称", smallFont, muted, new Rectangle(x + 9, y + 30, width - 18, 29));
-                    y += 74;
+                    Write(g, reason.Length > 0 ? reason : "请核对识别名称", smallFont, muted, new Rectangle(x + 9, y + S(30), width - 18, S(29)));
+                    y += S(74);
                 }
             }
-            var plan = ModelValue.Object(Model, "plan");
-            string planTitle = ModelValue.Text(plan, "title"), summary = ModelValue.Text(plan, "summary");
-            if (y + 85 < Height - 91 && (planTitle.Length > 0 || summary.Length > 0))
-            {
-                Write(g, planTitle.Length > 0 ? planTitle : "本局玩法参考", normalFont, accent, new Rectangle(x, y, width, 23)); y += 27;
-                Write(g, summary, smallFont, muted, new Rectangle(x, y, width, Math.Max(28, Height - y - 100)));
-            }
-            int buttonY = Height - 67;
-            hideButton = new Rectangle(x, buttonY, 65, 31);
-            detailsButton = new Rectangle(x + 74, buttonY, 100, 31);
-            gameButton = new Rectangle(x + 183, buttonY, width - 183, 31);
-            PaintButton(g, hideButton, "收起"); PaintButton(g, detailsButton, "打开详细"); PaintButton(g, gameButton, "返回游戏");
-            Write(g, Notice.Length > 0 ? Notice : "只读游戏 · 不替你点击或操作", smallFont, muted, new Rectangle(x, Height - 28, width, 18));
         }
         private static void Write(Graphics graphics, string text, Font font, Color color, Rectangle rectangle)
         {
-            TextRenderer.DrawText(graphics, text ?? "", font, rectangle, color, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            TextRenderer.DrawText(graphics, text ?? "", font, rectangle, color, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
         }
         private void PaintButton(Graphics graphics, Rectangle rectangle, string title)
         {
@@ -645,11 +804,27 @@ namespace HexGuide.Desktop
         {
             base.OnMouseUp(e);
             if (e.Button != MouseButtons.Left) return;
+            if (scrollTrack.Contains(e.Location))
+            {
+                if (!scrollThumb.Contains(e.Location)) ScrollTo(scrollOffset + (e.Y < scrollThumb.Top ? -1 : 1) * Math.Max(S(40), viewport.Height / 2));
+                return;
+            }
             foreach (var entry in offerButtons)
                 if (entry.Key.Contains(e.Location)) { if (OfferConfirmed != null) OfferConfirmed(entry.Value); return; }
             if (hideButton.Contains(e.Location) && HideRequested != null) HideRequested(this, EventArgs.Empty);
             else if (detailsButton.Contains(e.Location) && DetailsRequested != null) DetailsRequested(this, EventArgs.Empty);
             else if (gameButton.Contains(e.Location) && GameRequested != null) GameRequested(this, EventArgs.Empty);
+        }
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            ScrollTo(scrollOffset - Math.Sign(e.Delta) * S(52));
+        }
+        private void ScrollTo(int value)
+        {
+            scrollOffset = Math.Max(0, Math.Min(value, Math.Max(0, contentHeight - viewport.Height)));
+            offerButtons.Clear();
+            Invalidate();
         }
         protected override void Dispose(bool disposing)
         {
@@ -680,8 +855,69 @@ namespace HexGuide.Desktop
                 };
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png); }
                 if (window.Visible) throw new InvalidOperationException("Off-screen test unexpectedly displayed a window.");
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 8 + GameWindow.ValidateFixtures() }, { "width", window.Width }, { "height", window.Height }, { "previewPath", previewPath } });
+                int defaultWidth = window.Width, defaultHeight = window.Height;
+                int appearanceChecks = ValidateAppearanceFixtures(window);
+                string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
+                using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 8 + GameWindow.ValidateFixtures() + appearanceChecks }, { "appearanceChecks", appearanceChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath } });
             }
+        }
+        private static int ValidateAppearanceFixtures(SidebarWindow window)
+        {
+            var defaults = SidebarAppearance.FromModel(new Dictionary<string, object>());
+            Require(defaults.Scale == 100 && defaults.Width == 324 && defaults.Opacity == 100 && defaults.Side == "right", "Default sidebar appearance changed.");
+            var invalid = new Dictionary<string, object> { { "appearance", new Dictionary<string, object> { { "sidebar", new Dictionary<string, object> {
+                { "fontFamily", "untrusted-font-name" }, { "scale", 10000 }, { "width", 99999 }, { "opacity", -50 }, { "side", "anywhere" },
+                { "sections", new object[] { "offers", "offers", "hero", "unknown" } }
+            } } } } };
+            var clamped = SidebarAppearance.FromModel(invalid);
+            Require(clamped.Scale == 130 && clamped.Width == 460 && clamped.Opacity == 75, "Native appearance bounds were not enforced.");
+            Require(clamped.FontFamily == "system" && clamped.Side == "right", "Unknown appearance enum was accepted.");
+            Require(string.Join(",", clamped.Sections) == "hero,owned,offers,plan", "Invalid section order was accepted.");
+            invalid["appearance"] = new Dictionary<string, object> { { "sidebar", new Dictionary<string, object> { { "scale", "NaN" }, { "opacity", "Infinity" }, { "width", -100 } } } };
+            clamped = SidebarAppearance.FromModel(invalid);
+            Require(clamped.Scale == 100 && clamped.Opacity == 100 && clamped.Width == 280, "Invalid numeric settings were not safely normalized.");
+            var custom = new Dictionary<string, object>(window.Model);
+            custom["appearance"] = new Dictionary<string, object> { { "sidebar", new Dictionary<string, object> {
+                { "fontFamily", "simsun" }, { "scale", 130 }, { "width", 280 }, { "opacity", 75 }, { "side", "left" },
+                { "sections", new object[] { "plan", "offers", "owned", "hero" } }
+            } } };
+            window.Model = custom;
+            Rectangle monitor = new Rectangle(-1920, -100, 1920, 1080);
+            window.Place(monitor);
+            Require(window.Width == 280 && window.Left == monitor.Left + 12 && monitor.Contains(window.Bounds), "Left/sidebar multi-monitor placement failed.");
+            Require(Math.Abs(window.Opacity - 0.75) < 0.001 && Math.Abs(window.headingFont.Size - 18.2F) < 0.01, "Sidebar font or opacity did not update.");
+            using (var bitmap = new Bitmap(window.Width, window.Height)) window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+            Require(string.Join(",", window.paintedSections.ToArray()) == "plan,offers,owned,hero", "Saved section order was not painted.");
+            Rectangle testViewport = window.viewport, testScrollTrack = window.scrollTrack;
+            Require(window.contentHeight > testViewport.Height && !testScrollTrack.IsEmpty, "Large-font layout did not provide scrolling.");
+            window.ScrollTo(int.MaxValue);
+            using (var bitmap = new Bitmap(window.Width, window.Height)) window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+            testViewport = window.viewport;
+            Require(window.scrollOffset == window.contentHeight - testViewport.Height && window.scrollOffset > 0, "Bottom sections are unreachable by scrolling.");
+            foreach (var entry in window.offerButtons) Require(testViewport.Contains(entry.Key), "Clipped offer button remained clickable.");
+            Rectangle testHide = window.hideButton, testGame = window.gameButton;
+            Require(testHide.Bottom < window.Height && testGame.Right <= window.Width, "Footer buttons overflow at maximum font scale.");
+            window.Model = ModelValue.Failure("测试连接中断");
+            Require(window.appearance.Scale == 130 && window.appearance.Side == "left", "Connection error reset the saved appearance.");
+            window.Model = custom;
+            Rectangle smallMonitor = new Rectangle(100, 100, 240, 300);
+            window.Place(smallMonitor);
+            Require(smallMonitor.Contains(window.Bounds), "Sidebar exceeded a small monitor work area.");
+            custom["appearance"] = new Dictionary<string, object> { { "sidebar", new Dictionary<string, object> { { "width", 460 }, { "side", "right" } } } };
+            window.Model = custom; window.Place(monitor);
+            Require(window.Width == 460 && window.Right == monitor.Right - 12 && monitor.Contains(window.Bounds), "Right/sidebar placement did not follow settings.");
+            custom["appearance"] = new Dictionary<string, object> { { "sidebar", new Dictionary<string, object> {
+                { "fontFamily", "simsun" }, { "scale", 130 }, { "width", 280 }, { "opacity", 75 }, { "side", "left" },
+                { "sections", new object[] { "plan", "offers", "owned", "hero" } }
+            } } };
+            window.Model = custom; window.Place(monitor); window.ScrollTo(0);
+            Require(!window.Visible && window.ShowWithoutActivation && (window.CreateParams.ExStyle & 0x08000000) != 0 && (window.CreateParams.ExStyle & 0x00000080) != 0, "Appearance changes affected passive sidebar behavior.");
+            return 15;
+        }
+        private static void Require(bool condition, string message)
+        {
+            if (!condition) throw new InvalidOperationException(message);
         }
         [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr handle, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     }

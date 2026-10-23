@@ -116,7 +116,7 @@ export function createLiveController(context){
       const stats=usable||sample?live.stats||{}:{};
       const status=sample?'演示模式':paused?'同步已暂停':connected?'已连接本机游戏':'等待连接';
       const mode=live.mode?.known?(live.mode.isMayhem?'海克斯大乱斗':'当前模式不是海克斯大乱斗'):'游戏模式待确认';
-      return `<div class="page-intro live-intro"><div><span class="live-kicker">Windows 桌面版 1.2.0</span><h1>跟着这一局，调整思路。</h1><p>自动同步自身英雄与装备，把已选海克斯加入同一份判断。</p></div><span class="local-badge">仅在本机处理</span></div><div class="background-guide"><strong>游戏中查看侧栏：Alt + Shift + H</strong><span>点击窗口右上角 × 或最小化，可收进托盘继续运行；托盘菜单可完全退出。</span><small>侧栏适用于无边框或窗口模式。主窗口工具栏提供“返回游戏”。</small></div>
+      return `<div class="page-intro live-intro"><div><span class="live-kicker">Windows 桌面版 1.3.0</span><h1>跟着这一局，调整思路。</h1><p>自动同步自身英雄与装备，把已选海克斯加入同一份判断。</p></div><span class="local-badge">仅在本机处理</span></div><div class="background-guide"><strong>游戏中查看侧栏：Alt + Shift + H</strong><span>点击窗口右上角 × 或最小化，可收进托盘继续运行；托盘菜单可完全退出。</span><small>侧栏适用于无边框或窗口模式。主窗口工具栏提供“返回游戏”。</small></div>
       <section class="live-connection ${connected?'connected':''}" aria-label="游戏连接状态"><div class="connection-symbol">${connected?'◉':'◌'}</div><div><strong>${esc(status)}</strong><p>${esc(live.connection?.message||'等待英雄联盟游戏启动')} · ${esc(phaseNames[live.phase]||live.phase||'等待对局')}</p></div><button class="text-button" data-live-action="pause">${paused?'恢复同步':'暂停同步'}</button><button class="secondary-button" data-live-action="refresh" ${sample?'disabled':''}>重新检测</button></section>
       ${sample?'<div class="live-notice">这是一组虚构示例，用于预览实战布局，不代表正在读取你的对局。退出演示后恢复本机检测。</div>':''}
       ${connected&&!live.mode?.isMayhem?`<div class="live-notice">${esc(mode)}。仍可查看自身数据；下方海克斯建议仅作为模式资料参考。</div>`:''}

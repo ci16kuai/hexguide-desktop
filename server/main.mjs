@@ -5,6 +5,7 @@ import {LiveCollector} from './collector.mjs';
 import {createLocalServer} from './http.mjs';
 import {createOcrScanner} from './ocr.mjs';
 import {BackgroundSidebar} from './sidebar.mjs';
+import {AppearanceStore} from './appearance.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 function argument(name) {
@@ -25,8 +26,9 @@ try {
   ]);
   const collector = new LiveCollector({champions:dataset.champions, officialChampions:championResource.champions, augments:dataset.augments, ca});
   const scanner = createOcrScanner({applicationDirectory:path.resolve(directory, '..'), dataDirectory, augments:dataset.augments});
-  const sidebar = await new BackgroundSidebar({collector, scanner, data:dataset, itemsCatalog, dataDirectory}).load();
-  const local = await createLocalServer({collector, scanner, sidebar, staticDirectory:path.join(directory, '../dist'), port:Number(requestedPort)});
+  const appearance = await new AppearanceStore({dataDirectory}).load();
+  const sidebar = await new BackgroundSidebar({collector, scanner, data:dataset, itemsCatalog, dataDirectory, appearance}).load();
+  const local = await createLocalServer({collector, scanner, sidebar, appearance, staticDirectory:path.join(directory, '../dist'), port:Number(requestedPort)});
   // This is the sole stdout bootstrap line; the native parent owns the token.
   process.stdout.write(JSON.stringify({port:local.port, token:local.token}) + '\n');
   collector.start();

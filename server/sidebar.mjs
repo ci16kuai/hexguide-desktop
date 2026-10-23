@@ -14,9 +14,9 @@ export class SessionValidationError extends Error {}
 
 /** Own-player state and read-only recommendations, shared by both app windows. */
 export class BackgroundSidebar {
-  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, now = () => Date.now(), scanInterval = 7000, offerLifetime = 60000} = {}) {
+  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, now = () => Date.now(), scanInterval = 7000, offerLifetime = 60000} = {}) {
     if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
-    Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, now, scanInterval, offerLifetime});
+    Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, now, scanInterval, offerLifetime});
     this.champions = new Map((data.champions || []).map(champion => [champion.id, champion]));
     this.augments = new Map(enrichData({augments:(data.augments || []).filter(eligible)}).augments.map(augment => [augment.id, augment]));
     this.session = {owned:[], route:'auto', gameId:null, revision:0};
@@ -162,12 +162,13 @@ export class BackgroundSidebar {
     });
     const plan = buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], itemsCatalog:this.itemsCatalog});
     return {
-      version:'1.2.0', connection:live.connection, phase:live.phase,
+      version:'1.3.0', connection:live.connection, phase:live.phase,
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
       level:live.level ?? null, gameTime:live.gameTime ?? null, items:live.items || [],
       owned:owned.map(augment => ({id:augment.id, name:augment.name})), offers,
       ocr:{...this.ocr, proposals:this.offers.map(offer => ({...offer}))}, route:this.session.route, updatedAt:live.observedAt || new Date(this.now()).toISOString(),
       plan:{title:plan.title, summary:plan.summary, choices:plan.choices},
+      ...(this.appearance ? {appearance:this.appearance.get()} : {}),
     };
   }
 

@@ -1,10 +1,10 @@
 # 海克斯指南 · Windows 桌面版
 
-面向英雄联盟海克斯大乱斗玩家的中文选择助手。版本 **1.2.0**，资料对应 **海克斯大乱斗 4.0 / 26.21**，英雄与装备资料为 **Data Dragon 16.21.1**。资料更新时间始终显示在页面顶部。
+面向英雄联盟海克斯大乱斗玩家的中文选择助手。版本 **1.3.0**，资料对应 **海克斯大乱斗 4.0 / 26.21**，英雄与装备资料为 **Data Dragon 16.21.1**。资料更新时间始终显示在页面顶部。
 
 ## 使用
 
-1. 从[公开下载页](https://hexguide-aram-20261023.robustacorn1025.chatgpt.site/download.html)下载 `HexGuide-Setup-1.2.0.exe`，运行安装向导。
+1. 从[公开下载页](https://hexguide-aram-20261023.robustacorn1025.chatgpt.site/download.html)下载 `HexGuide-Setup-1.3.0.exe`，运行安装向导。
 2. 选择安装目录，可勾选桌面快捷方式。安装后从桌面或开始菜单打开「海克斯指南」。不需要登录 ChatGPT，也不需要另装 Node.js。
 3. 正常打开英雄联盟。选人阶段尝试同步英雄，进入游戏后读取自身英雄、等级、装备、金币和面板。
 4. 在「我的这一局」确认实际已选海克斯，玩法建议随英雄、装备、阶段和已确认海克斯更新。
@@ -17,6 +17,16 @@
 系统要求：Windows 10/11 x64、.NET Framework 4.8、[Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。当前电脑已有所需运行环境。主程序未作代码签名，不会自行安装服务、修改防火墙或设置开机启动。
 
 安装版通过快捷方式将本局记录和界面缓存保存在 `%LOCALAPPDATA%\HexGuide\data`，卸载保留这些个人数据；安装文件保存在你选择的安装目录。便携版默认在软件旁的 `appdata` 保存本地界面缓存。可用 `HexGuide.exe --data-dir "H:\Chatgpt\hexguide-appdata"` 指定位置。关闭主窗口默认收进托盘；需要停止同步时，在托盘菜单选择「完全退出」。
+
+## 手动调整界面
+
+在主窗口顶部或托盘菜单打开 **界面设置**：
+
+- 主窗口：系统默认、微软雅黑、等线或宋体；整体缩放 85%–130%；网格/列表排列、舒适/紧凑间距、本局面板放左侧或右侧。
+- 游戏侧栏：字体、缩放、宽度 280–460 像素、左侧/右侧、透明度 75%–100%；通过上移/下移排列英雄、已选海克斯、本轮候选和玩法建议。
+- 主窗口修改可即时预览；点击 **保存设置** 后同步到侧栏并保存在指定数据目录的 `appearance.json`，重启保留。取消放弃本次预览，恢复默认后仍需保存。
+
+界面设置与本局英雄/海克斯记录分别保存，调整字体或排列不会重置对局或开启识别。
 
 ## 游戏侧栏
 
@@ -64,8 +74,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps
 安装版构建（需先构建独立暂存目录）：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -StagePath artifacts/portable-1.2.0
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -StagePath artifacts/portable-1.2.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -StagePath artifacts/portable-1.3.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -StagePath artifacts/portable-1.3.0
 ```
 
 安装程序以当前用户身份运行，允许选择安装目录与桌面图标，提供开始菜单和 Windows 设置中的卸载入口；详情见 `installer/README.md`。安装包尚未进行代码签名。浏览器下载文件保存位置由浏览器决定，可使用“另存为”或浏览器的下载位置设置。

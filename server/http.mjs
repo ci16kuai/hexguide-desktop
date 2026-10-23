@@ -3,6 +3,7 @@ import {randomBytes, timingSafeEqual} from 'node:crypto';
 import {readFile, realpath, stat} from 'node:fs/promises';
 import path from 'node:path';
 import {SessionValidationError} from './sidebar.mjs';
+import {AppearanceValidationError} from './appearance.mjs';
 
 const MIME = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.ico':'image/x-icon','.woff2':'font/woff2'};
 const isInside = (root, candidate) => candidate === root || candidate.startsWith(root + path.sep);
@@ -14,7 +15,7 @@ function equalToken(received, expected) {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-export async function createLocalServer({collector, scanner, sidebar, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
+export async function createLocalServer({collector, scanner, sidebar, appearance, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
   if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
   const root = await realpath(staticDirectory);
   let expectedHost;
@@ -33,7 +34,7 @@ export async function createLocalServer({collector, scanner, sidebar, staticDire
     let pathname;
     try { pathname = decodeURIComponent(new URL(request.url, `http://${expectedHost}`).pathname); }
     catch { return send(response, 400, {error:'Invalid URL.'}); }
-    const writeRequest = ['/api/ocr', '/api/session', '/api/sidebar/ocr'].includes(pathname) && request.method === 'POST';
+    const writeRequest = ['/api/ocr', '/api/session', '/api/sidebar/ocr', '/api/appearance'].includes(pathname) && request.method === 'POST';
     if (!writeRequest && (!['GET', 'HEAD'].includes(request.method) || request.headers['transfer-encoding'] || Number(request.headers['content-length'] || 0) !== 0)) {
       request.resume();
       return send(response, 405, {error:'Only bodyless GET and HEAD requests are permitted.'});
@@ -56,6 +57,11 @@ export async function createLocalServer({collector, scanner, sidebar, staticDire
             if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return send(response, 400, {error:'An object is required.'});
           }
         } catch { return send(response, 400, {error:'Invalid request body.'}); }
+        if (pathname === '/api/appearance') {
+          if (!appearance) return send(response, 503, {error:'Appearance settings are unavailable.'});
+          try { return send(response, 200, await appearance.set(parsed)); }
+          catch (error) { return send(response, error instanceof AppearanceValidationError ? 400 : 500, {error:error instanceof AppearanceValidationError ? 'Invalid appearance settings.' : 'Appearance settings could not be saved.'}); }
+        }
         if (pathname === '/api/ocr') {
           if (Object.keys(parsed).length) return send(response, 400, {error:'OCR takes no input.'});
           try { return send(response, 200, sidebar ? await sidebar.scan() : scanner ? await scanner() : {status:'unavailable',message:'屏幕识别不可用，可手动选择。',proposals:[]}); }
@@ -65,10 +71,11 @@ export async function createLocalServer({collector, scanner, sidebar, staticDire
         try { return send(response, 200, pathname === '/api/session' ? await sidebar.setSession(parsed) : sidebar.setOcr(parsed)); }
         catch (error) { return send(response, error instanceof SessionValidationError ? 400 : 500, {error:error instanceof SessionValidationError ? 'Invalid assistant state.' : 'Assistant state could not be saved.'}); }
       }
-      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.2.0', localOnly:true});
+      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.3.0', localOnly:true});
       if (pathname === '/api/live') return send(response, 200, collector.getSnapshot());
       if (pathname === '/api/sidebar') return sidebar ? send(response, 200, sidebar.getModel()) : send(response, 503, {error:'Sidebar is unavailable.'});
       if (pathname === '/api/session') return sidebar ? send(response, 200, sidebar.getSession()) : send(response, 503, {error:'Shared session is unavailable.'});
+      if (pathname === '/api/appearance') return appearance ? send(response, 200, appearance.get()) : send(response, 503, {error:'Appearance settings are unavailable.'});
       return send(response, 404, {error:'Unknown endpoint.'});
     }
     try {
@@ -91,6 +98,7 @@ export async function createLocalServer({collector, scanner, sidebar, staticDire
   });
   return {server, port:server.address().port, token, close:async () => {
     await sidebar?.stop();
+    await appearance?.flush();
     return new Promise(resolve => {
     collector.stop?.();
     server.close(resolve);
