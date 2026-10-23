@@ -218,6 +218,8 @@ test('live controller follows game boundaries without presenting drafts as curre
     ]});
     await settle();
     assert.match(h.html(), /VERIFIED_CARD_TITLES/);
+    assert.equal(h.state.offers.length,1,'complete recognized cards populate comparison immediately');
+    assert.deepEqual(h.state.owned,['firebrand'],'recognizing candidates never selects one');
     h.advance(10000);
     await h.click('ocr-scan');await h.finishScanDelay();
     await h.tick();
@@ -243,7 +245,13 @@ test('live controller follows game boundaries without presenting drafts as curre
       {id:'firebrand',name:'火上浇油'},{id:'goliath',name:'歌利亚巨人'},{id:'jeweled_gauntlet',name:'珠光护手'}
     ]}});
     await h.tick();assert.match(h.html(),/BACKGROUND_VERIFIED_OFFERS/);
-    assert.deepEqual(h.state.offers,[],'background drafts do not auto-adopt choices');
+    assert.equal(h.state.offers.length,1,'background cards populate comparison without a second confirmation');
+    assert.deepEqual(h.state.owned,['firebrand'],'background detection does not adopt any candidate');
+    await h.tick();assert.equal(h.state.offers.length,1,'the same frame is not published repeatedly');
+    h.advance(7000);h.setSidebar({ocr:{enabled:true,status:'recognized',message:'SAME_NEW_FRAME',observedAt:new Date(Date.now()).toISOString(),proposals:[
+      {id:'firebrand',name:'火上浇油'},{id:'goliath',name:'歌利亚巨人'},{id:'jeweled_gauntlet',name:'珠光护手'}
+    ]}});
+    await h.tick();assert.equal(h.state.offers.length,1,'rescanning identical cards does not reopen a consumed round');
     await h.click('ocr-confirm');assert.equal(h.state.offers.length,1);
   });
 

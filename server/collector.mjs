@@ -7,6 +7,7 @@ import {requestLocalJson} from './transport.mjs';
 const execute = promisify(execFile);
 const PHASES = new Set(['None', 'Lobby', 'Matchmaking', 'ReadyCheck', 'ChampSelect', 'InProgress', 'Reconnect', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
 const MAYHEM_QUEUES = new Set([2400]);
+const TEAMS = new Set(['ORDER', 'CHAOS']);
 const STATS = ['abilityPower', 'attackDamage', 'attackSpeed', 'attackRange', 'armor', 'magicResist', 'critChance', 'critDamage', 'abilityHaste', 'cooldownReduction', 'maxHealth', 'currentHealth', 'healthRegenRate', 'resourceMax', 'resourceValue', 'resourceRegenRate', 'lifeSteal', 'spellVamp', 'moveSpeed', 'armorPenetrationFlat', 'armorPenetrationPercent', 'magicPenetrationFlat', 'magicPenetrationPercent'];
 const numeric = value => typeof value === 'number' && Number.isFinite(value);
 const cleanText = value => typeof value === 'string' ? value.slice(0, 160) : '';
@@ -15,14 +16,16 @@ const normalized = value => cleanText(value).normalize('NFKC').toLowerCase().rep
 export function buildChampionIndex(champions = [], officialChampions = []) {
   const names = new Map();
   const numbers = new Map();
+  const labels = new Map();
   for (const champion of [...officialChampions, ...champions]) {
     if (!champion.id) continue;
+    labels.set(champion.id, cleanText(champion.name || champion.title || champion.id));
     for (const name of [champion.id, champion.name, champion.title, champion.enName, ...(champion.aliases || [])]) {
       if (name) names.set(normalized(name), champion.id);
     }
     if (numeric(champion.key) || /^\d+$/.test(String(champion.key || ''))) numbers.set(Number(champion.key), champion.id);
   }
-  return {names, numbers};
+  return {names, numbers, labels};
 }
 
 function riotId(player) {
@@ -52,12 +55,36 @@ function championFromPlayer(player, index) {
   return index.names.get(normalized(raw)) || index.names.get(normalized(player?.championName)) || null;
 }
 
+function publicItems(player) {
+  return (Array.isArray(player?.items) ? player.items : [])
+    .filter(item => Number.isSafeInteger(item?.itemID) && item.itemID > 0)
+    .map(item => ({id:item.itemID, name:cleanText(item.displayName || item.rawDisplayName), count:numeric(item.count) ? Math.max(1, Math.min(99, Math.floor(item.count))) : 1}));
+}
+
+function unavailableTeams(now) {
+  return {status:'unavailable', ownTeam:null, allies:[], enemies:[], observedAt:now.toISOString()};
+}
+
+function teamsFromPlayers(players, own, index, now) {
+  const unavailable = unavailableTeams(now);
+  // A missing team must never make another player an assumed opponent.
+  if (!TEAMS.has(own?.team) || !Array.isArray(players) || !players.length || players.some(player => !TEAMS.has(player?.team))) return unavailable;
+  const enemyTeam = own.team === 'ORDER' ? 'CHAOS' : 'ORDER';
+  if (!players.some(player => player.team === enemyTeam)) return unavailable;
+  const roster = team => players.filter(player => player.team === team).map(player => {
+    const championId = championFromPlayer(player, index);
+    return {championId, championName:championId ? index.labels?.get(championId) || championId : '未知英雄', level:numeric(player.level) && player.level >= 1 && player.level <= 30 ? player.level : null, items:publicItems(player)};
+  });
+  return {status:'detected', ownTeam:own.team, allies:roster(own.team), enemies:roster(enemyTeam), observedAt:now.toISOString()};
+}
+
 export function emptySnapshot(now = new Date()) {
   return {
     connection: {status: 'waiting', message: '等待英雄联盟客户端或对局；本机尚未读取到游戏数据。'},
     phase: 'None', gameId: null, championId: null, championSource: null,
-    level: null, gameTime: null, stats: {}, items: [],
+    level: null, gameTime: null, currentGold:null, stats: {}, items: [],
     augments: {status: 'unavailable', ids: []},
+    teams:unavailableTeams(now),
     observedAt: now.toISOString(), mode: {queueId: null, isMayhem: false, known: false},
   };
 }
@@ -84,16 +111,18 @@ export function snapshotFromLive(data, {index, augmentIndex = new Map(), lcu = n
     return result;
   }
   const championId = championFromPlayer(own, index);
-  result.connection = {status: 'connected', message: championId ? '已读取本局英雄、等级、装备和属性。海克斯可由你手动确认。' : '已连接游戏；当前英雄尚未匹配到资料库。'};
+  result.connection = {status: 'connected', message: championId ? '已读取本局英雄、等级、装备和属性；等待游戏中的海克斯三选一卡片。' : '已连接游戏；当前英雄尚未匹配到资料库。'};
   result.phase = 'InProgress';
   result.championId = championId;
   result.championSource = championId ? 'live-client' : null;
   result.level = numeric(data.activePlayer.level) ? data.activePlayer.level : numeric(own.level) ? own.level : null;
   result.gameTime = numeric(data.gameData?.gameTime) ? data.gameData.gameTime : null;
+  result.currentGold = numeric(data.activePlayer.currentGold) && data.activePlayer.currentGold >= 0 ? data.activePlayer.currentGold : null;
   result.stats = Object.fromEntries(STATS.filter(key => numeric(data.activePlayer.championStats?.[key])).map(key => [key, data.activePlayer.championStats[key]]));
   if (typeof data.activePlayer.championStats?.resourceType === 'string') result.stats.resourceType = data.activePlayer.championStats.resourceType.slice(0, 40);
-  result.items = (Array.isArray(own.items) ? own.items : []).filter(item => numeric(item.itemID) && item.itemID > 0).map(item => ({id: item.itemID, name: cleanText(item.displayName || item.rawDisplayName), count: numeric(item.count) ? Math.max(1, Math.min(99, item.count)) : 1}));
+  result.items = publicItems(own);
   result.augments = knownAugments(data.activePlayer, own, augmentIndex);
+  result.teams = teamsFromPlayers(data.allPlayers, own, index, now);
   return result;
 }
 

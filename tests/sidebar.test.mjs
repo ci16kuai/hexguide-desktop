@@ -30,7 +30,7 @@ test('shared selections are validated and persist only assistant IDs and route',
   const directory = await folder(t);
   const {sidebar, collector} = setup({dataDirectory:directory});
   await sidebar.load();
-  assert.equal(sidebar.getModel().ocr.enabled, false);
+  assert.equal(sidebar.getModel().ocr.enabled, true);
   const saved = await sidebar.setSession({owned:[ids[0]],route:'spell'});
   assert.deepEqual(saved.owned,[ids[0]]);
   assert.equal(saved.gameId,'123');
@@ -40,10 +40,45 @@ test('shared selections are validated and persist only assistant IDs and route',
   const restored = await new BackgroundSidebar({collector,data,dataDirectory:directory}).load();
   assert.deepEqual(restored.getSession().owned,[ids[0]]);
   assert.equal(restored.getSession().route,'spell');
-  assert.equal(restored.getModel().ocr.enabled,false,'screen capture consent is never restored on app restart');
+  assert.equal(restored.getModel().ocr.enabled,true,'automatic recognition defaults to on when no pause preference was saved');
   for (const value of [{owned:[],route:'unknown'},{owned:['not-real'],route:'auto'},{owned:[ids[0],ids[0]],route:'auto'},{owned:[],route:'auto',playerName:'forbidden'},{owned:[],route:'auto',token:'forbidden'},null]) await assert.rejects(sidebar.setSession(value),SessionValidationError);
   for (const value of [{enabled:1},{enabled:true,extra:true},[],null]) assert.throws(() => sidebar.setOcr(value),SessionValidationError);
   await sidebar.stop();
+});
+
+test('recognition pause is restored independently of selections and rapid changes persist in order', async t => {
+  const directory = await folder(t);
+  const {sidebar,collector} = setup({dataDirectory:directory});
+  await sidebar.load();
+  assert.equal(sidebar.getModel().ocr.enabled,true);
+  sidebar.setOcr({enabled:false});
+  sidebar.setOcr({enabled:true});
+  sidebar.setOcr({enabled:false});
+  await sidebar.stop();
+  const preference = JSON.parse(await readFile(path.join(directory,'recognition.json'),'utf8'));
+  assert.deepEqual(preference,{enabled:false});
+  await writeFile(path.join(directory,'session.json'),'{broken session');
+  const restored = await new BackgroundSidebar({collector,data,dataDirectory:directory}).load();
+  assert.deepEqual(restored.getSession().owned,[]);
+  assert.equal(restored.getModel().ocr.enabled,false);
+  assert.equal(restored.getModel().ocr.status,'disabled');
+  restored.setOcr({enabled:true});
+  await restored.stop();
+  const resumed = await new BackgroundSidebar({collector,data,dataDirectory:directory}).load();
+  assert.equal(resumed.getModel().ocr.enabled,true);
+  await resumed.stop();
+});
+
+test('malformed recognition preferences do not disable automatic recognition or restore extra data', async t => {
+  const directory = await folder(t);
+  const {collector} = setup();
+  for (const contents of ['invalid json',JSON.stringify({enabled:'false'}),JSON.stringify({enabled:false,owned:[ids[0]]}),JSON.stringify([])]) {
+    await writeFile(path.join(directory,'recognition.json'),contents);
+    const sidebar = await new BackgroundSidebar({collector,data,dataDirectory:directory}).load();
+    assert.equal(sidebar.getModel().ocr.enabled,true);
+    assert.deepEqual(sidebar.getSession().owned,[]);
+    await sidebar.stop();
+  }
 });
 
 test('confirmed state survives reconnects but clears on new game ID, end phase, or clock reset', async () => {
@@ -83,6 +118,7 @@ test('OCR candidates are not confirmed selections; empty frames retain three car
   assert.deepEqual(first.ocr.proposals.map(a => a.id),ids);
   assert.deepEqual(first.offers.map(a => a.rank).sort(),[1,2,3]);
   assert.ok(first.offers.every(a => a.reason && Array.isArray(a.cautions)));
+  assert.ok(first.offers.every(a => typeof a.icon === 'string' && typeof a.rarity === 'string'));
   assert.ok(!JSON.stringify(first).includes('Do not trust remote name'),'names come from trusted current dataset');
   advance(30000);
   result = {status:'waiting',message:'No cards',proposals:[]};
@@ -110,30 +146,49 @@ test('manual and background scan requests share one capture and ignore late resu
   assert.deepEqual(sidebar.getModel().offers,[]);
 });
 
-test('background capture requires explicit consent and current game, and honors interval with no visible UI', async () => {
+test('automatic recognition defaults on, honors pauses, current game and interval without visible UI', async () => {
   let scans = 0;
   const {sidebar,update,advance} = setup({scanner:async () => {scans++;return recognized();}});
   await sidebar.pollOnce();
-  assert.equal(scans,0);
-  sidebar.setOcr({enabled:true});
-  await sidebar.pollOnce();
   assert.equal(scans,1);
-  await sidebar.pollOnce();
-  assert.equal(scans,1);
+  sidebar.setOcr({enabled:false});
   advance(7000);
   await sidebar.pollOnce();
+  assert.equal(scans,1);
+  sidebar.setOcr({enabled:true});
+  await sidebar.pollOnce();
   assert.equal(scans,2);
+  await sidebar.pollOnce();
+  assert.equal(scans,2);
+  advance(7000);
+  await sidebar.pollOnce();
+  assert.equal(scans,3);
   update({phase:'ChampSelect'});
   advance(7000);
   await sidebar.pollOnce();
-  assert.equal(scans,2);
+  assert.equal(scans,3);
   update({phase:'InProgress',mode:{known:true,isMayhem:false}});
   await sidebar.pollOnce();
-  assert.equal(scans,2);
+  assert.equal(scans,3);
   update({mode:{known:true,isMayhem:true}});
   sidebar.setOcr({enabled:false});
   await sidebar.pollOnce();
-  assert.equal(scans,2);
+  assert.equal(scans,3);
+});
+
+test('pausing recognition discards an in-flight frame without losing confirmed choices', async () => {
+  let finish;
+  const {sidebar} = setup({scanner:() => new Promise(resolve => {finish=resolve;})});
+  await sidebar.setSession({owned:[ids[0]],route:'spell'});
+  const scan = sidebar.scan();
+  sidebar.setOcr({enabled:false});
+  finish(recognized());
+  assert.equal((await scan).status,'waiting');
+  const model = sidebar.getModel();
+  assert.equal(model.ocr.enabled,false);
+  assert.equal(model.ocr.status,'disabled');
+  assert.deepEqual(model.offers,[]);
+  assert.deepEqual(model.owned.map(entry => entry.id),[ids[0]]);
 });
 
 test('confirming a selected card dismisses old offers and recommendations reflect confirmed state', async () => {
@@ -143,11 +198,30 @@ test('confirming a selected card dismisses old offers and recommendations reflec
   const model = sidebar.getModel();
   assert.deepEqual(model.offers,[]);
   assert.deepEqual(model.owned.map(a => a.id),[ids[0]]);
+  assert.equal(typeof model.owned[0].icon,'string');
+  assert.equal(typeof model.owned[0].summary,'string');
+  assert.doesNotMatch(model.owned[0].summary,/<[^>]*>/);
   assert.equal(model.route,'spell');
   assert.match(model.plan.summary,/1 个已确认海克斯/);
   assert.equal(model.champion.id,'Ahri');
   assert.equal(model.level,12);
   assert.equal(model.items[0].name,'法师之靴');
+  assert.ok(Array.isArray(model.plan.context),'the complete plan is retained rather than a title/summary/choices projection');
+  assert.ok(model.plan.confidence);
+  assert.ok(model.plan.label);
+});
+
+test('sidebar exposes the same sanitized team observation and current gold as the collector', () => {
+  const teams = {status:'detected',ownTeam:'ORDER',allies:[{championId:'Ahri',championName:'九尾妖狐',level:12,items:[]}],enemies:[{championId:'Annie',championName:'黑暗之女',level:13,items:[{id:3089,name:'灭世者的死亡之帽',count:1}]}],observedAt:'2026-10-23T12:00:00.000Z'};
+  const {sidebar,update} = setup();
+  update({teams,currentGold:1234});
+  const model = sidebar.getModel();
+  assert.deepEqual(model.teams,teams);
+  assert.equal(model.currentGold,1234);
+  model.teams.enemies[0].championId = 'Mutated';
+  assert.equal(sidebar.getModel().teams.enemies[0].championId,'Annie');
+  update({teams:undefined});
+  assert.equal(sidebar.getModel().teams.status,'unavailable');
 });
 
 function request(port, target, {headers={},method='GET',body} = {}) {

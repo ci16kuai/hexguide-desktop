@@ -12,7 +12,7 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
 
 export class SessionValidationError extends Error {}
 
-/** Own-player state and read-only recommendations, shared by both app windows. */
+/** Confirmed choices and public game observations, shared by both app windows. */
 export class BackgroundSidebar {
   constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, now = () => Date.now(), scanInterval = 7000, offerLifetime = 60000} = {}) {
     if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
@@ -20,12 +20,13 @@ export class BackgroundSidebar {
     this.champions = new Map((data.champions || []).map(champion => [champion.id, champion]));
     this.augments = new Map(enrichData({augments:(data.augments || []).filter(eligible)}).augments.map(augment => [augment.id, augment]));
     this.session = {owned:[], route:'auto', gameId:null, revision:0};
-    this.ocr = {enabled:false, status:'disabled', message:'后台识别已关闭；可从托盘或实战助手开启。', observedAt:null};
+    this.ocr = {enabled:true, status:'waiting', message:'自动识别已开启；游戏在前台并出现三选一卡片时检查。', observedAt:null};
     this.offers = [];
     this.offerTime = 0;
     this.lastScan = -Infinity;
     this.generation = 0;
     this.persistTail = Promise.resolve();
+    this.preferencesTail = Promise.resolve();
     this.stopped = true;
   }
 
@@ -37,6 +38,14 @@ export class BackgroundSidebar {
       const selected = this.validateSession({owned:saved.owned, route:saved.route});
       this.session = {...selected, gameId:gameId(saved.gameId), revision:Number.isSafeInteger(saved.revision) && saved.revision >= 0 ? saved.revision : 0};
     } catch { /* Missing or corrupt assistant state is safe to start afresh. */ }
+    try {
+      const saved = JSON.parse(await readFile(path.join(this.dataDirectory, 'recognition.json'), 'utf8'));
+      if (saved && typeof saved === 'object' && !Array.isArray(saved) && Object.keys(saved).length === 1 && typeof saved.enabled === 'boolean') {
+        this.ocr.enabled = saved.enabled;
+        this.ocr.status = saved.enabled ? 'waiting' : 'disabled';
+        this.ocr.message = saved.enabled ? '自动识别已开启；等待本局海克斯三选一卡片。' : '自动识别已暂停；可从托盘或我的这一局恢复。';
+      }
+    } catch { /* Recognition defaults apply when preferences are missing or corrupt. */ }
     return this;
   }
 
@@ -60,6 +69,20 @@ export class BackgroundSidebar {
     // Automatic game boundary updates remain usable if the folder becomes read-only.
     this.persistTail.catch(() => {});
     return this.persistTail;
+  }
+
+  persistRecognition() {
+    if (!this.dataDirectory) return Promise.resolve();
+    const payload = JSON.stringify({enabled:this.ocr.enabled}, null, 2) + '\n';
+    this.preferencesTail = this.preferencesTail.catch(() => {}).then(async () => {
+      await mkdir(this.dataDirectory, {recursive:true});
+      const file = path.join(this.dataDirectory, 'recognition.json');
+      const temporary = file + '.tmp';
+      await writeFile(temporary, payload, {encoding:'utf8', mode:0o600});
+      await rename(temporary, file);
+    });
+    this.preferencesTail.catch(() => {});
+    return this.preferencesTail;
   }
 
   clearGame() {
@@ -117,8 +140,9 @@ export class BackgroundSidebar {
   setOcr(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1 || typeof value.enabled !== 'boolean') throw new SessionValidationError('An enabled boolean is required.');
     this.ocr.enabled = value.enabled;
-    if (!value.enabled) { this.ocr.status = 'disabled'; this.ocr.message = '后台识别已关闭；已确认海克斯仍保留。'; }
+    if (!value.enabled) { this.generation++; this.ocr.status = 'disabled'; this.ocr.message = '自动识别已暂停；已确认海克斯仍保留。'; }
     else if (!this.offers.length) { this.ocr.status = 'waiting'; this.ocr.message = '后台识别已开启；游戏在前台并出现三选一卡片时检查。'; }
+    void this.persistRecognition();
     return this.getModel();
   }
 
@@ -158,16 +182,18 @@ export class BackgroundSidebar {
     const rank = new Map(ranked.map((entry, index) => [entry.offer.id, index + 1]));
     const offers = this.offers.map(offer => {
       const result = ranked.find(entry => entry.offer.id === offer.id).result;
-      return {id:offer.id, name:offer.name, rank:rank.get(offer.id), reason:result.reasons[0] || '结合英雄机制与已确认海克斯比较；以游戏内实际效果为准。', cautions:result.cautions.slice(0, 2)};
+      const definition = this.augments.get(offer.id);
+      return {id:offer.id, name:offer.name, icon:text(definition.icon, 400), rarity:text(definition.rarity, 40), rank:rank.get(offer.id), reason:result.reasons[0] || '结合英雄机制与已确认海克斯比较；以游戏内实际效果为准。', cautions:result.cautions.slice(0, 2)};
     });
-    const plan = buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], itemsCatalog:this.itemsCatalog});
+    const plan = buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], champions:[...this.champions.values()], itemsCatalog:this.itemsCatalog, now:this.now()});
     return {
-      version:'1.7.0', connection:live.connection, phase:live.phase,
+      version:'1.8.0', connection:live.connection, phase:live.phase,
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
-      level:live.level ?? null, gameTime:live.gameTime ?? null, items:live.items || [],
-      owned:owned.map(augment => ({id:augment.id, name:augment.name})), offers,
+      level:live.level ?? null, gameTime:live.gameTime ?? null, currentGold:live.currentGold ?? null, items:live.items || [],
+      teams:live.teams || {status:'unavailable', ownTeam:null, allies:[], enemies:[], observedAt:live.observedAt || null},
+      owned:owned.map(augment => ({id:augment.id, name:augment.name, icon:text(augment.icon, 400), summary:text(String(augment.summary || augment.description || '').replace(/<[^>]*>/g, ''), 300)})), offers,
       ocr:{...this.ocr, proposals:this.offers.map(offer => ({...offer}))}, route:this.session.route, updatedAt:live.observedAt || new Date(this.now()).toISOString(),
-      plan:{title:plan.title, summary:plan.summary, choices:plan.choices},
+      plan,
       ...(this.appearance ? {appearance:this.appearance.get()} : {}),
     };
   }
@@ -187,5 +213,5 @@ export class BackgroundSidebar {
     void tick();
   }
 
-  async stop() { this.stopped = true; clearTimeout(this.timer); await this.persistTail.catch(() => {}); }
+  async stop() { this.stopped = true; clearTimeout(this.timer); await Promise.all([this.persistTail.catch(() => {}), this.preferencesTail.catch(() => {})]); }
 }

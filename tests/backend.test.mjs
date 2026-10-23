@@ -21,6 +21,13 @@ const live = () => ({
   ],
   gameData:{gameTime:605.4, gameMode:'ARAM', mapNumber:12},
 });
+const teamLive = () => {
+  const data = live();
+  data.allPlayers[0].team = 'CHAOS';
+  data.allPlayers[0].level = 11;
+  data.allPlayers[1].team = 'ORDER';
+  return data;
+};
 
 test('own player is matched by Riot ID even when names collide or the other player comes first', () => {
   const result = snapshotFromLive(live(), {index, augmentIndex, now});
@@ -28,13 +35,67 @@ test('own player is matched by Riot ID even when names collide or the other play
   assert.equal(result.championSource, 'live-client');
   assert.equal(result.level, 12);
   assert.equal(result.gameTime, 605.4);
+  assert.equal(result.currentGold, 900);
   assert.deepEqual(result.items, [{id:3020, name:'法师之靴', count:1}]);
   assert.equal(result.stats.abilityPower, 240);
   assert.equal(result.mode.known, false);
   assert.equal(result.mode.isMayhem, false);
   assert.deepEqual(result.augments, {status:'unavailable', ids:[]});
+  assert.deepEqual(result.teams, {status:'unavailable', ownTeam:null, allies:[], enemies:[], observedAt:now.toISOString()});
   const serialized = JSON.stringify(result);
   for (const privateData of ['本人', '别人的名字', 'Same Name', 'ZZZZ', 'generalRunes', 'allPlayers']) assert.ok(!serialized.includes(privateData));
+});
+
+test('team observations contain only public champion, level and inventory fields and follow the local side', () => {
+  const data = teamLive();
+  Object.assign(data.allPlayers[0], {position:{x:12345,y:67890}, championStats:{armor:999}, augments:[{id:1234}], abilities:{Q:{cooldown:9}}, health:54321});
+  data.allPlayers[0].items.push({itemID:-1}, {itemID:3020.5}, {itemID:3157,displayName:'中娅沙漏',count:3.9,secret:'not-exported'});
+  let result = snapshotFromLive(data, {index, now});
+  assert.equal(result.teams.status, 'detected');
+  assert.equal(result.teams.ownTeam, 'ORDER');
+  assert.equal(result.teams.observedAt, now.toISOString());
+  assert.deepEqual(result.teams.allies.map(player => player.championId), ['Ahri']);
+  assert.deepEqual(result.teams.enemies, [{championId:'Annie',championName:'黑暗之女',level:11,items:[{id:3006,name:'Other boots',count:1},{id:3157,name:'中娅沙漏',count:3}]}]);
+  assert.deepEqual(Object.keys(result.teams.enemies[0]).sort(), ['championId','championName','items','level']);
+  const serialized = JSON.stringify(result.teams);
+  for (const forbidden of ['riotId','summonerName','position','championStats','augments','abilities','health','secret','ZZZZ','Same Name','本人','别人的名字']) assert.ok(!serialized.includes(forbidden),forbidden);
+  data.allPlayers[0].team = 'ORDER';
+  data.allPlayers[1].team = 'CHAOS';
+  result = snapshotFromLive(data, {index, now});
+  assert.equal(result.teams.ownTeam, 'CHAOS');
+  assert.deepEqual(result.teams.enemies.map(player => player.championId), ['Annie']);
+});
+
+test('missing or invalid team information never assigns guessed opponents', () => {
+  for (const change of [
+    data => { delete data.allPlayers[1].team; },
+    data => { delete data.allPlayers[0].team; },
+    data => { data.allPlayers[0].team = 'UNKNOWN'; },
+    data => { data.allPlayers[0].team = 'ORDER'; },
+  ]) {
+    const data = teamLive();
+    change(data);
+    const result = snapshotFromLive(data, {index, now});
+    assert.deepEqual(result.teams, {status:'unavailable',ownTeam:null,allies:[],enemies:[],observedAt:now.toISOString()});
+  }
+  const data = teamLive();
+  data.activePlayer.riotId = 'unmatched#0000';
+  data.activePlayer.summonerName = 'unmatched';
+  assert.equal(snapshotFromLive(data, {index, now}).teams.status,'unavailable');
+});
+
+test('unmapped champions and malformed public values remain unknown rather than borrowing data', () => {
+  const data = teamLive();
+  Object.assign(data.allPlayers[0], {rawChampionName:'game_character_displayname_Unknown',championName:'Unknown',level:'18'});
+  data.activePlayer.currentGold = '9000';
+  let result = snapshotFromLive(data, {index, now});
+  assert.equal(result.currentGold,null);
+  assert.equal(result.teams.status,'detected');
+  assert.deepEqual(result.teams.enemies[0], {championId:null,championName:'未知英雄',level:null,items:[{id:3006,name:'Other boots',count:1}]});
+  data.activePlayer.currentGold = -1;
+  assert.equal(snapshotFromLive(data, {index, now}).currentGold,null);
+  data.activePlayer.currentGold = Infinity;
+  assert.equal(snapshotFromLive(data, {index, now}).currentGold,null);
 });
 
 test('unique legacy summonerName is supported, duplicates are not guessed', () => {
@@ -151,17 +212,21 @@ test('in-game snapshots retain LCU queue and game ID; ordinary ARAM never become
 test('offline collection returns waiting and clears stale game/hero data', async () => {
   let available = true;
   const collector = new LiveCollector({champions, officialChampions, now:() => now, discover:async () => null, request:async () => {
-    if (available) return live();
+    if (available) return teamLive();
     throw new Error('Connection refused');
   }});
-  assert.equal((await collector.pollOnce()).championId, 'Ahri');
+  const initial = await collector.pollOnce();
+  assert.equal(initial.championId, 'Ahri');
+  assert.equal(initial.teams.status, 'detected');
   available = false;
   const result = await collector.pollOnce();
   assert.equal(result.connection.status, 'waiting');
   assert.equal(result.championId, null);
   assert.equal(result.level, null);
+  assert.equal(result.currentGold, null);
   assert.deepEqual(result.items, []);
   assert.deepEqual(result.stats, {});
+  assert.deepEqual(result.teams, {status:'unavailable',ownTeam:null,allies:[],enemies:[],observedAt:now.toISOString()});
 });
 
 test('collector stop cancels its next scheduled poll', async () => {

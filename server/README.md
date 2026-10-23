@@ -4,13 +4,15 @@
 
 `GET /api/health` 和 `GET /api/live` 需要 `X-Hexguide-Session` 请求头。仅接受精确的本机 Host 和同源 Origin；不提供跨域访问或公开监听。静态文件仅来自 `dist/`，不能越界读取或读取隐藏文件。
 
-`POST /api/ocr` 同样需要会话 token，且只接受空 body 或 `{}`，最多 4096 字节。它启动本机 `native/scan-augments.ps1`，15 秒超时、输出上限 1 MB，一次只运行一个扫描。只有前端用户自愿触发时调用，不默认截图；返回最多三个可唯一匹配到当前资料库的名称提议。页面必须让玩家确认，不自动写入已选海克斯。截图不会保留或上传。其他写操作和请求体均拒绝。
+`POST /api/ocr` 同样需要会话 token，且只接受空 body 或 `{}`，最多 4096 字节。它启动本机 `native/scan-augments.ps1`，15 秒超时、输出上限 1 MB，一次只运行一个扫描。后台自动识别默认开启，仅对局期间尝试读取前台游戏窗口，约 7 秒一次；手动与后台扫描共用同一次在途请求。`POST /api/sidebar/ocr` 仅接受 `{enabled:boolean}`，暂停偏好独立保存在 `recognition.json` 并在重启时恢复。返回完整、唯一匹配的三个候选时自动进入比较，玩家点击实际选择后才通过 `POST /api/session` 写入已确认列表。截图不会保留或上传。识别错误、过期或跨局结果不能写入已选海克斯。
 
-本程序只读 Riot 的本机接口：Live Client API (`https://127.0.0.1:2999/liveclientdata/allgamedata`) 和 League Client 的游戏阶段、游戏会话及选人会话。Live Client API 用随附的 Riot 官方根证书验证 TLS。LCU 的自签证书例外仅限从本机 lockfile 取得端口的 `127.0.0.1` HTTPS 连接，使用其临时 Basic 凭据；它不影响系统、外网或 Live Client API 的证书校验。lockfile 内容、玩家名称和其他玩家信息不返回给页面，不写入文件。
+本程序只读 Riot 的本机接口：Live Client API (`https://127.0.0.1:2999/liveclientdata/allgamedata`) 和 League Client 的游戏阶段、游戏会话及选人会话。Live Client API 用随附的 Riot 官方根证书验证 TLS。LCU 的自签证书例外仅限从本机 lockfile 取得端口的 `127.0.0.1` HTTPS 连接，使用其临时 Basic 凭据；它不影响系统、外网或 Live Client API 的证书校验。lockfile 内容及玩家身份信息不返回给页面，不写入文件。
 
 LCU 默认查找常见安装目录和正在运行的 `LeagueClient` / `LeagueClientUx` 路径；也可用 `HEXGUIDE_LEAGUE_DIR` 指定安装目录。当前版本面向 Windows。
 
-通过 activePlayer 的 Riot ID 或唯一的精确 summonerName 匹配本人，然后只提取英雄、等级、属性、装备和游戏时间。队列信息来自 LCU：仅队列 2400 被识别为海克斯大乱斗。缺少队列信息时显示模式未知，不以地图或普通 ARAM 推断。对局 ID 只用于区分新一局。
+通过 activePlayer 的 Riot ID 或唯一的精确 summonerName 匹配本人，提取自身英雄、等级、属性、装备、金币和游戏时间。`teams` 仅在本人队伍有效、全体成员分组可确认且存在敌方时标为 detected；`allies` 包含本人在内的己方阵容，`enemies` 为对方。成员仅输出本地映射的英雄 ID/名称、接口提供的等级和装备，不输出召唤师姓名、Riot ID、位置、隐藏属性或技能冷却。缺失队伍不猜测，未知英雄明确标记。队列信息来自 LCU：仅队列 2400 被识别为海克斯大乱斗。缺少队列信息时显示模式未知，不以地图或普通 ARAM 推断。对局 ID 只用于区分新一局。
+
+侧栏模型完整透传构筑计划，包括 `buildItems`、`nextAugments` 和 `enemyContext`。敌方观察须属于当前已连接英雄并在有效时间内才参与针对性建议；后续海克斯是机制关注列表，不是对下一轮候选的预测或出现保证。本版真实三选一卡片 OCR 仍待实战验收。
 
 接口没有稳定承诺提供海克斯选择。缺少明确且可核对的 `augments` 字段时返回 `augments.status = unavailable`，不会将普通符文作为海克斯，也不会把“未读到”当成“已选为空”。页面应保留人工确认。
 

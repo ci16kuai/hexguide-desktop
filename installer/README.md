@@ -1,10 +1,12 @@
 # Windows 安装版
 
-运行 `scripts/build-desktop.ps1 -StagePath artifacts/portable-1.7.0` 构建便携目录后，再用 `scripts/build-installer.ps1 -StagePath artifacts/portable-1.7.0` 生成 `HexGuide-Setup-1.7.0.exe` 和 SHA-256 校验文件。源码版本决定安装包版本，也可显式传入 `-AppVersion`。
+运行 `scripts/build-desktop.ps1 -StagePath artifacts/portable-1.8.0` 构建便携目录后，再用 `scripts/build-installer.ps1 -StagePath artifacts/portable-1.8.0` 生成 `HexGuide-Setup-1.8.0.exe` 和 SHA-256 校验文件。源码版本决定安装包版本，也可显式传入 `-AppVersion`。
 
 安装向导使用简体中文，支持选择安装文件夹、可选桌面快捷方式、开始菜单入口和 Windows“已安装的应用”中的卸载入口。只为当前用户安装，无需管理员权限。默认程序目录是 `%LOCALAPPDATA%\Programs\HexGuide`；快捷方式将个人设置与浏览器缓存写入 `%LOCALAPPDATA%\HexGuide\data`。卸载只删除构建时明确列出的程序文件，保留个人数据和额外文件，不使用递归删除。更新或卸载时，如果目标目录的主程序或后台进程文件仍在使用，会停止并提示从托盘完全退出；不会终止游戏或其他便携实例。
 
 系统要求：Windows 10/11 x64、.NET Framework 4.8、Microsoft Edge WebView2 Runtime。安装器不会自动下载依赖或创建开机启动项；完成页的“打开海克斯指南”默认不勾选。
+
+1.8.0 安装后默认启用游戏三选一自动识别，用户可在首页或托盘暂停；该偏好单独保存在个人数据目录的 `recognition.json`，升级不覆盖。完整识别成功后自动展示候选与排序；玩家先在游戏选好，再在首页或侧栏确认，展开对应构筑。装备与后续海克斯关注基于自身状态及接口提供的公开敌方英雄、等级和装备生成；缺失或过期阵容不猜测，后续关注不保证下一轮出现。真实三选一 OCR 尚待实战验收。
 
 编译器使用官方 [NSIS 3.13](https://sourceforge.net/projects/nsis/files/NSIS%203/3.13/nsis-3.13.zip/download) 的便携 ZIP，构建前验证发布页提供的 SHA-256：`ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8`。编译器只保存在可配置的 H 盘缓存；NSIS 的 COPYING 随安装包保存在 `licenses/NSIS-LICENSE.txt`。压缩采用 NSIS 原生 LZMA。
 

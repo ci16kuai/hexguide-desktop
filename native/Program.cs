@@ -19,9 +19,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.7.0.0")]
-[assembly: AssemblyFileVersion("1.7.0.0")]
-[assembly: AssemblyInformationalVersion("1.7.0")]
+[assembly: AssemblyVersion("1.8.0.0")]
+[assembly: AssemblyFileVersion("1.8.0.0")]
+[assembly: AssemblyInformationalVersion("1.8.0")]
 
 namespace HexGuide.Desktop
 {
@@ -90,7 +90,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             previewSidebar = preview;
-            Text = "海克斯指南 1.7.0 · 我的这一局";
+            Text = "海克斯指南 1.8.0 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -470,14 +470,22 @@ namespace HexGuide.Desktop
         private async Task ConfirmOfferAsync(string id)
         {
             if (closing || localOrigin == null || confirmChanging || string.IsNullOrEmpty(id)) return;
+            confirmChanging = true;
+            Dictionary<string, object> current;
+            try { current = await RequestModelAsync("api/sidebar", null); }
+            catch { confirmChanging = false; sidebar.Notice = "正在等待本局连接，请稍后再确认"; sidebar.Invalidate(); return; }
+            bool offered = false;
+            foreach (object entry in ModelValue.Array(current, "offers"))
+                if (ModelValue.Text(entry as Dictionary<string, object>, "id") == id) offered = true;
+            if (!offered) { confirmChanging = false; sidebar.Notice = "这轮选项已更新，请核对当前卡片"; sidebar.Invalidate(); return; }
             var owned = new List<string>();
-            foreach (object entry in ModelValue.Array(sidebar.Model, "owned"))
+            foreach (object entry in ModelValue.Array(current, "owned"))
             {
                 string value = ModelValue.Text(entry as Dictionary<string, object>, "id");
                 if (value.Length > 0 && !owned.Contains(value)) owned.Add(value);
             }
             if (!owned.Contains(id)) owned.Add(id);
-            string route = ModelValue.Text(sidebar.Model, "route");
+            string route = ModelValue.Text(current, "route");
             if (route.Length == 0) route = "auto";
             string body = new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "owned", owned.ToArray() }, { "route", route } });
             confirmChanging = true;
@@ -486,7 +494,8 @@ namespace HexGuide.Desktop
                 await RequestModelAsync("api/session", body);
                 if (closing) return;
                 sidebar.Notice = "已记录本局选择，推荐正在更新";
-                await FetchSidebarAsync();
+                sidebar.Model = await RequestModelAsync("api/sidebar", null);
+                sidebar.ExpandBuild();
             }
             catch { if (!closing) sidebar.Notice = "记录未成功，请稍后再点一次"; }
             finally { confirmChanging = false; if (!closing) sidebar.Invalidate(); }
@@ -633,12 +642,21 @@ namespace HexGuide.Desktop
         private int scrollOffset, contentHeight;
         private readonly List<string> paintedSections = new List<string>();
         private readonly Dictionary<Rectangle, string> offerButtons = new Dictionary<Rectangle, string>();
+        private readonly Dictionary<string, Image> buildIcons = new Dictionary<string, Image>();
+        private readonly HashSet<string> requestedIcons = new HashSet<string>();
+        private Rectangle buildToggle;
+        private bool buildExpanded, remoteIcons = true;
         internal Dictionary<string, object> Model
         {
             get { return model; }
             set
             {
+                int previousOwned = ModelValue.Array(model, "owned").Count;
+                bool previousModel = ModelValue.Object(model, "champion") != null;
                 model = value;
+                int currentOwned = ModelValue.Array(value, "owned").Count;
+                if (currentOwned == 0) buildExpanded = false;
+                else if (previousModel && currentOwned > previousOwned) ExpandBuild();
                 offerButtons.Clear();
                 // A transient connection error must not reset the user's last saved layout.
                 if (ModelValue.Object(value, "appearance") != null) ApplyAppearance(SidebarAppearance.FromModel(value));
@@ -648,6 +666,19 @@ namespace HexGuide.Desktop
         internal string Notice = "";
         internal event EventHandler HideRequested, DetailsRequested, GameRequested;
         internal event Action<string> OfferConfirmed;
+
+        internal void ExpandBuild()
+        {
+            buildExpanded = true;
+            scrollOffset = 0;
+            Invalidate();
+        }
+        private List<string> DisplaySections()
+        {
+            var result = new List<string>(appearance.Sections);
+            if (buildExpanded) { result.Remove("plan"); result.Insert(0, "plan"); }
+            return result;
+        }
 
         internal SidebarWindow()
         {
@@ -721,13 +752,14 @@ namespace HexGuide.Desktop
             Write(g, "Alt + Shift + H  显示 / 收起", smallFont, muted, new Rectangle(x, y, width, S(20))); y += S(28);
             viewport = new Rectangle(x, y, width, Math.Max(1, Height - S(82) - y));
             contentHeight = 0;
-            foreach (string section in appearance.Sections) contentHeight += SectionHeight(section);
+            foreach (string section in DisplaySections()) contentHeight += SectionHeight(section);
             scrollOffset = Math.Max(0, Math.Min(scrollOffset, Math.Max(0, contentHeight - viewport.Height)));
             offerButtons.Clear(); paintedSections.Clear();
             var previousClip = g.Save();
             g.SetClip(viewport);
             y -= scrollOffset;
-            foreach (string section in appearance.Sections)
+            buildToggle = Rectangle.Empty;
+            foreach (string section in DisplaySections())
             {
                 paintedSections.Add(section);
                 DrawSection(g, section, x, y, width);
@@ -761,17 +793,101 @@ namespace HexGuide.Desktop
                 int count = Math.Min(3, ModelValue.Array(Model, "offers").Count);
                 return S(27) + S(22) + (count == 0 ? S(59) : S(74) * count);
             }
-            return S(100);
+            if (!buildExpanded) return S(126);
+            var plan = ModelValue.Object(Model, "plan");
+            return S(151) + Math.Min(6, ModelValue.Array(plan, "buildItems").Count) * S(96)
+                + S(46) + Math.Min(6, ModelValue.Array(plan, "nextAugments").Count) * S(76) + S(22);
         }
         private void DrawSection(Graphics g, string section, int x, int y, int width)
         {
             if (section == "hero") { DrawHero(g, x, y, width); return; }
             if (section == "owned") { DrawOwned(g, x, y, width); return; }
             if (section == "offers") { DrawOffers(g, x, y, width); return; }
+            DrawBuild(g, x, y, width);
+        }
+        private void DrawBuild(Graphics g, int x, int y, int width)
+        {
             var plan = ModelValue.Object(Model, "plan");
             string title = ModelValue.Text(plan, "title"), summary = ModelValue.Text(plan, "summary");
-            Write(g, title.Length > 0 ? title : "本局玩法参考", normalFont, accent, new Rectangle(x, y, width, S(23)));
-            Write(g, summary.Length > 0 ? summary : "等待英雄与本局选择，推荐将自动更新。", smallFont, muted, new Rectangle(x, y + S(27), width, S(62)));
+            Write(g, buildExpanded ? "本局构筑" : (title.Length > 0 ? title : "本局玩法参考"), normalFont, accent, new Rectangle(x, y, Math.Max(1, width - S(75)), S(23)));
+            Rectangle toggle = new Rectangle(x + width - S(72), y, S(72), S(24));
+            if (viewport.Contains(toggle)) { buildToggle = toggle; PaintButton(g, toggle, buildExpanded ? "收起构筑" : "展开构筑"); }
+            y += S(29);
+            if (!buildExpanded)
+            {
+                Write(g, summary.Length > 0 ? summary : "等待英雄与本局选择，推荐将自动更新。", smallFont, muted, new Rectangle(x, y, width, S(78)));
+                return;
+            }
+            ArrayList owned = ModelValue.Array(Model, "owned");
+            var selected = owned.Count > 0 ? owned[owned.Count - 1] as Dictionary<string, object> : null;
+            Write(g, selected == null ? "等待确认本局海克斯" : "最近确认 · " + ModelValue.Text(selected, "name"), normalFont, ForeColor, new Rectangle(x, y, width, S(23))); y += S(27);
+            var enemy = ModelValue.Object(plan, "enemyContext");
+            string enemySummary = ModelValue.Text(enemy, "summary");
+            Write(g, enemySummary.Length > 0 ? enemySummary : "等待读取敌方阵容与装备，暂按自身构筑提供选项。", smallFont, muted, new Rectangle(x, y, width, S(57))); y += S(62);
+            Write(g, "装备选项 · 随可见阵容与装备更新", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(33);
+            ArrayList equipment = ModelValue.Array(plan, "buildItems");
+            int index = 0;
+            foreach (object entry in equipment)
+            {
+                if (index++ >= 6) break;
+                var item = entry as Dictionary<string, object>;
+                DrawBuildIcon(g, ModelValue.Text(item, "icon"), new Rectangle(x, y + S(2), S(29), S(29)));
+                Write(g, ModelValue.Text(item, "name"), normalFont, ForeColor, new Rectangle(x + S(38), y, Math.Max(1, width - S(38)), S(23)));
+                Write(g, ModelValue.Text(item, "effect"), smallFont, muted, new Rectangle(x + S(38), y + S(25), Math.Max(1, width - S(38)), S(31)));
+                Write(g, ModelValue.Text(item, "reason"), smallFont, accent, new Rectangle(x, y + S(60), width, S(29)));
+                y += S(96);
+            }
+            Write(g, "后续遇到可考虑", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(25);
+            Write(g, "机制适配参考，不代表下一轮一定出现", smallFont, muted, new Rectangle(x, y, width, S(18))); y += S(21);
+            index = 0;
+            foreach (object entry in ModelValue.Array(plan, "nextAugments"))
+            {
+                if (index++ >= 6) break;
+                var augment = entry as Dictionary<string, object>;
+                DrawBuildIcon(g, ModelValue.Text(augment, "icon"), new Rectangle(x, y + S(2), S(26), S(26)));
+                Write(g, ModelValue.Text(augment, "name"), normalFont, ForeColor, new Rectangle(x + S(35), y, Math.Max(1, width - S(35)), S(23)));
+                Write(g, ModelValue.Text(augment, "reason"), smallFont, muted, new Rectangle(x + S(35), y + S(26), Math.Max(1, width - S(35)), S(41)));
+                y += S(76);
+            }
+        }
+        private void DrawBuildIcon(Graphics g, string url, Rectangle rectangle)
+        {
+            Image icon;
+            if (buildIcons.TryGetValue(url, out icon)) g.DrawImage(icon, rectangle);
+            else
+            {
+                using (var pen = new Pen(Color.FromArgb(55, 77, 97))) g.DrawRectangle(pen, rectangle);
+                QueueBuildIcon(url);
+            }
+        }
+        private async void QueueBuildIcon(string url)
+        {
+            Uri uri;
+            if (!remoteIcons || string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out uri)
+                || uri.Scheme != "https" || (uri.Host != "ddragon.leagueoflegends.com" && uri.Host != "raw.communitydragon.org")
+                || requestedIcons.Count >= 96 || !requestedIcons.Add(url)) return;
+            try
+            {
+                byte[] bytes = await Task.Run(delegate
+                {
+                    var request = (HttpWebRequest)WebRequest.Create(uri);
+                    request.Timeout = 2500; request.ReadWriteTimeout = 2500; request.AllowAutoRedirect = false;
+                    using (var response = request.GetResponse())
+                    using (var stream = response.GetResponseStream())
+                    using (var buffer = new MemoryStream())
+                    {
+                        byte[] chunk = new byte[8192]; int count;
+                        while ((count = stream.Read(chunk, 0, chunk.Length)) > 0)
+                        { if (buffer.Length + count > 262144) throw new IOException("Icon is too large."); buffer.Write(chunk, 0, count); }
+                        return buffer.ToArray();
+                    }
+                });
+                if (IsDisposed || Disposing) return;
+                using (var stream = new MemoryStream(bytes))
+                using (var image = Image.FromStream(stream)) buildIcons[url] = new Bitmap(image);
+                Invalidate();
+            }
+            catch { /* Missing icons do not affect selection or live recommendations. */ }
         }
         private void DrawHero(Graphics g, int x, int y, int width)
         {
@@ -791,13 +907,13 @@ namespace HexGuide.Desktop
             Write(g, "本局已选  " + owned.Count, normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(25);
             var names = new List<string>();
             foreach (object item in owned) { string name = ModelValue.Text(item as Dictionary<string, object>, "name"); if (name.Length > 0) names.Add(name); }
-            Write(g, names.Count > 0 ? string.Join(" · ", names.ToArray()) : "尚未记录，选择后请在完整助手确认", smallFont, muted, new Rectangle(x, y, width, S(38)));
+            Write(g, names.Count > 0 ? string.Join(" · ", names.ToArray()) : "尚未记录；识别后可直接在这里点选确认", smallFont, muted, new Rectangle(x, y, width, S(38)));
         }
         private void DrawOffers(Graphics g, int x, int y, int width)
         {
             ArrayList offers = ModelValue.Array(Model, "offers");
             Write(g, "三选一参考", normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(27);
-            Write(g, "先在游戏选好，再点「记为已选」", smallFont, muted, new Rectangle(x, y, width, S(18))); y += S(22);
+            Write(g, "核对选项，游戏选好后点「我选了这个」", smallFont, muted, new Rectangle(x, y, width, S(18))); y += S(22);
             if (offers.Count == 0)
             {
                 Write(g, "等待完整卡片出现。\r\n识别结果只作候选，使用前需核对名称。", normalFont, muted, new Rectangle(x, y, width, S(52)));
@@ -811,11 +927,11 @@ namespace HexGuide.Desktop
                     var offer = item as Dictionary<string, object>;
                     using (var brush = new SolidBrush(Color.FromArgb(23, 36, 48))) g.FillRectangle(brush, new Rectangle(x, y, width, S(65)));
                     string rank = ModelValue.Text(offer, "rank");
-                    int confirmWidth = S(68);
+                    int confirmWidth = S(80);
                     Write(g, (rank.Length > 0 ? rank + ". " : "") + ModelValue.Text(offer, "name"), normalFont, ForeColor, new Rectangle(x + 9, y + S(6), Math.Max(1, width - confirmWidth - 26), S(23)));
                     Rectangle confirm = new Rectangle(x + width - confirmWidth - 8, y + S(5), confirmWidth, S(23));
                     string offerId = ModelValue.Text(offer, "id");
-                    if (viewport.Contains(confirm)) { PaintButton(g, confirm, "记为已选"); if (offerId.Length > 0) offerButtons[confirm] = offerId; }
+                    if (viewport.Contains(confirm)) { PaintButton(g, confirm, "我选了这个"); if (offerId.Length > 0) offerButtons[confirm] = offerId; }
                     string reason = ModelValue.Text(offer, "reason");
                     Write(g, reason.Length > 0 ? reason : "请核对识别名称", smallFont, muted, new Rectangle(x + 9, y + S(30), width - 18, S(29)));
                     y += S(74);
@@ -835,6 +951,7 @@ namespace HexGuide.Desktop
         {
             base.OnMouseUp(e);
             if (e.Button != MouseButtons.Left) return;
+            if (buildToggle.Contains(e.Location)) { buildExpanded = !buildExpanded; scrollOffset = 0; Invalidate(); return; }
             if (scrollTrack.Contains(e.Location))
             {
                 if (!scrollThumb.Contains(e.Location)) ScrollTo(scrollOffset + (e.Y < scrollThumb.Top ? -1 : 1) * Math.Max(S(40), viewport.Height / 2));
@@ -859,7 +976,7 @@ namespace HexGuide.Desktop
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); }
+            if (disposing) { headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); foreach (Image image in buildIcons.Values) image.Dispose(); }
             base.Dispose(disposing);
         }
         internal static string RunSelfTest(string previewPath)
@@ -868,6 +985,7 @@ namespace HexGuide.Desktop
             Directory.CreateDirectory(Path.GetDirectoryName(previewPath));
             using (var window = new SidebarWindow())
             {
+                window.remoteIcons = false;
                 int flags = window.CreateParams.ExStyle;
                 bool safe = window.ShowWithoutActivation && (flags & 0x08000000) != 0 && (flags & 0x00000080) != 0
                     && !window.ShowInTaskbar && window.TopMost && window.FormBorderStyle == FormBorderStyle.None && !window.Visible;
@@ -882,15 +1000,33 @@ namespace HexGuide.Desktop
                         new Dictionary<string, object> { { "id", "demo-b" }, { "name", "示例选项 B" }, { "rank", 2 }, { "reason", "先在游戏完成选择，再在这里记录。" } },
                         new Dictionary<string, object> { { "id", "demo-c" }, { "name", "示例选项 C" }, { "rank", 3 }, { "reason", "完整解释可在「打开详细」中查看。" } }
                     } },
-                    { "plan", new Dictionary<string, object> { { "title", "本局玩法参考" }, { "summary", "建议会根据等级、装备和已确认的海克斯持续更新。" } } }
+                    { "plan", new Dictionary<string, object> {
+                        { "title", "本局玩法参考" }, { "summary", "建议会根据等级、装备和已确认的海克斯持续更新。" },
+                        { "enemyContext", new Dictionary<string, object> { { "summary", "示例阵容：已读取英雄与装备；此预览未连接真实对局。" } } },
+                        { "buildItems", new object[] {
+                            new Dictionary<string, object> { { "id", "demo-item-a" }, { "name", "示例装备 A" }, { "effect", "简短介绍装备属性与效果。" }, { "reason", "示例：针对已读取的敌方防御装备提供选项。" } },
+                            new Dictionary<string, object> { { "id", "demo-item-b" }, { "name", "示例装备 B" }, { "effect", "装备图标、名字与效果一起显示。" }, { "reason", "示例：延续已确认海克斯的触发方式。" } }
+                        } },
+                        { "nextAugments", new object[] {
+                            new Dictionary<string, object> { { "name", "示例后续海克斯 A" }, { "reason", "结合英雄机制、已有选择与可见阵容解释。" } },
+                            new Dictionary<string, object> { { "name", "示例后续海克斯 B" }, { "reason", "这是关注方向，并非预测下一轮必定出现。" } }
+                        } }
+                    } }
                 };
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png); }
                 if (window.Visible) throw new InvalidOperationException("Off-screen test unexpectedly displayed a window.");
+                window.ExpandBuild();
+                string buildPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-build.png");
+                using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(buildPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
+                Rectangle buildViewport = window.viewport;
+                Require(window.paintedSections[0] == "plan" && window.contentHeight > buildViewport.Height, "Selected build must expand first and remain scrollable.");
+                Require(!window.Visible && window.ShowWithoutActivation, "Expanded build unexpectedly activated a window.");
+                window.buildExpanded = false; window.scrollOffset = 0;
                 int defaultWidth = window.Width, defaultHeight = window.Height;
                 int appearanceChecks = ValidateAppearanceFixtures(window);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 8 + GameWindow.ValidateFixtures() + appearanceChecks }, { "appearanceChecks", appearanceChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks }, { "appearanceChecks", appearanceChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath } });
             }
         }
         private static int ValidateAppearanceFixtures(SidebarWindow window)
