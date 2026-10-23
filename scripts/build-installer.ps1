@@ -41,7 +41,7 @@ if (-not (Test-Path -LiteralPath $compiler)) { Expand-Archive -LiteralPath $arch
 Copy-Item -LiteralPath (Join-Path $toolRoot 'COPYING') -Destination (Join-Path $StagePath 'licenses\NSIS-LICENSE.txt') -Force
 
 # Enumerate an allowlist of shipped files. appdata, credentials, logs and caches are excluded.
-$entryNames = @('HexGuide.exe', 'HexGuide.exe.config', 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll', 'runtime', 'licenses', 'dist', 'server', 'native', 'package.json', 'build-info.json', '开始使用.txt', 'README.md', 'README-data.md', 'PRIVACY.md', 'THIRD-PARTY-NOTICES.md')
+$entryNames = @('HexGuide.exe', 'HexGuide.exe.config', 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll', 'runtime', 'licenses', 'dist', 'server', 'native', 'package.json', 'build-info.json', '开始使用.txt', 'README.md', 'README-data.md', 'README-statistics.md', 'PRIVACY.md', 'THIRD-PARTY-NOTICES.md')
 $files = @()
 foreach ($entryName in $entryNames) {
     $entryPath = Join-Path $StagePath $entryName

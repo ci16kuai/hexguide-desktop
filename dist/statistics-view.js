@@ -1,0 +1,93 @@
+import {createStatistics,getChampionRows,getAugmentRows,getAugmentBuildAdvice} from './statistics.js';
+
+const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const number=value=>Number.isFinite(Number(value))?Number(value).toLocaleString('zh-CN'):'—';
+const percent=value=>Number.isFinite(value)?`${value.toFixed(2)}%`:'暂无统计';
+const delta=value=>Number.isFinite(value)?`${value>0?'+':''}${value.toFixed(2)}`:'—';
+const link=value=>/^https:\/\//i.test(value||'')?esc(value):'#';
+const rarityNames={silver:'白银',gold:'黄金',prismatic:'棱彩'};
+const target=(id,label,container=false)=>`data-ui-id="${id}" data-ui-label="${label}"${container?` data-ui-container="${id}"`:''}`;
+const icon=(url,alt='',className='')=>/^https:\/\//i.test(url||'')?`<img class="${className}" src="${esc(url)}" alt="${esc(alt)}" loading="lazy" onerror="this.onerror=null;this.src='./assets/mark.svg'">`:`<img class="${className}" src="./assets/mark.svg" alt="${esc(alt)}" loading="lazy">`;
+
+// The view owns its browsing state. Opening a champion or a build never changes
+// the active match; adoption only happens through the explicit onAdd callback.
+export function createStatisticsView({catalog,onAdd=()=>{},getOwned=()=>[],fetcher=(...args)=>fetch(...args)}={}){
+  let index=null,itemsCatalog={},loading=false,error='',loaded=false;
+  const state={query:'',sort:'winRate',championId:'',augmentQuery:'',rarity:'all',includeLowSample:false,includeUnavailable:false,expanded:''};
+  const champion=()=>index?.championById.get(String(state.championId));
+  const rows=()=>getAugmentRows(index,state.championId,{query:state.augmentQuery,rarity:state.rarity,includeLowSample:state.includeLowSample,includeUnavailable:state.includeUnavailable});
+
+  async function load(){
+    if(loading||loaded)return;
+    loading=true;error='';
+    try{
+      const response=await fetcher('./statistics.json',{cache:'no-store'});
+      if(!response.ok)throw Error(`统计资料请求失败（${response.status}）`);
+      index=createStatistics(await response.json(),catalog);
+      try{const items=await fetcher('./items.json');if(items.ok)itemsCatalog=await items.json();}catch{}
+      loaded=true;
+    }catch(cause){error=cause?.message||'未能读取统计资料';}
+    finally{loading=false;redraw();}
+  }
+  function provenance(){
+    const meta=index.meta||{},source=meta.sourceName||meta.source?.name||'AramHex',sourceUrl=meta.sourceUrl||meta.source?.url||'https://aramhex.com/';
+    const cohorts=Array.isArray(meta.cohorts)?meta.cohorts:[],cohort=cohorts.find(c=>c.id===meta.defaultCohortId)||cohorts[0]||{};
+    const patch=meta.patch||meta.statsPatch||cohort.patch||'16.21',date=meta.statsUpdatedAt||meta.sourceUpdatedAt||meta.sourceDate||meta.statsDate||meta.sampleDate||cohort.updatedAt||'';
+    const imported=meta.fetchedAt||meta.importedAt||'';
+    const formatDate=value=>{if(!value)return '来源未注明';const parsed=new Date(value);return Number.isNaN(parsed.getTime())?String(value):parsed.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});};
+    return `<section class="stats-provenance" ${target('stats-provenance','英雄胜率数据来源')}><div><b>${esc(source)} 正式服统计</b><span>统计版本 ${esc(patch)}</span><span>${esc(meta.region||'国服 7 区合并')}</span><span>${number(meta.validGames||meta.totalMatches)} 场有效对局</span></div><div><span>来源统计更新：${esc(formatDate(date))}</span><span>本站同步：${esc(formatDate(imported))}（北京时间）</span></div><div><a href="${link(sourceUrl)}" target="_blank" rel="noopener noreferrer">查看统计来源 ↗</a><a href="${link(meta.source?.licenseUrl||'https://creativecommons.org/licenses/by-nc/4.0/deed.zh-hans')}" target="_blank" rel="noopener noreferrer">数据许可 CC BY-NC 4.0</a><span>经整理与中文目录映射；统计版本独立于 4.0 规则资料。</span></div></section>`;
+  }
+  function list(){
+    const champions=getChampionRows(index,{query:state.query,sort:state.sort}),available=index.champions.filter(c=>c.hasStats).length;
+    const rankMap=new Map(getChampionRows(index,{sort:state.sort}).map((c,i)=>[c.id,i+1]));
+    return `<div class="stats-heading" ${target('stats-heading','英雄胜率榜标题')}><div><h1>英雄胜率榜</h1><p>先看英雄整体表现，再比较持有海克斯的胜率差。</p></div><span class="stats-count">${available} / ${index.champions.length} 位英雄有统计</span></div>${provenance()}<div class="stats-controls" ${target('stats-filters','英雄胜率搜索与排序')}><label class="search-field"><span aria-hidden="true">⌕</span><input id="stats-champion-search" type="search" value="${esc(state.query)}" placeholder="搜索英雄名称、称号、英文或昵称" aria-label="搜索胜率榜英雄" autocomplete="off"></label><label class="stats-sort"><span>排序</span><select id="stats-champion-sort" aria-label="英雄胜率排序"><option value="winRate" ${state.sort==='winRate'?'selected':''}>胜率从高到低</option><option value="games" ${state.sort==='games'?'selected':''}>样本从多到少</option><option value="name" ${state.sort==='name'?'selected':''}>英雄名称</option></select></label></div><section class="stats-list" ${target('stats-leaderboard','全部英雄胜率列表')}><div class="stats-list-note"><strong>${champions.length} 位英雄</strong><span>点击英雄查看海克斯胜率与出装建议</span></div><div class="stats-table-scroll"><table class="stats-table stats-champion-table"><caption class="stats-sr-only">英雄整体胜率，按所选方式排序</caption><thead><tr><th scope="col">排名</th><th scope="col">英雄</th><th scope="col" class="stats-number">胜率</th><th scope="col" class="stats-number">英雄样本</th><th scope="col" class="stats-number stats-optional">海克斯记录</th><th scope="col"><span class="stats-sr-only">查看</span></th></tr></thead><tbody>${champions.map((c,i)=>`<tr><td class="stats-rank">${c.hasStats?rankMap.get(c.id):'—'}</td><td><button class="stats-hero-button" data-stats-action="champion" data-stats-id="${esc(c.id)}">${icon(c.icon)}<span><strong>${esc(c.name)}</strong><small>${esc(c.title||c.enName||'')}</small></span></button></td><td class="stats-number"><strong class="${c.winRate>=50?'stats-positive':''}">${percent(c.winRate)}</strong></td><td class="stats-number">${c.hasStats?number(c.games):'—'}</td><td class="stats-number stats-optional">${number(c.augments?.length||0)}</td><td><button class="stats-row-open" data-stats-action="champion" data-stats-id="${esc(c.id)}" aria-label="查看${esc(c.name)}的海克斯胜率">查看 <span aria-hidden="true">›</span></button></td></tr>`).join('')||'<tr><td colspan="6" class="stats-empty">没有符合条件的英雄。试试更短的名称。</td></tr>'}</tbody></table></div></section>`;
+  }
+  function build(row,c){
+    const advice=getAugmentBuildAdvice({champion:c,augment:row,augments:catalog.augments,itemsCatalog});
+    const actual=Array.isArray(row.builds)?row.builds:[];
+    return `<tr class="stats-build-row"><td colspan="6"><section class="stats-build" ${target('stats-build','选中海克斯后的出装建议')}><div class="stats-build-heading"><div><h3>${esc(c.name)} ＋ ${esc(row.name)}</h3><p>机制出装建议，暂无该组合出装胜率。</p></div>${row.canAdopt?`<button class="secondary-button" data-stats-action="adopt" data-stats-id="${esc(row.id)}" ${getOwned().includes(String(row.augmentId))?'disabled':''}>${getOwned().includes(String(row.augmentId))?'✓ 本局已选':'＋ 将此海克斯加入本局'}</button>`:'<span class="stats-badge">参考资料，不能加入本局</span>'}</div>${actual.length?'<p class="stats-build-disclosure">来源构筑资料尚未形成可比较的同版本组合胜率，以下仅显示机制建议。</p>':''}<p class="stats-build-summary">${esc(advice.summary||'请结合英雄机制、敌方阵容与当前装备选择；不能仅根据一项胜率差决定整局出装。')}</p><div class="stats-build-routes">${(advice.choices||[]).slice(0,3).map((route,i)=>`<article><h4>${esc(route.title||`路线 ${i+1}`)}</h4><div class="stats-build-items">${(route.items||[]).map(item=>`<div class="stats-build-item"><span>${typeof item==='string'?esc(item):`${item.icon?icon(item.icon):''}${esc(item.name||item.title||item.id||'装备')}`}</span>${typeof item!=='string'&&item.reason?`<small>${esc(item.reason)}</small>`:''}</div>`).join('')}</div><p>${esc(Array.isArray(route.why)?route.why.join('；'):route.why||'')}</p>${route.watch?.length?`<details class="stats-build-conditions"><summary>注意条件</summary><ul>${(Array.isArray(route.watch)?route.watch:[route.watch]).map(note=>`<li>${esc(note)}</li>`).join('')}</ul></details>`:''}</article>`).join('')||`<div class="stats-empty">${row.provisional?'该项为测试服参考，暂不提供当前版本出装建议。':'该海克斯未映射到当前可选资料，暂不提供可靠的机制出装建议。'}</div>`}</div><p class="stats-build-disclosure">查看此英雄或海克斯不会切换“我的这一局”。加入本局只添加海克斯，请自行确认当前英雄。</p></section></td></tr>`;
+  }
+  function detail(){
+    const c=champion();if(!c){state.championId='';return list();}
+    const augments=rows(),threshold=index.meta?.lowSampleThreshold||3000;
+    return `<div class="stats-detail-heading" ${target('stats-detail-heading','英雄统计详情标题')}><button class="stats-back" data-stats-action="back">‹ 返回全部英雄</button><span>浏览统计，不会切换本局英雄</span></div><section class="stats-profile" ${target('stats-profile','英雄基础胜率')}><div class="stats-profile-identity">${icon(c.icon)}<div><h1>${esc(c.name)}</h1><p>${esc(c.title||'')} <span>${esc(c.enName||'')}</span></p></div></div><dl><div><dt>英雄整体胜率</dt><dd>${percent(c.winRate)}</dd></div><div><dt>英雄样本</dt><dd>${c.hasStats?number(c.games):'—'}</dd></div><div><dt>胜场</dt><dd>${c.hasStats?number(c.wins):'—'}</dd></div></dl><a href="${link(c.sourceUrl||index.meta?.sourceUrl||'https://aramhex.com/')}" target="_blank" rel="noopener noreferrer">英雄统计原文 ↗</a></section>${provenance()}<div class="stats-explainer" ${target('stats-comparison-note','胜率差比较说明')}><strong>胜率增幅 = 局末持有该海克斯的胜率 − 英雄整体胜率</strong><p>来源按对局结束时持有该海克斯统计，任一槽位持有即计入、同一玩家去重。差值单位是“百分点”，只比较同来源、同版本、同统计范围；它是统计关联，不是每次三选一的实验结果，也不保证实际胜率提升。</p></div><section class="stats-augment-filters" ${target('stats-augment-filters','海克斯胜率筛选')}><div class="stats-controls"><label class="search-field"><span aria-hidden="true">⌕</span><input id="stats-augment-search" type="search" value="${esc(state.augmentQuery)}" placeholder="搜索海克斯名称或效果" aria-label="搜索英雄海克斯统计" autocomplete="off"></label><select id="stats-rarity" aria-label="海克斯统计品质"><option value="all">全部品质</option>${Object.entries(rarityNames).map(([key,name])=>`<option value="${key}" ${state.rarity===key?'selected':''}>${name}</option>`).join('')}</select></div><div class="stats-toggles"><label><input id="stats-low-sample" type="checkbox" ${state.includeLowSample?'checked':''}> 包含低样本（&lt;${number(threshold)} 场）</label><label><input id="stats-unavailable" type="checkbox" ${state.includeUnavailable?'checked':''}> 包含非当前 / 测试服参考项</label></div></section><section class="stats-augments" ${target('stats-augment-table','海克斯胜率增幅列表')}><div class="stats-list-note"><strong>${augments.length} 项海克斯统计</strong><span>可比项按胜率增幅从高到低；点击展开出装</span></div><div class="stats-table-scroll"><table class="stats-table stats-augment-table"><caption class="stats-sr-only">${esc(c.name)}选中各海克斯的胜率与相对英雄基线的百分点差</caption><thead><tr><th scope="col">海克斯</th><th scope="col" class="stats-number">持有胜率</th><th scope="col" class="stats-number">胜率增幅</th><th scope="col" class="stats-number">海克斯样本</th><th scope="col" class="stats-optional">样本状态</th><th scope="col">出装</th></tr></thead><tbody>${augments.map(row=>`<tr class="${state.expanded===String(row.id)?'stats-is-expanded':''}"><td><button class="stats-augment-button" data-stats-action="expand" data-stats-id="${esc(row.id)}" aria-expanded="${state.expanded===String(row.id)}">${icon(row.icon)}<span><strong>${esc(row.name)}</strong><small class="stats-rarity-${esc(row.rarity)}">${esc(rarityNames[row.rarity]||'品质待核对')}</small></span></button></td><td class="stats-number">${percent(row.winRate)}</td><td class="stats-number"><strong class="${row.deltaPp>0?'stats-positive':row.deltaPp<0?'stats-negative':''}">${delta(row.deltaPp)}${Number.isFinite(row.deltaPp)?'<small class="stats-unit"> 个百分点</small>':''}</strong>${!row.comparable?`<small class="stats-uncomparable" title="${esc(row.comparisonReason||'与英雄基线统计范围不同，不能计算差值')}">不可比较</small>`:''}</td><td class="stats-number">${row.hasStats?number(row.games):'—'}</td><td class="stats-optional"><div class="stats-row-badges">${row.lowSample?'<span class="stats-badge stats-warning">低样本</span>':''}${row.provisional?'<span class="stats-badge stats-warning">测试服参考</span>':''}${row.outdated?'<span class="stats-badge stats-warning">旧版</span>':''}${!row.isCurrent&&!row.provisional&&!row.outdated?'<span class="stats-badge">非当前可选</span>':''}${row.comparable&&!row.lowSample?'<span class="stats-badge">同口径</span>':''}</div></td><td><button class="stats-row-open" data-stats-action="expand" data-stats-id="${esc(row.id)}" aria-expanded="${state.expanded===String(row.id)}">${state.expanded===String(row.id)?'收起':'出装'} <span aria-hidden="true">${state.expanded===String(row.id)?'⌃':'⌄'}</span></button></td></tr>${state.expanded===String(row.id)?build(row,c):''}`).join('')||'<tr><td colspan="6" class="stats-empty">暂无符合条件的统计。可缩短搜索词或开启“包含低样本”查看参考资料。</td></tr>'}</tbody></table></div></section>`;
+  }
+  function content(){
+    if(error)return `<div class="stats-empty" role="alert"><h1>统计资料暂未载入</h1><p>${esc(error)}</p><button class="secondary-button" data-stats-action="retry">重新载入统计</button><p>海克斯库与本局推荐仍可继续使用。</p></div>`;
+    if(!index)return '<div class="stats-empty" role="status"><h1>正在读取英雄胜率</h1><p>首次打开需要载入统计快照…</p></div>';
+    return state.championId?detail():list();
+  }
+  function html(){if(!loaded&&!loading&&!error)load();return `<div id="statistics-root" class="statistics-page" ${target('stats-content','英雄胜率统计内容',true)}>${content()}</div>`;}
+  function redraw(){
+    const root=document.getElementById('statistics-root');if(!root)return;
+    const active=document.activeElement,focusId=root.contains(active)?active?.id:'',start=active?.selectionStart,end=active?.selectionEnd;
+    root.innerHTML=content();
+    if(focusId){const input=document.getElementById(focusId);input?.focus({preventScroll:true});if(typeof start==='number'&&/^(search|text)$/.test(input?.type))input.setSelectionRange(start,end);}
+  }
+  document.addEventListener('click',event=>{
+    const button=event.target.closest('[data-stats-action]');if(!button||!button.closest('#statistics-root'))return;
+    const action=button.dataset.statsAction,id=button.dataset.statsId;
+    if(action==='retry'){error='';load();redraw();return;}
+    if(!index)return;
+    if(action==='champion'){state.championId=String(id);state.augmentQuery='';state.rarity='all';state.expanded='';redraw();document.getElementById('statistics-root')?.scrollIntoView({block:'start',behavior:'instant'});}
+    else if(action==='back'){state.championId='';state.expanded='';redraw();}
+    else if(action==='expand'){state.expanded=state.expanded===String(id)?'':String(id);redraw();}
+    else if(action==='adopt'){
+      const row=rows().find(a=>String(a.id)===String(id));
+      if(row?.canAdopt&&row.augmentId&&!getOwned().includes(String(row.augmentId))){onAdd(String(row.augmentId),{championId:state.championId});redraw();}
+    }
+  });
+  document.addEventListener('input',event=>{
+    if(event.target.id==='stats-champion-search'){state.query=event.target.value;redraw();}
+    else if(event.target.id==='stats-augment-search'){state.augmentQuery=event.target.value;state.expanded='';redraw();}
+  });
+  document.addEventListener('change',event=>{
+    if(event.target.id==='stats-champion-sort')state.sort=event.target.value;
+    else if(event.target.id==='stats-rarity'){state.rarity=event.target.value;state.expanded='';}
+    else if(event.target.id==='stats-low-sample'){state.includeLowSample=event.target.checked;state.expanded='';}
+    else if(event.target.id==='stats-unavailable'){state.includeUnavailable=event.target.checked;state.expanded='';}
+    else return;
+    redraw();
+  });
+  return Object.freeze({html});
+}

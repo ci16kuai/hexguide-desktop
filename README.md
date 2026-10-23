@@ -1,10 +1,10 @@
 # 海克斯指南 · Windows 桌面版
 
-面向英雄联盟海克斯大乱斗玩家的中文选择助手。版本 **1.4.0**，资料对应 **海克斯大乱斗 4.0 / 26.21**，英雄与装备资料为 **Data Dragon 16.21.1**。资料更新时间始终显示在页面顶部。
+面向英雄联盟海克斯大乱斗玩家的中文选择助手。版本 **1.5.0**，资料对应 **海克斯大乱斗 4.0 / 26.21**，英雄与装备资料为 **Data Dragon 16.21.1**。资料更新时间始终显示在页面顶部。
 
 ## 使用
 
-1. 从[公开下载页](https://hexguide-aram-20261023.robustacorn1025.chatgpt.site/download.html)下载 `HexGuide-Setup-1.4.0.exe`，运行安装向导。
+1. 从[公开下载页](https://hexguide-aram-20261023.robustacorn1025.chatgpt.site/download.html)下载 `HexGuide-Setup-1.5.0.exe`，运行安装向导。
 2. 选择安装目录，可勾选桌面快捷方式。安装后从桌面或开始菜单打开「海克斯指南」。不需要登录 ChatGPT，也不需要另装 Node.js。
 3. 正常打开英雄联盟。选人阶段尝试同步英雄，进入游戏后读取自身英雄、等级、装备、金币和面板。
 4. 在「我的这一局」确认实际已选海克斯，玩法建议随英雄、装备、阶段和已确认海克斯更新。
@@ -17,6 +17,16 @@
 系统要求：Windows 10/11 x64、.NET Framework 4.8、[Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。当前电脑已有所需运行环境。主程序未作代码签名，不会自行安装服务、修改防火墙或设置开机启动。
 
 安装版通过快捷方式将本局记录和界面缓存保存在 `%LOCALAPPDATA%\HexGuide\data`，卸载保留这些个人数据；安装文件保存在你选择的安装目录。便携版默认在软件旁的 `appdata` 保存本地界面缓存。可用 `HexGuide.exe --data-dir "H:\Chatgpt\hexguide-appdata"` 指定位置。关闭主窗口默认收进托盘；需要停止同步时，在托盘菜单选择「完全退出」。
+
+## 英雄胜率与海克斯胜率差
+
+打开顶部 **英雄胜率**，搜索或浏览全部173位英雄；点击英雄后，海克斯按同一统计口径下的胜率差从高到低排列。胜率差使用“该英雄持有该海克斯的胜率 − 该英雄整体胜率”，单位为百分点，按原始胜负场次计算后再显示。它描述样本中的关联，不能保证选择后的因果提升。
+
+数据来自 AramHex 开放数据集的国服7区合并、全分段、16.21常规规则快照；详情显示样本范围、更新时间、场次与来源。默认不列来源标注的低样本（少于3,000场）；参考开关可查看低样本、非当前目录和测试服条目。4个测试服暂补海克斯不会与正式服英雄基线计算胜率差。浏览统计不会修改你的当前英雄或已选海克斯；需要明确点击“加入本局”才会记录。
+
+展开海克斯可查看对应英雄与该效果的 **机制出装建议**。开放数据未包含英雄×海克斯×装备的条件胜率，因此这些建议不附装备胜率或虚构的统计六神装。装备以16.21.1官方资料和可购条件为依据，具体适用性仍取决于游戏中的实际局势。
+
+统计数据依 **CC BY-NC 4.0** 署名、非商用使用；来源、原许可及转换过程见 `README-statistics.md`。更新命令为 `node scripts/update-statistics.mjs`。
 
 ## 可视化编辑整个界面
 
@@ -62,7 +72,7 @@
 
 编译、桌面窗口启动/退出、本机接口、中文 OCR 合成图片和自动化检查已验证。2026-10-23 已在真实海克斯大乱斗中确认赵信英雄同步、等级、装备与面板连续更新，queueId 为 2400。1.1.0 修复整屏文字子串误匹配、短名称漏识别及识别结果被后续扫描覆盖的问题。**真实三选一卡片的完整识别仍需进一步实测，不能把合成图片通过当成实战准确率保证。**
 
-建议提供多种可行玩法及触发条件，不展示海克斯胜率，也不替玩家执行选择。LCU 不是稳定受支持的第三方接口，游戏更新可能令部分功能失效。供个人测试；面向其他玩家广泛分发前，需要按 [Riot 开发者政策](https://developer.riotgames.com/docs/lol#game-policy) 登记产品并确认功能许可。本项目未获 Riot Games 认可。
+实时玩法建议提供多种可行路线及触发条件，不替玩家执行选择；独立统计页提供有明确来源、版本和样本的历史胜率。LCU 不是稳定受支持的第三方接口，游戏更新可能令部分功能失效。供个人测试；面向其他玩家广泛分发前，需要按 [Riot 开发者政策](https://developer.riotgames.com/docs/lol#game-policy) 登记产品并确认功能许可。本项目未获 Riot Games 认可。
 
 ## 开发与构建
 
@@ -86,8 +96,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps
 安装版构建（需先构建独立暂存目录）：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -StagePath artifacts/portable-1.4.0
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -StagePath artifacts/portable-1.4.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -StagePath artifacts/portable-1.5.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -StagePath artifacts/portable-1.5.0
 ```
 
 安装程序以当前用户身份运行，允许选择安装目录与桌面图标，提供开始菜单和 Windows 设置中的卸载入口；详情见 `installer/README.md`。安装包尚未进行代码签名。浏览器下载文件保存位置由浏览器决定，可使用“另存为”或浏览器的下载位置设置。

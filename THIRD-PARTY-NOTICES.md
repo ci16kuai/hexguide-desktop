@@ -10,3 +10,5 @@
 - Windows OCR、WinForms、.NET Framework 由 Windows / Microsoft 运行环境提供。
 
 应用原创源码与上述游戏资产、外部资料、第三方运行环境分别适用各自的权利和许可。没有为第三方游戏资产授予新的使用或再分发权限。
+
+- 英雄及英雄×海克斯胜率：AramHex / czgreat/aramhex-data，固定来源提交 `5e6770a1550d2eb40f4da83e31f142e4588524b0`，https://github.com/czgreat/aramhex-data ，按 CC BY-NC 4.0 署名、非商用使用。本项目进行了英雄/海克斯ID映射、概率转百分数、同口径胜率差计算、样本筛选与界面展示；原许可附于 `dist/licenses/aramhex-data-LICENSE.txt`。此许可仅覆盖对应统计数据，不覆盖 Riot 游戏资产或本项目其他代码。

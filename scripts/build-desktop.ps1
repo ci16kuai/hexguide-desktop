@@ -107,7 +107,7 @@ foreach ($directory in @('dist', 'server')) {
 New-Item -ItemType Directory -Path (Join-Path $stage 'native') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\scan-augments.ps1') -Destination (Join-Path $stage 'native\scan-augments.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'package.json') -Destination (Join-Path $stage 'package.json') -Force
-foreach ($document in @('README.md', 'README-data.md', 'PRIVACY.md', 'THIRD-PARTY-NOTICES.md')) {
+foreach ($document in @('README.md', 'README-data.md', 'README-statistics.md', 'PRIVACY.md', 'THIRD-PARTY-NOTICES.md')) {
     if (Test-Path -LiteralPath (Join-Path $projectRoot $document)) { Copy-Item -LiteralPath (Join-Path $projectRoot $document) -Destination $stage -Force }
 }
 @"
@@ -132,7 +132,7 @@ if ($Package) {
     if (-not $ArchivePath) { $ArchivePath = Join-Path (Split-Path -Parent $projectRoot) ('海克斯指南桌面版-' + $AppVersion + '.zip') }
     $ArchivePath = [IO.Path]::GetFullPath($ArchivePath)
     New-Item -ItemType Directory -Path (Split-Path -Parent $ArchivePath) -Force | Out-Null
-    $packageEntries = @('package.json', 'HexGuide.exe', 'HexGuide.exe.config', 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll', 'runtime', 'licenses', 'dist', 'server', 'native', '开始使用.txt', 'build-info.json', 'README.md', 'README-data.md', 'PRIVACY.md', 'THIRD-PARTY-NOTICES.md')
+    $packageEntries = @('package.json', 'HexGuide.exe', 'HexGuide.exe.config', 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll', 'runtime', 'licenses', 'dist', 'server', 'native', '开始使用.txt', 'build-info.json', 'README.md', 'README-data.md', 'README-statistics.md', 'PRIVACY.md', 'THIRD-PARTY-NOTICES.md')
     $archiveSources = @($packageEntries | ForEach-Object { $entry = Join-Path $stage $_; if (Test-Path -LiteralPath $entry) { $entry } })
     Compress-Archive -LiteralPath $archiveSources -DestinationPath $ArchivePath -CompressionLevel Optimal -Force
     Write-Output "Archive: $ArchivePath"
