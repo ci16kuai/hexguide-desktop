@@ -19,6 +19,8 @@ export class AppearanceStore {
       const file = path.join(this.dataDirectory, 'appearance.json');
       if ((await stat(file)).size > 4096) return this;
       this.value = validateAppearance(JSON.parse(await readFile(file, 'utf8')));
+      // Every app start docks left; preserve all other preferences without rewriting the saved file.
+      this.value.sidebar.side = 'left';
     } catch { /* Missing, corrupt or unsupported settings use safe defaults. */ }
     return this;
   }

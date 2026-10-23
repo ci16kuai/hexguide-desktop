@@ -19,12 +19,14 @@ async function folder(t) {
 function changed() {
   const settings = createDefaultAppearance();
   settings.main = {fontFamily:'simsun', scale:130, density:'compact', cardLayout:'list', panelSide:'right'};
-  settings.sidebar = {fontFamily:'yahei', scale:85, width:460, side:'left', opacity:75, sections:['offers','hero','plan','owned']};
+  settings.sidebar = {fontFamily:'yahei', scale:85, width:460, side:'right', opacity:75, sections:['offers','hero','plan','owned']};
   return settings;
 }
 
 test('appearance schema accepts documented boundaries and rejects CSS, unknown keys, partial values and non-permutations', () => {
+  assert.equal(createDefaultAppearance().sidebar.side, 'left', 'new sidebars default to the left edge');
   const settings = changed();
+  assert.equal(settings.sidebar.side, 'right', 'right-side selection remains supported during this run');
   assert.deepEqual(validateAppearance(settings), settings);
   const independent = validateAppearance(settings);
   independent.sidebar.sections.reverse();
@@ -55,7 +57,7 @@ test('appearance schema accepts documented boundaries and rejects CSS, unknown k
   for (const input of invalid) assert.throws(() => validateAppearance(input), TypeError);
 });
 
-test('saved appearance survives restart independently from game selections, while corrupt or unsupported files use defaults', async t => {
+test('saved appearance except startup docking survives restart independently from game selections, while corrupt or unsupported files use defaults', async t => {
   const directory = await folder(t);
   const store = await new AppearanceStore({dataDirectory:directory}).load();
   assert.deepEqual(store.get(), createDefaultAppearance());
@@ -70,11 +72,32 @@ test('saved appearance survives restart independently from game selections, whil
   assert.deepEqual(disk, changed());
   assert.deepEqual((await readdir(directory)).sort(), ['appearance.json']);
   const restored = await new AppearanceStore({dataDirectory:directory}).load();
-  assert.deepEqual(restored.get(), changed());
+  const restoredSettings = changed();
+  restoredSettings.sidebar.side = 'left';
+  assert.deepEqual(restored.get(), restoredSettings);
   for (const body of ['{broken', JSON.stringify({...changed(),schemaVersion:999}), 'x'.repeat(4097)]) {
     await writeFile(path.join(directory,'appearance.json'),body);
     assert.deepEqual((await new AppearanceStore({dataDirectory:directory}).load()).get(), createDefaultAppearance());
   }
+});
+
+test('each startup docks left while retaining every other saved appearance preference and leaving disk unchanged', async t => {
+  const directory = await folder(t);
+  const firstRun = await new AppearanceStore({dataDirectory:directory}).load();
+  const selected = changed();
+  await firstRun.set(selected);
+  assert.equal(firstRun.get().sidebar.side, 'right', 'right-side docking works in the current run');
+  const file = path.join(directory, 'appearance.json');
+  const savedBytes = await readFile(file, 'utf8');
+  const restarted = await new AppearanceStore({dataDirectory:directory}).load();
+  const expected = structuredClone(selected);
+  expected.sidebar.side = 'left';
+  assert.deepEqual(restarted.get(), expected, 'only sidebar docking resets; fonts, size, opacity, section order and main layout survive');
+  assert.equal(await readFile(file, 'utf8'), savedBytes, 'startup does not rewrite or discard saved fields');
+  assert.deepEqual(await readdir(directory), ['appearance.json'], 'drag position is not persisted by the appearance store');
+  await restarted.set(selected);
+  assert.equal(restarted.get().sidebar.side, 'right', 'a new run can still select right-side docking');
+  assert.deepEqual((await new AppearanceStore({dataDirectory:directory}).load()).get(), expected, 'every subsequent startup returns to left docking');
 });
 
 test('appearance writes are serialized; failed persistence retains the last saved view and permits a later retry', async t => {

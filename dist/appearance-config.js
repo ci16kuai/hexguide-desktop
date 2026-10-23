@@ -7,7 +7,7 @@ const integer = (value, minimum, maximum) => Number.isInteger(value) && value >=
 export const DEFAULT_APPEARANCE = Object.freeze({
   schemaVersion:1,
   main:Object.freeze({fontFamily:'system', scale:100, density:'comfortable', cardLayout:'grid', panelSide:'left'}),
-  sidebar:Object.freeze({fontFamily:'system', scale:100, width:324, side:'right', opacity:100, sections:Object.freeze([...sections])}),
+  sidebar:Object.freeze({fontFamily:'system', scale:100, width:324, side:'left', opacity:100, sections:Object.freeze([...sections])}),
 });
 
 export function createDefaultAppearance() { return structuredClone(DEFAULT_APPEARANCE); }

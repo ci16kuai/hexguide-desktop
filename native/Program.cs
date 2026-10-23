@@ -19,9 +19,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.8.0.0")]
-[assembly: AssemblyFileVersion("1.8.0.0")]
-[assembly: AssemblyInformationalVersion("1.8.0")]
+[assembly: AssemblyVersion("1.8.1.0")]
+[assembly: AssemblyFileVersion("1.8.1.0")]
+[assembly: AssemblyInformationalVersion("1.8.1")]
 
 namespace HexGuide.Desktop
 {
@@ -90,7 +90,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             previewSidebar = preview;
-            Text = "海克斯指南 1.8.0 · 我的这一局";
+            Text = "海克斯指南 1.8.1 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -301,7 +301,7 @@ namespace HexGuide.Desktop
             if (foreground != IntPtr.Zero) lastGame = foreground;
             if (!sidebarEnabled || (!previewSidebar && foreground == IntPtr.Zero)) { if (sidebar.Visible) sidebar.Hide(); UpdateSidebarHint(false); return; }
             IntPtr target = foreground != IntPtr.Zero ? foreground : lastGame;
-            Rectangle area = target != IntPtr.Zero ? Screen.FromHandle(target).WorkingArea : Screen.PrimaryScreen.WorkingArea;
+            Rectangle area = GameWindow.PlacementArea(target);
             sidebar.Place(area);
             if (!sidebar.Visible) sidebar.ShowPassive();
             UpdateSidebarHint(sidebar.Visible);
@@ -591,7 +591,7 @@ namespace HexGuide.Desktop
 
     internal sealed class SidebarAppearance
     {
-        internal string FontFamily = "system", Side = "right";
+        internal string FontFamily = "system", Side = "left";
         internal int Scale = 100, Width = 324, Opacity = 100;
         internal string[] Sections = new[] { "hero", "owned", "offers", "plan" };
         internal string FontName
@@ -646,6 +646,10 @@ namespace HexGuide.Desktop
         private readonly HashSet<string> requestedIcons = new HashSet<string>();
         private Rectangle buildToggle;
         private bool buildExpanded, remoteIcons = true;
+        private Rectangle placementArea;
+        private Point dragStartPointer, dragStartLocation;
+        private bool dragging, consumeDragClick, customPosition, appearanceLoaded;
+        private double horizontalPosition, verticalPosition = 0.5;
         internal Dictionary<string, object> Model
         {
             get { return model; }
@@ -684,6 +688,7 @@ namespace HexGuide.Desktop
         {
             Text = "海克斯指南 · 游戏侧栏";
             FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.Manual;
             ShowInTaskbar = false;
             TopMost = true;
             BackColor = Color.FromArgb(14, 22, 32);
@@ -705,19 +710,56 @@ namespace HexGuide.Desktop
         }
         internal void Place(Rectangle area)
         {
-            int margin = Math.Min(12, Math.Max(0, (area.Width - 1) / 2));
+            placementArea = area;
+            if (dragging) return;
             int top = Math.Min(18, Math.Max(0, (area.Height - 1) / 2));
-            int width = Math.Min(appearance.Width, Math.Max(1, area.Width - margin * 2));
+            int width = Math.Min(appearance.Width, Math.Max(1, area.Width));
             int height = Math.Min(750, Math.Max(1, area.Height - top * 2));
-            int left = appearance.Side == "left" ? area.Left + margin : area.Right - width - margin;
-            Rectangle desired = new Rectangle(left, area.Top + top, width, height);
+            int remainingX = Math.Max(0, area.Width - width), remainingY = Math.Max(0, area.Height - height);
+            double x = customPosition ? horizontalPosition : appearance.Side == "left" ? 0 : 1;
+            double y = customPosition ? verticalPosition : 0.5;
+            Rectangle desired = new Rectangle(area.Left + (int)Math.Round(x * remainingX), area.Top + (int)Math.Round(y * remainingY), width, height);
             if (Bounds != desired) Bounds = desired;
+        }
+        private void BeginManualMove(Point pointer)
+        {
+            if (placementArea.Width < 1 || placementArea.Height < 1) return;
+            dragging = true; consumeDragClick = true;
+            dragStartPointer = pointer; dragStartLocation = Location;
+        }
+        private void MoveManually(Point pointer)
+        {
+            if (!dragging) return;
+            int maxX = Math.Max(0, placementArea.Width - Width), maxY = Math.Max(0, placementArea.Height - Height);
+            int x = Math.Max(0, Math.Min(maxX, dragStartLocation.X + pointer.X - dragStartPointer.X - placementArea.Left));
+            int y = Math.Max(0, Math.Min(maxY, dragStartLocation.Y + pointer.Y - dragStartPointer.Y - placementArea.Top));
+            horizontalPosition = maxX == 0 ? 0 : (double)x / maxX;
+            verticalPosition = maxY == 0 ? 0.5 : (double)y / maxY;
+            customPosition = true;
+            Location = new Point(placementArea.Left + x, placementArea.Top + y);
+        }
+        private void EndManualMove()
+        {
+            if (!dragging) return;
+            dragging = false;
+            if (Capture) Capture = false;
+            Cursor = Cursors.Default;
+            if (placementArea.Width > 0 && placementArea.Height > 0) Place(placementArea);
+            Invalidate();
         }
         private void ApplyAppearance(SidebarAppearance next)
         {
             bool fontsChanged = appearance.FontFamily != next.FontFamily || appearance.Scale != next.Scale;
             bool sectionsChanged = string.Join(",", appearance.Sections) != string.Join(",", next.Sections);
+            bool sideChanged = appearanceLoaded && appearance.Side != next.Side;
             appearance = next;
+            appearanceLoaded = true;
+            if (sideChanged)
+            {
+                EndManualMove();
+                customPosition = false;
+                if (placementArea.Width > 0 && placementArea.Height > 0) Place(placementArea);
+            }
             if (fontsChanged) UpdateFonts();
             if (sectionsChanged) scrollOffset = 0;
             double opacity = next.Opacity / 100.0;
@@ -749,7 +791,7 @@ namespace HexGuide.Desktop
             using (var border = new Pen(Color.FromArgb(55, 77, 97))) g.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
             int x = 17, width = Math.Max(1, Width - 34), y = 16;
             Write(g, "海克斯指南", headingFont, ForeColor, new Rectangle(x, y, width, S(29))); y += S(34);
-            Write(g, "Alt + Shift + H  显示 / 收起", smallFont, muted, new Rectangle(x, y, width, S(20))); y += S(28);
+            Write(g, "Ctrl + 左键拖动 · Alt+Shift+H 收放", smallFont, muted, new Rectangle(x, y, width, S(20))); y += S(28);
             viewport = new Rectangle(x, y, width, Math.Max(1, Height - S(82) - y));
             contentHeight = 0;
             foreach (string section in DisplaySections()) contentHeight += SectionHeight(section);
@@ -947,8 +989,40 @@ namespace HexGuide.Desktop
             using (var brush = new SolidBrush(Color.FromArgb(35, 56, 69))) graphics.FillRectangle(brush, rectangle);
             TextRenderer.DrawText(graphics, title, smallFont, rectangle, ForeColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left && (GetAsyncKeyState(0x11) & 0x8000) != 0)
+            {
+                BeginManualMove(Cursor.Position);
+                if (dragging) { Capture = true; Cursor = Cursors.SizeAll; }
+                return;
+            }
+            consumeDragClick = false;
+            base.OnMouseDown(e);
+        }
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            if (dragging)
+            {
+                if ((GetAsyncKeyState(0x11) & 0x8000) == 0 || (Control.MouseButtons & MouseButtons.Left) == 0) EndManualMove();
+                else MoveManually(Cursor.Position);
+                return;
+            }
+            Cursor = (GetAsyncKeyState(0x11) & 0x8000) != 0 ? Cursors.SizeAll : Cursors.Default;
+            base.OnMouseMove(e);
+        }
+        protected override void OnMouseCaptureChanged(EventArgs e)
+        {
+            if (dragging && !Capture) EndManualMove();
+            base.OnMouseCaptureChanged(e);
+        }
         protected override void OnMouseUp(MouseEventArgs e)
         {
+            if (e.Button == MouseButtons.Left && (dragging || consumeDragClick))
+            {
+                EndManualMove(); consumeDragClick = false; Cursor = Cursors.Default;
+                return;
+            }
             base.OnMouseUp(e);
             if (e.Button != MouseButtons.Left) return;
             if (buildToggle.Contains(e.Location)) { buildExpanded = !buildExpanded; scrollOffset = 0; Invalidate(); return; }
@@ -965,6 +1039,7 @@ namespace HexGuide.Desktop
         }
         protected override void OnMouseWheel(MouseEventArgs e)
         {
+            if (dragging) return;
             base.OnMouseWheel(e);
             ScrollTo(scrollOffset - Math.Sign(e.Delta) * S(52));
         }
@@ -1024,22 +1099,24 @@ namespace HexGuide.Desktop
                 window.buildExpanded = false; window.scrollOffset = 0;
                 int defaultWidth = window.Width, defaultHeight = window.Height;
                 int appearanceChecks = ValidateAppearanceFixtures(window);
+                string placementPreviewPath;
+                int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks }, { "appearanceChecks", appearanceChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath } });
             }
         }
         private static int ValidateAppearanceFixtures(SidebarWindow window)
         {
             var defaults = SidebarAppearance.FromModel(new Dictionary<string, object>());
-            Require(defaults.Scale == 100 && defaults.Width == 324 && defaults.Opacity == 100 && defaults.Side == "right", "Default sidebar appearance changed.");
+            Require(defaults.Scale == 100 && defaults.Width == 324 && defaults.Opacity == 100 && defaults.Side == "left", "Default sidebar appearance changed.");
             var invalid = new Dictionary<string, object> { { "appearance", new Dictionary<string, object> { { "sidebar", new Dictionary<string, object> {
                 { "fontFamily", "untrusted-font-name" }, { "scale", 10000 }, { "width", 99999 }, { "opacity", -50 }, { "side", "anywhere" },
                 { "sections", new object[] { "offers", "offers", "hero", "unknown" } }
             } } } } };
             var clamped = SidebarAppearance.FromModel(invalid);
             Require(clamped.Scale == 130 && clamped.Width == 460 && clamped.Opacity == 75, "Native appearance bounds were not enforced.");
-            Require(clamped.FontFamily == "system" && clamped.Side == "right", "Unknown appearance enum was accepted.");
+            Require(clamped.FontFamily == "system" && clamped.Side == "left", "Unknown appearance enum was accepted.");
             Require(string.Join(",", clamped.Sections) == "hero,owned,offers,plan", "Invalid section order was accepted.");
             invalid["appearance"] = new Dictionary<string, object> { { "sidebar", new Dictionary<string, object> { { "scale", "NaN" }, { "opacity", "Infinity" }, { "width", -100 } } } };
             clamped = SidebarAppearance.FromModel(invalid);
@@ -1052,7 +1129,7 @@ namespace HexGuide.Desktop
             window.Model = custom;
             Rectangle monitor = new Rectangle(-1920, -100, 1920, 1080);
             window.Place(monitor);
-            Require(window.Width == 280 && window.Left == monitor.Left + 12 && monitor.Contains(window.Bounds), "Left/sidebar multi-monitor placement failed.");
+            Require(window.Width == 280 && window.Left == monitor.Left && window.Top == monitor.Top + (monitor.Height - window.Height) / 2 && monitor.Contains(window.Bounds), "Left/center multi-monitor placement failed.");
             Require(Math.Abs(window.Opacity - 0.75) < 0.001 && Math.Abs(window.headingFont.Size - 18.2F) < 0.01, "Sidebar font or opacity did not update.");
             using (var bitmap = new Bitmap(window.Width, window.Height)) window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
             Require(string.Join(",", window.paintedSections.ToArray()) == "plan,offers,owned,hero", "Saved section order was not painted.");
@@ -1073,7 +1150,7 @@ namespace HexGuide.Desktop
             Require(smallMonitor.Contains(window.Bounds), "Sidebar exceeded a small monitor work area.");
             custom["appearance"] = new Dictionary<string, object> { { "sidebar", new Dictionary<string, object> { { "width", 460 }, { "side", "right" } } } };
             window.Model = custom; window.Place(monitor);
-            Require(window.Width == 460 && window.Right == monitor.Right - 12 && monitor.Contains(window.Bounds), "Right/sidebar placement did not follow settings.");
+            Require(window.Width == 460 && window.Right == monitor.Right && monitor.Contains(window.Bounds), "Right/sidebar placement did not follow settings.");
             custom["appearance"] = new Dictionary<string, object> { { "sidebar", new Dictionary<string, object> {
                 { "fontFamily", "simsun" }, { "scale", 130 }, { "width", 280 }, { "opacity", 75 }, { "side", "left" },
                 { "sections", new object[] { "plan", "offers", "owned", "hero" } }
@@ -1082,11 +1159,74 @@ namespace HexGuide.Desktop
             Require(!window.Visible && window.ShowWithoutActivation && (window.CreateParams.ExStyle & 0x08000000) != 0 && (window.CreateParams.ExStyle & 0x00000080) != 0, "Appearance changes affected passive sidebar behavior.");
             return 15;
         }
+        private static int ValidatePositionFixtures(string directory, out string placementPreviewPath)
+        {
+            Rectangle area = new Rectangle(100, 50, 1280, 900);
+            Point savedLocation;
+            placementPreviewPath = Path.Combine(directory, "sidebar-left-center.png");
+            using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false;
+                window.Place(area);
+                Require(window.Left == area.Left && window.Top == area.Top + 75, "Default sidebar must touch the left edge and be vertically centered.");
+                Require(area.Contains(window.Bounds), "Default sidebar is outside the visible area.");
+                window.Model = new Dictionary<string, object> { { "connection", new Dictionary<string, object> { { "message", "布局预览 · 未连接真实游戏" } } } };
+                using (var panel = new Bitmap(window.Width, window.Height))
+                using (var scene = new Bitmap(area.Width, area.Height))
+                using (Graphics canvas = Graphics.FromImage(scene))
+                {
+                    window.DrawToBitmap(panel, new Rectangle(Point.Empty, panel.Size));
+                    Require(window.Left == area.Left && window.Top == area.Top + 75, "Creating the native window changed the left-center placement.");
+                    canvas.Clear(Color.FromArgb(22, 35, 45));
+                    using (var font = new Font("Microsoft YaHei UI", 18F))
+                    using (var brush = new SolidBrush(Color.FromArgb(154, 171, 192)))
+                        canvas.DrawString("模拟游戏区域 · 默认左侧居中\nCtrl + 鼠标左键可拖动侧栏", font, brush, new PointF(410, 370));
+                    canvas.DrawImageUnscaled(panel, window.Left - area.Left, window.Top - area.Top);
+                    scene.Save(placementPreviewPath, System.Drawing.Imaging.ImageFormat.Png);
+                }
+                int hidden = 0;
+                window.HideRequested += delegate { hidden++; };
+                Point initial = window.Location;
+                window.BeginManualMove(new Point(125, 150));
+                window.MoveManually(new Point(425, 190));
+                savedLocation = window.Location;
+                Require(savedLocation == new Point(initial.X + 300, initial.Y + 40), "Drag must follow pointer delta without jumping.");
+                window.Place(area);
+                Require(window.Location == savedLocation && window.dragging, "Background placement interrupted a drag.");
+                Rectangle hide = window.hideButton;
+                window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, hide.Left + 2, hide.Top + 2, 0));
+                Require(!window.dragging && hidden == 0, "Ctrl-drag release activated a sidebar button.");
+                window.Place(area);
+                Require(window.Location == savedLocation, "Background refresh snapped a dragged sidebar back.");
+                window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, hide.Left + 2, hide.Top + 2, 0));
+                Require(hidden == 1, "Normal sidebar buttons stopped working after dragging.");
+                Require(!window.Visible && window.ShowWithoutActivation, "Dragging activated or displayed the test window.");
+            }
+            using (var restored = new SidebarWindow())
+            {
+                restored.Place(area);
+                Require(!restored.customPosition && restored.Location != savedLocation && restored.Left == area.Left && restored.Top == area.Top + 75, "A new launch must reset a dragged position to left-center.");
+                Rectangle negative = new Rectangle(-1600, -100, 800, 600);
+                restored.Place(negative);
+                Require(negative.Contains(restored.Bounds), "Restored sidebar exceeded a smaller secondary monitor.");
+                restored.BeginManualMove(Point.Empty);
+                restored.MoveManually(new Point(-100000, -100000));
+                Require(restored.Left == negative.Left && restored.Top == negative.Top, "Drag did not clamp at the upper-left boundary.");
+                restored.MoveManually(new Point(100000, 100000));
+                Require(restored.Right == negative.Right && restored.Bottom == negative.Bottom, "Drag did not clamp at the lower-right boundary.");
+                restored.OnMouseCaptureChanged(EventArgs.Empty);
+                Require(!restored.dragging, "Lost mouse capture left the sidebar stuck in drag mode.");
+                restored.Place(new Rectangle(20, 40, 160, 140));
+                Require(new Rectangle(20, 40, 160, 140).Contains(restored.Bounds), "Manual placement exceeded a tiny resized game area.");
+            }
+            return 15;
+        }
         private static void Require(bool condition, string message)
         {
             if (!condition) throw new InvalidOperationException(message);
         }
         [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr handle, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+        [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
     }
 
     internal static class ModelValue
@@ -1121,6 +1261,17 @@ namespace HexGuide.Desktop
     internal static class GameWindow
     {
         private delegate bool EnumWindowCallback(IntPtr window, IntPtr parameter);
+        [StructLayout(LayoutKind.Sequential)] private struct ClientRectangle { internal int Left, Top, Right, Bottom; }
+        [StructLayout(LayoutKind.Sequential)] private struct ClientPoint { internal int X, Y; }
+        internal static Rectangle PlacementArea(IntPtr window)
+        {
+            Rectangle monitor = window == IntPtr.Zero ? Screen.PrimaryScreen.WorkingArea : Screen.FromHandle(window).WorkingArea;
+            if (window == IntPtr.Zero || !IsVerifiedGame(window) || IsIconic(window)) return monitor;
+            ClientRectangle client; var origin = new ClientPoint();
+            if (!GetClientRect(window, out client) || !ClientToScreen(window, ref origin)) return monitor;
+            Rectangle visible = Rectangle.Intersect(monitor, new Rectangle(origin.X, origin.Y, Math.Max(0, client.Right - client.Left), Math.Max(0, client.Bottom - client.Top)));
+            return visible.Width > 0 && visible.Height > 0 ? visible : monitor;
+        }
         internal static IntPtr ForegroundGame() { IntPtr window = GetForegroundWindow(); return IsVerifiedGame(window) ? window : IntPtr.Zero; }
         internal static bool IsGameForeground() { return ForegroundGame() != IntPtr.Zero; }
         internal static bool IsVerifiedGame(IntPtr window)
@@ -1203,6 +1354,8 @@ namespace HexGuide.Desktop
         [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
         [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
         [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
+        [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr window, out ClientRectangle rectangle);
+        [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr window, ref ClientPoint point);
         [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
         [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr window, StringBuilder title, int maximum);
