@@ -1,0 +1,43 @@
+/* Win-rate statistics are the home page; game tools remain one step away. */
+.topbar .main-nav{position:relative;gap:26px;min-width:0;flex-shrink:0;overflow:visible}
+.main-nav>.nav-primary{font-size:15px;font-weight:600;color:#b8cfdd}
+.main-nav>.nav-primary.active{color:var(--gold);border-bottom-color:var(--gold)}
+.nav-tools{display:flex;align-items:stretch;min-width:0}
+.nav-tools>summary{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;list-style:none;white-space:nowrap;color:#91aabd;font-size:13px;border-bottom:2px solid transparent;padding:2px 1px 0;min-height:44px}
+.nav-tools>summary::-webkit-details-marker{display:none}
+.nav-tools>summary::marker{content:""}
+.nav-tools>summary:focus-visible{outline:2px solid var(--cyan);outline-offset:4px}
+.nav-tools>summary:hover,.nav-tools[open]>summary{color:#deebf1}
+.nav-tools.is-current>summary{color:var(--gold);border-bottom-color:#6e624a}
+.nav-tools-chevron{font-size:16px;color:#6f98aa;transition:transform .15s}
+.nav-tools[open] .nav-tools-chevron{transform:rotate(180deg)}
+.main-nav>.nav-tool-link{display:none;position:absolute;z-index:8;left:var(--tools-left,0px);right:auto;top:calc(var(--tools-top,100%) + var(--tool-index)*44px);width:210px;max-width:calc(100vw - 36px);height:44px;padding:0 17px;background:#142838;border:solid #355166;border-width:0 1px;color:#a8c0cf;font-size:13px;gap:12px;box-shadow:0 9px 14px -10px #0009}
+.topbar .main-nav>.nav-tool-link{height:44px;padding-block:0}
+.main-nav:has(>.nav-tools[open])>.nav-tool-link{display:flex;align-items:center}
+.main-nav>.nav-tool-link span{font-size:17px;width:19px;text-align:center}
+.main-nav>.nav-tool-link:hover,.main-nav>.nav-tool-link:focus-visible{background:#203c4d;color:#e1f0f4}
+.main-nav>.nav-tool-link.active{color:var(--gold);background:#20333e}
+.main-nav>.nav-tool-first{border-top-width:1px;border-radius:7px 7px 0 0}
+.main-nav>.nav-tool-last{border-bottom-width:1px;border-radius:0 0 7px 7px}
+/* Retain the old container IDs and preferences for every auxiliary page. */
+:root .workspace.workspace-stats{grid-template-columns:minmax(0,1fr)!important;gap:0!important}
+:root .workspace.workspace-stats>.main-content{grid-column:1/-1!important;grid-row:auto!important;grid-template-columns:minmax(0,1fr)!important;min-width:0;width:100%;max-width:100%}
+/* Show editable links in their original parent while the visual editor is open. */
+.layout-editing .main-nav{flex-wrap:wrap;align-content:center;gap:7px 16px;height:auto}
+.layout-editing .nav-tools{display:none}
+.layout-editing .main-nav>.nav-tool-link{position:static;display:flex;width:auto;max-width:none;height:35px;padding:3px 5px;border:0;border-radius:0;background:transparent;box-shadow:none}
+.layout-editing .main-nav>.nav-primary{height:35px}
+@media(max-width:1120px){.topbar .main-nav{gap:23px}.main-nav>.nav-primary{font-size:14px}.nav-tools>summary{font-size:12px}}
+@media(max-width:760px){
+  .topbar .main-nav{display:flex;justify-content:flex-start;gap:26px;grid-column:1/-1;grid-row:2;height:49px;margin-top:15px;min-width:0}
+  .main-nav>.nav-primary{font-size:14px;padding:0 1px}
+  .nav-tools{margin-left:auto}
+  .nav-tools>summary{font-size:12px;min-height:49px;padding-inline:4px;gap:12px}
+  .main-nav>.nav-tool-link{height:44px;font-size:12px;padding-inline:16px}
+  .topbar:has([data-open-layout]){grid-template-columns:minmax(0,1fr) 36px 36px;column-gap:10px}
+  .topbar:has([data-open-layout]) [data-open-appearance]{grid-row:1;grid-column:2}
+  .topbar:has([data-open-layout]) [data-open-layout]{grid-row:1;grid-column:3}
+  .topbar:has([data-open-layout])>.source-button{grid-row:3;grid-column:1/-1;justify-self:start;margin-left:0;padding:6px 0 9px;line-height:1.1}
+  .layout-editing .topbar .main-nav{height:auto;min-height:49px;gap:4px 12px;flex-wrap:wrap;padding-bottom:8px}
+}
+@media(prefers-reduced-motion:reduce){.nav-tools-chevron{transition:none}}

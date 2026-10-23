@@ -15,13 +15,13 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
 [assembly: AssemblyTitle("海克斯指南")]
-[assembly: AssemblyDescription("海克斯大乱斗本地实时助手")]
+[assembly: AssemblyDescription("海克斯大乱斗英雄胜率与海克斯资料查询")]
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.5.0.0")]
-[assembly: AssemblyFileVersion("1.5.0.0")]
-[assembly: AssemblyInformationalVersion("1.5.0")]
+[assembly: AssemblyVersion("1.6.0.0")]
+[assembly: AssemblyFileVersion("1.6.0.0")]
+[assembly: AssemblyInformationalVersion("1.6.0")]
 
 namespace HexGuide.Desktop
 {
@@ -90,7 +90,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             previewSidebar = preview;
-            Text = "海克斯指南 1.5.0 · 实时助手";
+            Text = "海克斯指南 1.6.0 · 英雄胜率";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -108,12 +108,13 @@ namespace HexGuide.Desktop
             toolbar.BackColor = Color.FromArgb(22, 29, 40);
             toolbar.ForeColor = Color.FromArgb(222, 231, 239);
             toolbar.Padding = new Padding(10, 4, 10, 4);
-            var title = new ToolStripLabel("海克斯指南  /  本地实时助手");
-            var hideButton = new ToolStripButton("收起到后台");
+            var title = new ToolStripLabel("海克斯指南  /  英雄胜率");
+            var gameTools = new ToolStripDropDownButton("游戏工具");
+            var hideButton = new ToolStripMenuItem("收起到后台");
             hideButton.Click += delegate { HideMain(); };
-            var sidebarButton = new ToolStripButton("显示 / 收起侧栏");
+            var sidebarButton = new ToolStripMenuItem("显示 / 收起侧栏");
             sidebarButton.Click += delegate { ToggleSidebar(); };
-            var gameButton = new ToolStripButton("返回游戏");
+            var gameButton = new ToolStripMenuItem("返回游戏");
             gameButton.Click += delegate { ReturnToGame(); };
             var appearanceButton = new ToolStripButton("界面设置");
             appearanceButton.Click += async delegate { await OpenAppearanceAsync(); };
@@ -124,9 +125,10 @@ namespace HexGuide.Desktop
             reload.Click += delegate { if (browser.CoreWebView2 != null) browser.Reload(); };
             toolbar.Items.Add(title);
             toolbar.Items.Add(new ToolStripSeparator());
-            toolbar.Items.Add(hideButton);
-            toolbar.Items.Add(sidebarButton);
-            toolbar.Items.Add(gameButton);
+            gameTools.DropDownItems.Add(hideButton);
+            gameTools.DropDownItems.Add(sidebarButton);
+            gameTools.DropDownItems.Add(gameButton);
+            toolbar.Items.Add(gameTools);
             toolbar.Items.Add(appearanceButton);
             toolbar.Items.Add(layoutButton);
             toolbar.Items.Add(reload);
@@ -142,7 +144,7 @@ namespace HexGuide.Desktop
             status.TextAlign = ContentAlignment.MiddleCenter;
             status.ForeColor = ForeColor = Color.FromArgb(222, 231, 239);
             status.Font = new Font("Microsoft YaHei UI", 12F);
-            status.Text = "正在启动本地助手…";
+            status.Text = "正在载入英雄胜率资料…";
             Controls.Add(browser);
             Controls.Add(status);
             Controls.Add(toolbar);
@@ -153,7 +155,7 @@ namespace HexGuide.Desktop
             sidebar.GameRequested += delegate { ReturnToGame(); };
             sidebar.OfferConfirmed += async delegate(string id) { await ConfirmOfferAsync(id); };
             var menu = new ContextMenuStrip();
-            menu.Items.Add("打开完整助手", null, delegate { ShowMain(); });
+            menu.Items.Add("打开海克斯指南", null, delegate { ShowMain(); });
             menu.Items.Add("界面设置", null, async delegate { await OpenAppearanceAsync(); });
             menu.Items.Add("编辑整个界面", null, async delegate { await OpenLayoutAsync(); });
             menu.Items.Add("显示 / 收起游戏侧栏", null, delegate { ToggleSidebar(); });

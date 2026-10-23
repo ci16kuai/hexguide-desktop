@@ -3,30 +3,32 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0b1420">
-  <meta name="description" content="海克斯大乱斗中文选择助手：查海克斯、找英雄适配、探索联动，比较本轮三个选项。推荐有理由，资料有出处。">
-  <title>海克斯指南 · 桌面实战助手</title>
+  <meta name="description" content="海克斯大乱斗英雄胜率榜：查英雄胜率、海克斯胜率差与装备效果。海克斯库、联动查询与三选一作为辅助工具。">
+  <title>海克斯指南 · 英雄胜率与海克斯统计</title>
   <link rel="icon" href="./assets/mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./style.css?v=4-0-2621"><link rel="stylesheet" href="./statistics.css"><link rel="stylesheet" href="./live.css"><link rel="stylesheet" href="./appearance.css"><link rel="stylesheet" href="./layout-editor.css">
+  <link rel="stylesheet" href="./navigation.css">
 </head>
 <body>
 <a class="skip-link" href="#main">跳到主要内容</a>
 <div id="page-shell" data-ui-id="page-shell" data-ui-label="整个页面" data-ui-container="page-shell">
 <header class="topbar" data-ui-id="site-header" data-ui-label="顶部导航栏" data-ui-container="site-header">
-  <a data-ui-id="site-brand" data-ui-label="品牌标识" data-ui-container="site-brand" class="brand" href="#library" aria-label="海克斯指南首页"><span data-ui-id="site-mark" data-ui-label="品牌图标" class="brand-mark">✧</span><span data-ui-id="site-name" data-ui-label="品牌名称">海克斯<span class="brand-light">指南</span><small>大乱斗选择助手</small></span></a>
+  <a data-ui-id="site-brand" data-ui-label="品牌标识" data-ui-container="site-brand" class="brand" href="#stats" aria-label="海克斯指南首页"><span data-ui-id="site-mark" data-ui-label="品牌图标" class="brand-mark">✧</span><span data-ui-id="site-name" data-ui-label="品牌名称">海克斯<span class="brand-light">指南</span><small>胜率与海克斯资料</small></span></a>
   <nav data-ui-id="site-nav" data-ui-label="功能导航" data-ui-container="site-nav" class="main-nav" aria-label="主要功能">
-    <a href="#live" data-nav="live" data-ui-id="nav-live" data-ui-label="实战助手入口"><span>◉</span>实战助手</a>
-    <a href="#library" data-nav="library" data-ui-id="nav-library" data-ui-label="海克斯库入口"><span>◈</span>海克斯库</a>
-    <a href="#champions" data-nav="champions" data-ui-id="nav-champions" data-ui-label="英雄适配入口"><span>♜</span>英雄适配</a>
-    <a href="#stats" data-nav="stats" data-ui-id="nav-stats" data-ui-label="英雄胜率入口"><span>▤</span>英雄胜率</a>
-    <a href="#synergy" data-nav="synergy" data-ui-id="nav-synergy" data-ui-label="联动查询入口"><span>⌘</span>联动查询</a>
-    <a href="#compare" data-nav="compare" data-ui-id="nav-compare" data-ui-label="三选一入口"><span>⚡</span>三选一推荐</a>
+    <a class="nav-primary" href="#stats" data-nav="stats" data-ui-id="nav-stats" data-ui-label="英雄胜率入口"><span aria-hidden="true">▤</span>英雄胜率</a>
+    <details class="nav-tools"><summary aria-label="更多工具"><span>更多工具</span><span class="nav-tools-chevron" aria-hidden="true">⌄</span></summary></details>
+    <a class="nav-tool-link nav-tool-first" style="--tool-index:0" href="#live" data-nav="live" data-ui-id="nav-live" data-ui-label="实战助手入口"><span aria-hidden="true">◉</span>实战助手</a>
+    <a class="nav-tool-link" style="--tool-index:1" href="#library" data-nav="library" data-ui-id="nav-library" data-ui-label="海克斯库入口"><span aria-hidden="true">◈</span>海克斯库</a>
+    <a class="nav-tool-link" style="--tool-index:2" href="#champions" data-nav="champions" data-ui-id="nav-champions" data-ui-label="英雄适配入口"><span aria-hidden="true">♜</span>英雄适配</a>
+    <a class="nav-tool-link" style="--tool-index:3" href="#synergy" data-nav="synergy" data-ui-id="nav-synergy" data-ui-label="联动查询入口"><span aria-hidden="true">⌘</span>联动查询</a>
+    <a class="nav-tool-link nav-tool-last" style="--tool-index:4" href="#compare" data-nav="compare" data-ui-id="nav-compare" data-ui-label="三选一推荐入口"><span aria-hidden="true">⚡</span>三选一推荐</a>
   </nav>
   <button data-ui-id="site-data-source" data-ui-label="数据版本入口" class="source-button" data-action="sources"><span class="status-dot"></span><span id="version-label">资料载入中</span><span class="source-info">ⓘ</span></button>
   <button data-ui-id="site-appearance-open" data-ui-label="字体设置入口" class="appearance-button" type="button" data-open-appearance aria-haspopup="dialog" aria-controls="appearance-dialog" aria-label="打开界面设置"><span aria-hidden="true">⚙</span><span>界面设置</span></button>
   <button class="appearance-button" type="button" data-open-layout data-ui-id="site-editor-open" data-ui-label="编辑界面入口"><span aria-hidden="true">✎</span><span>编辑界面</span></button>
 </header>
 <main id="main" tabindex="-1" data-ui-id="page-main" data-ui-label="页面内容区域" data-ui-container="page-main">
-  <div id="loading" class="loading"><span class="loading-rune">✧</span><h1>正在展开海克斯图鉴</h1><p>载入英雄与海克斯资料…</p></div>
+  <div id="loading" class="loading"><span class="loading-rune">✧</span><h1>正在载入英雄胜率</h1><p>载入英雄胜率、海克斯与装备资料…</p></div>
   <div id="app" hidden data-ui-id="app-canvas" data-ui-label="当前功能页面" data-ui-container="app-canvas"></div>
 </main>
 <footer class="footer" data-ui-id="site-footer" data-ui-label="页脚" data-ui-container="site-footer"><span class="footer-brand" data-ui-id="footer-brand" data-ui-label="页脚品牌">✧ 海克斯指南</span><span data-ui-id="footer-tagline" data-ui-label="页脚标语">每次选择，都有思路。</span><button data-ui-id="footer-sources" data-ui-label="来源说明入口" data-action="sources">数据来源与推荐说明</button><small data-ui-id="footer-legal" data-ui-label="权利说明">独立玩家工具，非 Riot Games 官方产品。游戏素材归各自权利人所有。</small></footer>

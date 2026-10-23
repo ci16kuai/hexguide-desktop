@@ -174,5 +174,5 @@ export const UI_ELEMENTS = Object.freeze([
   Object.freeze({"id":"stats-comparison-note","label":"胜率差比较说明","parent":"stats-content","container":false}),
   Object.freeze({"id":"stats-augment-filters","label":"海克斯胜率筛选","parent":"stats-content","container":false}),
   Object.freeze({"id":"stats-augment-table","label":"海克斯胜率增幅列表","parent":"stats-content","container":false}),
-  Object.freeze({"id":"stats-build","label":"选中海克斯后的出装建议","parent":null,"container":false}),
+  Object.freeze({"id":"stats-build","label":"选中海克斯后的装备效果","parent":null,"container":false}),
 ]);
