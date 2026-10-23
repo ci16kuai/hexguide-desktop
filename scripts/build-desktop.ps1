@@ -73,7 +73,8 @@ $references = @(
     (Join-Path $sdk 'lib\net462\Microsoft.Web.WebView2.WinForms.dll')
 )
 $compilerArguments = @('/nologo', '/target:winexe', '/platform:x64', '/optimize+', '/utf8output', '/codepage:65001',
-    ('/out:' + (Join-Path $stage 'HexGuide.exe')), ('/win32manifest:' + (Join-Path $projectRoot 'native\app.manifest')))
+    ('/out:' + (Join-Path $stage 'HexGuide.exe')), ('/win32manifest:' + (Join-Path $projectRoot 'native\app.manifest')),
+    ('/win32icon:' + (Join-Path $projectRoot 'native\assets\hexguide.ico')))
 foreach ($reference in $references) { $compilerArguments += '/reference:' + $reference }
 $compilerArguments += Join-Path $projectRoot 'native\Program.cs'
 & $compiler @compilerArguments

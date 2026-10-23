@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -12,6 +13,15 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+
+[assembly: AssemblyTitle("海克斯指南")]
+[assembly: AssemblyDescription("海克斯大乱斗本地实时助手")]
+[assembly: AssemblyCompany("HexGuide")]
+[assembly: AssemblyProduct("海克斯指南桌面版")]
+[assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyInformationalVersion("1.2.0")]
 
 namespace HexGuide.Desktop
 {
@@ -80,13 +90,14 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             previewSidebar = preview;
-            Text = "海克斯指南 1.1.0 · 实时助手";
+            Text = "海克斯指南 1.2.0 · 实时助手";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Color.FromArgb(12, 17, 26);
             Font = new Font("Microsoft YaHei UI", 9F);
-            Icon = SystemIcons.Application;
+            // The same embedded brand icon is used by Explorer, the window and the tray.
+            Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
             AutoScaleMode = AutoScaleMode.Dpi;
             ShowInTaskbar = true;
             TopMost = false;

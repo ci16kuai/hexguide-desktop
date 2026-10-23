@@ -6,6 +6,7 @@
 - 本地接口：https://developer.riotgames.com/docs/lol#game-client-api 和 League Client API 说明。Riot 根证书原址：https://static.developer.riotgames.com/docs/lol/riotgames.pem 。
 - Node.js：构建时从指定的 Node.js 可执行文件复制，随软件附带对应官方 LICENSE（含其第三方许可）。https://nodejs.org/ 。
 - Microsoft WebView2 SDK 1.0.4258.31：从官方 NuGet 获取；便携软件 licenses 目录附 SDK LICENSE 与 NOTICE。系统 WebView2 Runtime 由微软单独提供。
+- NSIS 3.13：安装程序使用官方 Nullsoft Scriptable Install System 构建，https://nsis.sourceforge.io/ 。编译器仅用于构建，安装程序所需许可随安装包附带。
 - Windows OCR、WinForms、.NET Framework 由 Windows / Microsoft 运行环境提供。
 
 应用原创源码与上述游戏资产、外部资料、第三方运行环境分别适用各自的权利和许可。没有为第三方游戏资产授予新的使用或再分发权限。

@@ -162,7 +162,7 @@ export class BackgroundSidebar {
     });
     const plan = buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], itemsCatalog:this.itemsCatalog});
     return {
-      version:'1.1.0', connection:live.connection, phase:live.phase,
+      version:'1.2.0', connection:live.connection, phase:live.phase,
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
       level:live.level ?? null, gameTime:live.gameTime ?? null, items:live.items || [],
       owned:owned.map(augment => ({id:augment.id, name:augment.name})), offers,

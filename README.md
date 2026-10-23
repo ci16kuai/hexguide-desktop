@@ -1,11 +1,11 @@
 # 海克斯指南 · Windows 桌面版
 
-面向英雄联盟海克斯大乱斗玩家的中文选择助手。版本 **1.1.0**，资料对应 **海克斯大乱斗 4.0 / 26.21**，英雄与装备资料为 **Data Dragon 16.21.1**。资料更新时间始终显示在页面顶部。
+面向英雄联盟海克斯大乱斗玩家的中文选择助手。版本 **1.2.0**，资料对应 **海克斯大乱斗 4.0 / 26.21**，英雄与装备资料为 **Data Dragon 16.21.1**。资料更新时间始终显示在页面顶部。
 
 ## 使用
 
-1. 将「海克斯指南桌面版-1.1.0.zip」完整解压到可写的文件夹。
-2. 双击 `HexGuide.exe`。不需要登录 ChatGPT，也不需要另装 Node.js。
+1. 从[公开下载页](https://hexguide-aram-20261023.robustacorn1025.chatgpt.site/download.html)下载 `HexGuide-Setup-1.2.0.exe`，运行安装向导。
+2. 选择安装目录，可勾选桌面快捷方式。安装后从桌面或开始菜单打开「海克斯指南」。不需要登录 ChatGPT，也不需要另装 Node.js。
 3. 正常打开英雄联盟。选人阶段尝试同步英雄，进入游戏后读取自身英雄、等级、装备、金币和面板。
 4. 在「我的这一局」确认实际已选海克斯，玩法建议随英雄、装备、阶段和已确认海克斯更新。
 5. 在主窗口或托盘菜单开启后台识别。主窗口最小化或点右上角 × 会收进托盘，英雄同步与已开启的识别继续运行。
@@ -16,7 +16,7 @@
 
 系统要求：Windows 10/11 x64、.NET Framework 4.8、[Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。当前电脑已有所需运行环境。主程序未作代码签名，不会自行安装服务、修改防火墙或设置开机启动。
 
-软件旁的 `appdata` 保存本地界面缓存。可用 `HexGuide.exe --data-dir "H:\Chatgpt\hexguide-appdata"` 指定位置。关闭主窗口默认收进托盘；需要停止同步时，在托盘菜单选择「完全退出」。
+安装版通过快捷方式将本局记录和界面缓存保存在 `%LOCALAPPDATA%\HexGuide\data`，卸载保留这些个人数据；安装文件保存在你选择的安装目录。便携版默认在软件旁的 `appdata` 保存本地界面缓存。可用 `HexGuide.exe --data-dir "H:\Chatgpt\hexguide-appdata"` 指定位置。关闭主窗口默认收进托盘；需要停止同步时，在托盘菜单选择「完全退出」。
 
 ## 游戏侧栏
 
@@ -53,13 +53,22 @@ node server/main.mjs --port 0 --data-dir "H:\Chatgpt\hexguide-appdata"
 
 开发启动后，首行给出本次本机端口和临时 token；仅用于本机 `/#session=<token>` 启动界面。不要把这行或客户端 lockfile 上传仓库。
 
-Windows 构建：
+Windows 便携版构建：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -NodePath "C:\path\to\node.exe" -Package
 ```
 
 脚本从官方 NuGet 下载固定 WebView2 SDK，并校验 SHA-256；使用 Windows .NET Framework 编译器，复制 Node.js 与应用资源，生成便携软件和 ZIP。缓存可用 `-CachePath` 指定；ZIP 可用 `-ArchivePath` 指定。打包排除用户缓存、日志和凭据。运行时二进制不进入 Git，构建脚本与源码保存在私有仓库。
+
+安装版构建（需先构建独立暂存目录）：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -StagePath artifacts/portable-1.2.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -StagePath artifacts/portable-1.2.0
+```
+
+安装程序以当前用户身份运行，允许选择安装目录与桌面图标，提供开始菜单和 Windows 设置中的卸载入口；详情见 `installer/README.md`。安装包尚未进行代码签名。浏览器下载文件保存位置由浏览器决定，可使用“另存为”或浏览器的下载位置设置。
 
 目录：`dist/` 界面和资料；`server/` 本地采集与接口；`native/` Windows 窗口和 OCR；`tests/` 实时状态和安全检查；`scripts/` 更新与打包。海克斯数据更新见 [README-data.md](README-data.md)，装备更新运行 `node scripts/update-items.mjs`。
 
