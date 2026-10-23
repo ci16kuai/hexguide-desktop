@@ -22,14 +22,17 @@ const snapshot = (overrides = {}) => ({
 });
 
 async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', owned = ['firebrand'], stored = {}, gameId = null} = {}) {
-  const globals = ['location', 'sessionStorage', 'history', 'window', 'document', 'fetch', 'setInterval', 'clearInterval', 'setTimeout'];
+  const globals = ['location', 'sessionStorage', 'history', 'window', 'document', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'Date'];
   const original = new Map(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const realSetTimeout = globalThis.setTimeout;
   const intervals = [], delays = [], clicks = [], unload = [], liveReplies = [], ocrReplies = [], deferred = [];
   const session = new Map([['hexguide-local-session', 'test-only-local-session'], ...Object.entries(stored)]);
   const state = {championId, owned: [...owned], gameId, resets: 0, offers: [], renders: 0, ocrRequests: 0};
   let nextSnapshot = initial;
+  const OriginalDate = globalThis.Date;
+  let currentTime = OriginalDate.now();
   const define = (key, value) => Object.defineProperty(globalThis, key, {configurable: true, writable: true, value});
+  define('Date', class extends OriginalDate { static now() { return currentTime; } });
   define('location', {hash: '#live'});
   define('sessionStorage', {
     getItem: key => session.has(key) ? session.get(key) : null,
@@ -92,6 +95,7 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
   };
   return {
     state, controller, session,
+    advance(milliseconds) { currentTime += milliseconds; },
     html: () => controller.html(),
     deferLive: () => pendingReply('live'), deferOcr: () => pendingReply('ocr'),
     async tick(value) { if (value !== undefined) nextSnapshot = value; for (const callback of intervals) callback(); await settle(); },
@@ -190,6 +194,30 @@ test('live controller follows game boundaries without presenting drafts as curre
     await h.click('ocr-confirm');
     assert.deepEqual(h.state.offers, []);
     assert.deepEqual(h.state.owned, []);
+  });
+
+  await t.test('valid offers survive an empty scan but never have their age extended by polling', async t => {
+    const h = await browserHarness(t);
+    const resolve = h.deferOcr();
+    await h.click('ocr-auto');
+    await h.finishScanDelay();
+    resolve({status:'recognized', message:'VERIFIED_CARD_TITLES',proposals:[
+      {id:'firebrand',name:'火上浇油'},{id:'goliath',name:'歌利亚巨人'},{id:'jeweled_gauntlet',name:'珠光护手'}
+    ]});
+    await settle();
+    assert.match(h.html(), /VERIFIED_CARD_TITLES/);
+    h.advance(10000);
+    await h.tick();
+    assert.match(h.html(), /VERIFIED_CARD_TITLES/);
+    assert.match(h.html(), /最近识别 · 10 秒前/);
+    await h.click('ocr-confirm');
+    assert.equal(h.state.offers.length,1);
+    h.advance(51000);
+    await h.tick();
+    assert.doesNotMatch(h.html(), /核对无误，带入三选一/);
+    assert.doesNotMatch(h.html(), /VERIFIED_CARD_TITLES/);
+    await h.click('ocr-confirm');
+    assert.equal(h.state.offers.length,1,'expired offers cannot be adopted');
   });
 
   await t.test('a disconnected snapshot does not leave old stats or items on screen', async t => {

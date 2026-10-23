@@ -57,7 +57,7 @@ export async function createLocalServer({collector, scanner, staticDirectory, po
         try { return send(response, 200, scanner ? await scanner() : {status:'unavailable',message:'屏幕识别不可用，可手动选择。',proposals:[]}); }
         catch { return send(response, 200, {status:'unavailable',message:'本次识别未完成，可手动选择。',proposals:[]}); }
       }
-      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.0.0', localOnly:true});
+      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.0.1', localOnly:true});
       if (pathname === '/api/live') return send(response, 200, collector.getSnapshot());
       return send(response, 404, {error:'Unknown endpoint.'});
     }

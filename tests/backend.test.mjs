@@ -249,7 +249,7 @@ const augments = [
 ];
 
 test('OCR matches unique exact normalized names, preserves left-to-right order and skips reference data', () => {
-  const result = matchOcrProposals({status:'recognized',lines:[{text:'ICE SOUL',x:800,y:40},{text:'烈 焰 之 魂',x:30,y:40},{text:'黄金之心',x:400,y:40},{text:'已移除选项 内部模板项 短词',x:200,y:200}]},augments);
+  const result = matchOcrProposals({status:'recognized',diagnostics:{width:1920,height:1080},lines:[{text:'ICE SOUL',x:1320,y:350,width:160,height:30},{text:'烈 焰 之 魂',x:430,y:350,width:160,height:30},{text:'黄金之心',x:890,y:350,width:160,height:30},{text:'已移除选项 内部模板项 短词',x:200,y:700,width:400,height:20}]},augments);
   assert.equal(result.status,'recognized');
   assert.deepEqual(result.proposals.map(p => p.id),['fire','gold','ice']);
   assert.ok(result.proposals.every(p => p.confidence === 'exact'));
@@ -275,7 +275,7 @@ test('OCR is single-flight, launches the fixed local script with explicit argume
   }});
   const first = scan();
   assert.equal((await scan()).status,'waiting');
-  finish({stdout:JSON.stringify({status:'recognized',lines:[{text:'烈焰之魂',x:1}]})});
+  finish({stdout:JSON.stringify({status:'recognized',diagnostics:{width:1920,height:1080},lines:[{text:'烈焰之魂',x:430,y:350,width:160,height:30},{text:'黄金之心',x:890,y:350,width:160,height:30},{text:'冰霜之魂',x:1320,y:350,width:160,height:30}]})});
   assert.equal((await first).proposals[0].id,'fire');
   assert.equal(call[0],'powershell.exe');
   assert.equal(call[1].at(-2),'-DataDir');

@@ -2,11 +2,37 @@
     [string]$NodePath,
     [string]$CachePath,
     [switch]$Package,
-    [string]$ArchivePath
+    [string]$ArchivePath,
+    [string]$AppVersion,
+    [string]$StagePath
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$stage = Join-Path $projectRoot 'artifacts\portable'
+if (-not $AppVersion) {
+    $packageMetadata = [IO.File]::ReadAllText((Join-Path $projectRoot 'package.json')) | ConvertFrom-Json
+    $AppVersion = [string]$packageMetadata.version
+}
+if (-not $AppVersion -or $AppVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+    throw 'A valid application version is required in package.json or -AppVersion.'
+}
+if (-not $StagePath) { $StagePath = Join-Path $projectRoot 'artifacts\portable' }
+elseif (-not [IO.Path]::IsPathRooted($StagePath)) { $StagePath = Join-Path $projectRoot $StagePath }
+$stage = [IO.Path]::GetFullPath($StagePath).TrimEnd([IO.Path]::DirectorySeparatorChar)
+$stagePrefix = $stage + [IO.Path]::DirectorySeparatorChar
+if (-not $stage -or $stage -eq [IO.Path]::GetPathRoot($stage).TrimEnd([IO.Path]::DirectorySeparatorChar) -or
+    $stage.Equals($projectRoot, [StringComparison]::OrdinalIgnoreCase) -or
+    $projectRoot.StartsWith($stagePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The staging folder must not be a drive root, the project root, or an ancestor of the project.'
+}
+foreach ($sourceDirectory in @('dist', 'server', 'native', 'scripts', '.git')) {
+    $sourceRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot $sourceDirectory))
+    if ($stage.Equals($sourceRoot, [StringComparison]::OrdinalIgnoreCase) -or $stage.StartsWith($sourceRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The staging folder must not be inside a source folder.'
+    }
+}
+if ((Test-Path -LiteralPath $stage) -and ((Get-Item -LiteralPath $stage -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'The staging folder must not be a junction or symbolic link.'
+}
 $sdkVersion = '1.0.4258.31'
 $sdkHash = '56F7F4B8BF9AEE4B8EFEFBBDD4F67D5F74EBD1B100ED0806DA71BF76AF481AA9'
 
@@ -72,6 +98,7 @@ foreach ($directory in @('dist', 'server')) {
         $resolvedDestination = [IO.Path]::GetFullPath($destination)
         $expectedStage = [IO.Path]::GetFullPath($stage) + [IO.Path]::DirectorySeparatorChar
         if (-not $resolvedDestination.StartsWith($expectedStage, [StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing to clean outside the staging folder.' }
+        if ((Get-Item -LiteralPath $resolvedDestination -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Refusing to clean a staging junction or symbolic link.' }
         Remove-Item -LiteralPath $resolvedDestination -Recurse -Force
     }
     Copy-Item -LiteralPath $source -Destination $stage -Recurse -Force
@@ -82,7 +109,7 @@ foreach ($document in @('README.md', 'README-data.md', 'PRIVACY.md', 'THIRD-PART
     if (Test-Path -LiteralPath (Join-Path $projectRoot $document)) { Copy-Item -LiteralPath (Join-Path $projectRoot $document) -Destination $stage -Force }
 }
 @"
-海克斯指南桌面版 1.0.0
+海克斯指南桌面版 $AppVersion
 
 完整解压到可写文件夹，双击 HexGuide.exe。
 需要 Windows 10/11 x64、.NET Framework 4.8 和 Microsoft Edge WebView2 Runtime。
@@ -95,11 +122,11 @@ foreach ($document in @('README.md', 'README-data.md', 'PRIVACY.md', 'THIRD-PART
 缺少 WebView2 时从微软官网安装 Evergreen Runtime：
 https://developer.microsoft.com/microsoft-edge/webview2/
 "@ | Set-Content -LiteralPath (Join-Path $stage '开始使用.txt') -Encoding UTF8
-$manifest = [ordered]@{ appVersion = '1.0.0'; nodeVersion = $nodeVersion; webView2SdkVersion = $sdkVersion; architecture = 'win-x64'; builtAt = (Get-Date).ToUniversalTime().ToString('o') }
+$manifest = [ordered]@{ appVersion = $AppVersion; nodeVersion = $nodeVersion; webView2SdkVersion = $sdkVersion; architecture = 'win-x64'; builtAt = (Get-Date).ToUniversalTime().ToString('o') }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'build-info.json') -Encoding UTF8
 Write-Output "Portable app: $stage"
 if ($Package) {
-    if (-not $ArchivePath) { $ArchivePath = Join-Path (Split-Path -Parent $projectRoot) '海克斯指南桌面版-1.0.0.zip' }
+    if (-not $ArchivePath) { $ArchivePath = Join-Path (Split-Path -Parent $projectRoot) ('海克斯指南桌面版-' + $AppVersion + '.zip') }
     $ArchivePath = [IO.Path]::GetFullPath($ArchivePath)
     New-Item -ItemType Directory -Path (Split-Path -Parent $ArchivePath) -Force | Out-Null
     $packageEntries = @('HexGuide.exe', 'HexGuide.exe.config', 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll', 'runtime', 'licenses', 'dist', 'server', 'native', '开始使用.txt', 'build-info.json', 'README.md', 'README-data.md', 'PRIVACY.md', 'THIRD-PARTY-NOTICES.md')
