@@ -1,43 +1,69 @@
-/* Win-rate statistics are the home page; game tools remain one step away. */
-.topbar .main-nav{position:relative;gap:26px;min-width:0;flex-shrink:0;overflow:visible}
-.main-nav>.nav-primary{font-size:15px;font-weight:600;color:#b8cfdd}
-.main-nav>.nav-primary.active{color:var(--gold);border-bottom-color:var(--gold)}
-.nav-tools{display:flex;align-items:stretch;min-width:0}
-.nav-tools>summary{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;list-style:none;white-space:nowrap;color:#91aabd;font-size:13px;border-bottom:2px solid transparent;padding:2px 1px 0;min-height:44px}
-.nav-tools>summary::-webkit-details-marker{display:none}
-.nav-tools>summary::marker{content:""}
-.nav-tools>summary:focus-visible{outline:2px solid var(--cyan);outline-offset:4px}
-.nav-tools>summary:hover,.nav-tools[open]>summary{color:#deebf1}
-.nav-tools.is-current>summary{color:var(--gold);border-bottom-color:#6e624a}
-.nav-tools-chevron{font-size:16px;color:#6f98aa;transition:transform .15s}
-.nav-tools[open] .nav-tools-chevron{transform:rotate(180deg)}
-.main-nav>.nav-tool-link{display:none;position:absolute;z-index:8;left:var(--tools-left,0px);right:auto;top:calc(var(--tools-top,100%) + var(--tool-index)*44px);width:210px;max-width:calc(100vw - 36px);height:44px;padding:0 17px;background:#142838;border:solid #355166;border-width:0 1px;color:#a8c0cf;font-size:13px;gap:12px;box-shadow:0 9px 14px -10px #0009}
-.topbar .main-nav>.nav-tool-link{height:44px;padding-block:0}
-.main-nav:has(>.nav-tools[open])>.nav-tool-link{display:flex;align-items:center}
-.main-nav>.nav-tool-link span{font-size:17px;width:19px;text-align:center}
-.main-nav>.nav-tool-link:hover,.main-nav>.nav-tool-link:focus-visible{background:#203c4d;color:#e1f0f4}
-.main-nav>.nav-tool-link.active{color:var(--gold);background:#20333e}
-.main-nav>.nav-tool-first{border-top-width:1px;border-radius:7px 7px 0 0}
-.main-nav>.nav-tool-last{border-bottom-width:1px;border-radius:0 0 7px 7px}
-/* Retain the old container IDs and preferences for every auxiliary page. */
-:root .workspace.workspace-stats{grid-template-columns:minmax(0,1fr)!important;gap:0!important}
-:root .workspace.workspace-stats>.main-content{grid-column:1/-1!important;grid-row:auto!important;grid-template-columns:minmax(0,1fr)!important;min-width:0;width:100%;max-width:100%}
-/* Show editable links in their original parent while the visual editor is open. */
-.layout-editing .main-nav{flex-wrap:wrap;align-content:center;gap:7px 16px;height:auto}
-.layout-editing .nav-tools{display:none}
-.layout-editing .main-nav>.nav-tool-link{position:static;display:flex;width:auto;max-width:none;height:35px;padding:3px 5px;border:0;border-radius:0;background:transparent;box-shadow:none}
-.layout-editing .main-nav>.nav-primary{height:35px}
-@media(max-width:1120px){.topbar .main-nav{gap:23px}.main-nav>.nav-primary{font-size:14px}.nav-tools>summary{font-size:12px}}
-@media(max-width:760px){
-  .topbar .main-nav{display:flex;justify-content:flex-start;gap:26px;grid-column:1/-1;grid-row:2;height:49px;margin-top:15px;min-width:0}
-  .main-nav>.nav-primary{font-size:14px;padding:0 1px}
-  .nav-tools{margin-left:auto}
-  .nav-tools>summary{font-size:12px;min-height:49px;padding-inline:4px;gap:12px}
-  .main-nav>.nav-tool-link{height:44px;font-size:12px;padding-inline:16px}
-  .topbar:has([data-open-layout]){grid-template-columns:minmax(0,1fr) 36px 36px;column-gap:10px}
-  .topbar:has([data-open-layout]) [data-open-appearance]{grid-row:1;grid-column:2}
-  .topbar:has([data-open-layout]) [data-open-layout]{grid-row:1;grid-column:3}
-  .topbar:has([data-open-layout])>.source-button{grid-row:3;grid-column:1/-1;justify-self:start;margin-left:0;padding:6px 0 9px;line-height:1.1}
-  .layout-editing .topbar .main-nav{height:auto;min-height:49px;gap:4px 12px;flex-wrap:wrap;padding-bottom:8px}
+/* The match is the primary workspace; every reference tool remains visible. */
+.topbar{height:auto;min-height:88px;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto;gap:16px;padding-block:0}
+.topbar .main-nav{display:flex;align-self:stretch;align-items:stretch;justify-content:center;gap:18px;min-width:0;order:0;width:auto;height:auto;overflow:visible}
+.topbar .main-nav>a{position:static;display:flex;align-items:center;justify-content:center;gap:6px;min-height:60px;padding:2px 0 0;font-size:13px;white-space:nowrap}
+.main-nav>.nav-primary{font-weight:600;color:#c6dbe5}
+.main-nav>.nav-primary.active{color:var(--gold)}
+.topbar>.source-button{margin-left:0;font-size:10px}
+.nav-tools{display:none}
+/* Only the match page owns session controls. Auxiliary pages use the full width.
+   These selectors beat the old left/right appearance preference. The editor's
+   explicit !important overrides still take precedence. */
+html[data-appearance-panel] .workspace.workspace-home,
+html[data-appearance-panel] .workspace.workspace-tool,
+.workspace.workspace-home,.workspace.workspace-tool{grid-template-columns:minmax(0,1fr);gap:24px}
+html[data-appearance-panel] .workspace.workspace-home>.session-panel,
+html[data-appearance-panel] .workspace.workspace-home>.main-content,
+html[data-appearance-panel] .workspace.workspace-tool>.main-content,
+.workspace.workspace-home>.session-panel,.workspace.workspace-home>.main-content,.workspace.workspace-tool>.main-content{grid-column:1/-1;grid-row:auto;min-width:0;width:100%;max-width:100%}
+.workspace-home>.session-panel{position:static}
+.workspace-home .session-top{padding:13px 20px}
+.workspace-home .session-body{display:grid;grid-template-columns:minmax(160px,1fr) minmax(170px,1fr) minmax(230px,2fr);gap:14px 22px;padding:18px 20px}
+.workspace-home .session-section{margin-top:0}
+.workspace-home .champion-button,.workspace-home .route-select{min-height:64px}
+.workspace-home .owned-list{flex-direction:row;flex-wrap:wrap}
+.workspace-home .owned-item{max-width:100%}
+.workspace-home .owned-item span{overflow-wrap:anywhere}
+.workspace-home .session-tip{grid-column:1/3;margin:0;padding-top:12px}
+.workspace-home .session-cta{grid-column:3;margin:0;align-self:end;width:100%;text-align:left;min-height:42px}
+.workspace-home .live-intro{margin-top:0}
+.home-compare{margin-top:30px;padding-top:26px;border-top:1px solid var(--line);scroll-margin-top:24px}
+.home-compare>.section-heading h2{font-size:23px}
+.home-compare .compare-actions{margin-bottom:0}
+.home-compare .recommendation-list{margin-top:18px}
+.page-champion-context{display:flex;align-items:center;gap:11px;min-width:0;padding:12px 14px;margin:0 0 20px;border:1px solid var(--line);border-radius:7px;background:#102130}
+.page-champion-context>img{width:38px;height:38px;border-radius:5px}
+.page-champion-context>div{min-width:0;flex:1}
+.page-champion-context strong{font-size:13px}
+.page-champion-context p{font-size:11px;color:var(--muted)}
+.page-champion-context button{font-size:12px;color:var(--cyan);white-space:nowrap;min-height:36px}
+@media(max-width:1240px){
+  .topbar{grid-template-columns:minmax(0,1fr) auto auto auto;column-gap:14px;padding-top:14px;min-height:0}
+  .topbar .main-nav{grid-row:2;grid-column:1/-1;justify-content:flex-start;gap:26px;margin:0;min-height:48px}
+  .topbar .main-nav>a{min-height:48px;font-size:12px}
+  .topbar>.source-button{grid-row:1;grid-column:2}
+  .topbar>[data-open-appearance]{grid-row:1;grid-column:3}
+  .topbar>[data-open-layout]{grid-row:1;grid-column:4}
 }
-@media(prefers-reduced-motion:reduce){.nav-tools-chevron{transition:none}}
+@media(max-width:760px){
+  .topbar{grid-template-columns:minmax(0,1fr) 36px 36px;padding:15px 18px 0;column-gap:10px;row-gap:0}
+  .topbar>[data-open-appearance]{grid-row:1;grid-column:2}
+  .topbar>[data-open-layout]{grid-row:1;grid-column:3}
+  .topbar>.source-button{grid-row:3;grid-column:1/-1;justify-self:start;margin:0;padding:6px 0 9px;max-width:none;line-height:1.2;text-align:left}
+  .topbar .main-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-row:2;grid-column:1/-1;gap:0 14px;margin-top:12px;height:auto;min-height:0;width:100%}
+  .topbar .main-nav>a{min-height:41px;font-size:12px;justify-content:flex-start;gap:5px}
+  .topbar .main-nav>a span{font-size:16px}
+  .workspace.workspace-home,.workspace.workspace-tool{gap:20px}
+  .workspace-home .session-top{padding:12px 14px}
+  .workspace-home .session-body{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;padding:14px}
+  .workspace-home .session-body.collapsed{display:none}
+  .workspace-home .session-section.owned-section{grid-column:1/-1;margin:0}
+  .workspace-home .champion-button,.workspace-home .route-select{min-height:54px}
+  .workspace-home .session-tip,.workspace-home .session-cta{grid-column:1/-1}
+  .workspace-home .session-tip{font-size:10px;padding-top:10px}
+  .home-compare{margin-top:24px;padding-top:20px}
+  .home-compare>.section-heading h2{font-size:20px}
+  .page-champion-context{margin-bottom:16px;padding:10px;gap:9px}
+  .page-champion-context strong{font-size:12px}
+  .page-champion-context p,.page-champion-context button{font-size:10px}
+}

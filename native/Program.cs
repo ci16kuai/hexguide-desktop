@@ -15,13 +15,13 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
 [assembly: AssemblyTitle("海克斯指南")]
-[assembly: AssemblyDescription("海克斯大乱斗英雄胜率与海克斯资料查询")]
+[assembly: AssemblyDescription("海克斯大乱斗本局助手与资料查询")]
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.6.0.0")]
-[assembly: AssemblyFileVersion("1.6.0.0")]
-[assembly: AssemblyInformationalVersion("1.6.0")]
+[assembly: AssemblyVersion("1.7.0.0")]
+[assembly: AssemblyFileVersion("1.7.0.0")]
+[assembly: AssemblyInformationalVersion("1.7.0")]
 
 namespace HexGuide.Desktop
 {
@@ -90,7 +90,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             previewSidebar = preview;
-            Text = "海克斯指南 1.6.0 · 英雄胜率";
+            Text = "海克斯指南 1.7.0 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -108,7 +108,7 @@ namespace HexGuide.Desktop
             toolbar.BackColor = Color.FromArgb(22, 29, 40);
             toolbar.ForeColor = Color.FromArgb(222, 231, 239);
             toolbar.Padding = new Padding(10, 4, 10, 4);
-            var title = new ToolStripLabel("海克斯指南  /  英雄胜率");
+            var title = new ToolStripLabel("海克斯指南  /  我的这一局");
             var gameTools = new ToolStripDropDownButton("游戏工具");
             var hideButton = new ToolStripMenuItem("收起到后台");
             hideButton.Click += delegate { HideMain(); };
@@ -144,7 +144,7 @@ namespace HexGuide.Desktop
             status.TextAlign = ContentAlignment.MiddleCenter;
             status.ForeColor = ForeColor = Color.FromArgb(222, 231, 239);
             status.Font = new Font("Microsoft YaHei UI", 12F);
-            status.Text = "正在载入英雄胜率资料…";
+            status.Text = "正在载入本局助手…";
             Controls.Add(browser);
             Controls.Add(status);
             Controls.Add(toolbar);

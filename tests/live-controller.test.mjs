@@ -22,7 +22,7 @@ const snapshot = (overrides = {}) => ({
   mode: {known: true, isMayhem: true, queueId: 2400}, ...overrides
 });
 
-async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', owned = ['firebrand'], stored = {}, gameId = null} = {}) {
+async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', owned = ['firebrand'], stored = {}, gameId = null, initialHash = '#live'} = {}) {
   const globals = ['location', 'sessionStorage', 'history', 'window', 'document', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'Date'];
   const original = new Map(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const realSetTimeout = globalThis.setTimeout;
@@ -35,7 +35,7 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
   let currentTime = OriginalDate.now();
   const define = (key, value) => Object.defineProperty(globalThis, key, {configurable: true, writable: true, value});
   define('Date', class extends OriginalDate { static now() { return currentTime; } });
-  define('location', {hash: '#live'});
+  define('location', {hash: initialHash});
   define('sessionStorage', {
     getItem: key => session.has(key) ? session.get(key) : null,
     setItem: (key, value) => session.set(key, String(value)),
@@ -108,6 +108,13 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
     async finishScanDelay() { for (const callback of delays.splice(0)) callback(); await settle(); }
   };
 }
+
+test('local session bootstrap opens match home and removes the token from the visible URL', {concurrency: false}, async t => {
+  const h=await browserHarness(t,{initialHash:'#session=fixture-local-session'});
+  assert.equal(location.hash,'#live');
+  assert.equal(h.session.get('hexguide-local-session'),'fixture-local-session');
+  assert.match(h.html(),/data-ui-id="live-title"[^>]*>我的这一局/);
+});
 
 test('live controller follows game boundaries without presenting drafts as current game data', {concurrency: false}, async t => {
   await t.test('ChampSelect follows the hero but keeps unavailable game stats unknown', async t => {

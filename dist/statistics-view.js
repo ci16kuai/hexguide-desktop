@@ -8,23 +8,43 @@ const link=value=>/^https:\/\//i.test(value||'')?esc(value):'#';
 const rarityNames={silver:'白银',gold:'黄金',prismatic:'棱彩'};
 const target=(id,label,container=false)=>`data-ui-id="${id}" data-ui-label="${label}"${container?` data-ui-container="${id}"`:''}`;
 const icon=(url,alt='',className='')=>/^https:\/\//i.test(url||'')?`<img class="${className}" src="${esc(url)}" alt="${esc(alt)}" loading="lazy" onerror="this.onerror=null;this.src='./assets/mark.svg'">`:`<img class="${className}" src="./assets/mark.svg" alt="${esc(alt)}" loading="lazy">`;
-const shortItemEffect=description=>{
+export function shortItemEffect(description){
   const lines=String(description||'').replace(/<\/?(?:br|p|div|li)\b[^>]*>/gi,'\n').replace(/<[^>]*>/g,'')
-    .replace(/&nbsp;|&#160;/gi,' ').split(/\n+/).map(line=>line.replace(/\s+/g,' ').trim()).filter(Boolean);
-  const isEffect=line=>!/^[-+]?\d/.test(line)&&/[，。；！？]|获得|造成|提升|降低|回复|治疗|护盾|施放|使用/.test(line);
-  const start=lines.findIndex(isEffect);
-  if(start<0)return lines.join('，');
-  const effectLines=[lines[start]];
-  for(let i=start+1;i<lines.length&&isEffect(lines[i]);i++)effectLines.push(lines[i]);
-  const effect=effectLines.join(''),sentences=effect.match(/[^。！？]+[。！？]?/gu)||[effect];
-  // Keep complete effect sentences: cutting at a character count can lose the
-  // trigger or exception. Short entries normally fit within about 70 characters.
-  const summary=[sentences[0]];
-  for(const [offset,sentence] of sentences.slice(1).entries()){
-    if(offset===0&&/^(?:需要|必须)/.test(sentences[0])||/仅|只能|不可|不能|无法|需要|必须|冷却|每.+?秒/.test(sentence)||Array.from(summary.join('')).length+Array.from(sentence).length<=70)summary.push(sentence);
+    .replace(/&nbsp;|&#160;/gi,' ').replace(/&amp;/gi,'&').replace(/&lt;/gi,'<').replace(/&gt;/gi,'>')
+    .replace(/[（(]\s*0(?:\.0+)?(?:秒|伤害|生命值|法力值)?\s*[）)]/g,'')
+    .replace(/(?<![\d.])0(?:\.0+)?(?=(?:额外)?(?:物理伤害|魔法伤害|真实伤害|伤害|生命值|法力值|护盾))/g,'')
+    .split(/\n+/).map(line=>line.replace(/\s+/g,' ').trim()).filter(Boolean);
+  // Official static descriptions can contain unresolved formulas. Omit those
+  // sentences instead of presenting their placeholder as a real item value.
+  const known=line=>!/{{|}}|@[\w]+@|%i:|\b(?:NaN|undefined)\b|(?<!\d)0秒/.test(line);
+  const effectLines=lines.filter(line=>!/^[-+]?\d/.test(line)&&/获得|造成|提供|提升|提高|降低|缩短|减少|回复|治疗|护盾|施放|使用|攻击|进入|减速|显形|灼烧|暴击|伤害|持续|触发|格挡/.test(line));
+  const sentences=effectLines.join('').match(/[^。！？]+[。！？]?/gu)?.filter(known)||[];
+  const summary=[];
+  for(const sentence of sentences){
+    if(summary.length===2||Array.from(summary.join('')+sentence).length>100)break;
+    summary.push(sentence);
   }
-  return summary.join('');
-};
+  if(summary.length)return summary.join('');
+  // A stat-only item still has a useful exact description; never substitute a
+  // route's recommendation reason for a missing catalog effect.
+  return lines.filter(line=>/^[-+]?\d/.test(line)&&known(line)).slice(0,4).join('、').slice(0,100);
+}
+
+export function equipmentCards(advice,itemsCatalog){
+  const seen=new Set(),items=[];
+  for(const choice of advice.choices||[]){
+    for(const item of choice.items||[]){
+      const id=String(typeof item==='string'?item:item?.id||''),entry=itemsCatalog.data?.[id];
+      if(!id||seen.has(id)||!entry||String(entry.id)!==id||!entry.name||!/^https:\/\//i.test(entry.icon||''))continue;
+      seen.add(id);
+      const effect=shortItemEffect(entry.description);
+      if(!effect)continue;
+      items.push({id,name:entry.name,icon:entry.icon,effect});
+      if(items.length===6)return items;
+    }
+  }
+  return items;
+}
 
 // This page only browses statistics and equipment catalog entries.
 export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args)}={}){
@@ -60,18 +80,8 @@ export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args)}
   }
   function build(row,c){
     const advice=getAugmentBuildAdvice({champion:c,augment:row,augments:catalog.augments,itemsCatalog});
-    const seen=new Set(),items=[];
-    for(const choice of advice.choices||[]){
-      for(const item of choice.items||[]){
-        const id=String(typeof item==='string'?item:item?.id||''),entry=itemsCatalog.data?.[id];
-        const name=entry?.name||(typeof item==='string'?item:item?.name||item?.title||id);
-        const key=id||name;if(!key||seen.has(key))continue;
-        seen.add(key);items.push({name,icon:entry?.icon,effect:shortItemEffect(entry?.description)});
-        if(items.length===6)break;
-      }
-      if(items.length===6)break;
-    }
-    return `<tr class="stats-build-row"><td colspan="6"><section class="stats-build" ${target('stats-build','相关装备与装备效果')}><h3>${esc(row.name)}</h3>${items.length?`<ul class="stats-build-items" aria-label="相关装备">${items.map(item=>`<li class="stats-build-item">${icon(item.icon)}<div><strong>${esc(item.name)}</strong>${item.effect?`<p>${esc(item.effect)}</p>`:''}</div></li>`).join('')}</ul>`:'<p class="stats-build-empty">暂无相关装备</p>'}</section></td></tr>`;
+    const items=equipmentCards(advice,itemsCatalog),meta=itemsCatalog.meta||{};
+    return `<tr class="stats-build-row"><td colspan="6"><section class="stats-build" ${target('stats-build','相关装备与装备效果')}><h3>相关装备</h3>${items.length?`<ul class="stats-build-items" aria-label="相关装备">${items.map(item=>`<li class="stats-build-item">${icon(item.icon)}<div><strong>${esc(item.name)}</strong><p>${esc(item.effect)}</p></div></li>`).join('')}</ul><p class="stats-equipment-source">装备效果资料 ${esc(meta.version||'')} · <a href="${link(meta.sourceUrl)}" target="_blank" rel="noopener noreferrer">Riot Data Dragon ↗</a></p>`:'<p class="stats-build-empty">暂无对应装备资料</p>'}</section></td></tr>`;
   }
   function detail(){
     const c=champion();if(!c){state.championId='';return list();}
