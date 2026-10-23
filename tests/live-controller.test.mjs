@@ -263,6 +263,25 @@ test('live controller follows game boundaries without presenting drafts as curre
     assert.match(h.html(), /<dt>法术强度<\/dt><dd>—<\/dd>/);
     assert.doesNotMatch(h.html(), /TEST_OLD_ITEM/);
   });
+
+  await t.test('loading with InProgress phase rejects old sidebar offers and delayed OCR without choosing or republishing them',async t=>{
+    const h=await browserHarness(t);
+    const resolve=h.deferOcr();
+    await h.click('ocr-scan');await h.finishScanDelay();
+    h.setSidebar({ocr:{enabled:true,status:'recognized',message:'OLD_LOADING_OFFERS',observedAt:new Date(Date.now()).toISOString(),proposals:[
+      {id:'firebrand',name:'火上浇油'},{id:'goliath',name:'歌利亚巨人'},{id:'jeweled_gauntlet',name:'珠光护手'}
+    ]}});
+    await h.tick(snapshot({stage:'loading',championSource:'loading-screen',gameTime:null}));
+    resolve({status:'recognized',message:'OLD_IN_FLIGHT_OFFERS',proposals:[
+      {id:'firebrand',name:'火上浇油'},{id:'goliath',name:'歌利亚巨人'},{id:'jeweled_gauntlet',name:'珠光护手'}
+    ]});
+    await settle();
+    await h.click('ocr-confirm');
+    assert.deepEqual(h.state.offers,[]);
+    assert.doesNotMatch(h.html(),/OLD_LOADING_OFFERS|OLD_IN_FLIGHT_OFFERS/);
+    await h.click('ocr-scan');await h.finishScanDelay();
+    assert.equal(h.state.ocrRequests,1,'loading never starts an extra scan');
+  });
 });
 
 test('live editor targets keep valid stable identities through polling and conditional notices', {concurrency: false}, async t => {

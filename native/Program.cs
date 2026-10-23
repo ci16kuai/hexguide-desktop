@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.8.2.0")]
-[assembly: AssemblyFileVersion("1.8.2.0")]
-[assembly: AssemblyInformationalVersion("1.8.2")]
+[assembly: AssemblyVersion("1.9.0.0")]
+[assembly: AssemblyFileVersion("1.9.0.0")]
+[assembly: AssemblyInformationalVersion("1.9.0")]
 
 namespace HexGuide.Desktop
 {
@@ -92,7 +92,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             previewSidebar = preview;
-            Text = "海克斯指南 1.8.2 · 我的这一局";
+            Text = "海克斯指南 1.9.0 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -665,6 +665,8 @@ namespace HexGuide.Desktop
         private readonly HashSet<string> requestedIcons = new HashSet<string>();
         private Rectangle buildToggle;
         private bool buildExpanded, remoteIcons = true;
+        private bool loadingPreviewOpened;
+        private string loadingPreviewGame = "";
         private long sessionRevision = -1;
         private Rectangle placementArea;
         private Point dragStartPointer, dragStartLocation;
@@ -683,11 +685,21 @@ namespace HexGuide.Desktop
                 }
                 int previousOwned = ModelValue.Array(model, "owned").Count;
                 bool previousModel = ModelValue.Object(model, "champion") != null;
+                string previousPhase = ModelValue.Text(model, "phase");
                 model = value;
                 int currentOwned = ModelValue.Array(value, "owned").Count;
+                string phase = ModelValue.Text(value, "phase"), game = ModelValue.Text(value, "gameId");
+                bool boundary = phase == "ChampSelect" || phase == "EndOfGame" || phase == "WaitingForStats";
+                if (boundary && phase != previousPhase) { loadingPreviewOpened = false; loadingPreviewGame = ""; }
                 // A connection-only failure does not describe the current selection.
                 // Keep an expanded build open until a real session explicitly clears it.
-                if (value != null && value.ContainsKey("owned") && currentOwned == 0) buildExpanded = false;
+                if (IsLoadingPreview)
+                {
+                    bool newGame = game.Length > 0 && loadingPreviewGame.Length > 0 && game != loadingPreviewGame;
+                    if (!loadingPreviewOpened || newGame) { loadingPreviewOpened = true; ExpandBuild(); }
+                    if (game.Length > 0) loadingPreviewGame = game;
+                }
+                else if (value != null && value.ContainsKey("owned") && currentOwned == 0 && (previousOwned > 0 || boundary)) buildExpanded = false;
                 else if (previousModel && currentOwned > previousOwned) ExpandBuild();
                 offerButtons.Clear();
                 // A transient connection error must not reset the user's last saved layout.
@@ -696,6 +708,7 @@ namespace HexGuide.Desktop
             }
         }
         internal string Notice = "";
+        internal bool IsLoadingPreview { get { return ModelValue.Text(ModelValue.Object(model, "plan"), "stage") == "loading-preview"; } }
         internal event EventHandler HideRequested, DetailsRequested, GameRequested;
         internal event Action<string> OfferConfirmed;
 
@@ -865,6 +878,8 @@ namespace HexGuide.Desktop
             }
             if (!buildExpanded) return S(126);
             var plan = ModelValue.Object(Model, "plan");
+            if (IsLoadingPreview) return S(197) + ((Math.Min(6, ModelValue.Array(plan, "buildItems").Count) + 1) / 2) * S(77)
+                + S(46) + Math.Min(6, ModelValue.Array(plan, "nextAugments").Count) * S(76) + S(22);
             return S(151) + Math.Min(6, ModelValue.Array(plan, "buildItems").Count) * S(96)
                 + S(46) + Math.Min(6, ModelValue.Array(plan, "nextAugments").Count) * S(76) + S(22);
         }
@@ -879,7 +894,8 @@ namespace HexGuide.Desktop
         {
             var plan = ModelValue.Object(Model, "plan");
             string title = ModelValue.Text(plan, "title"), summary = ModelValue.Text(plan, "summary");
-            Write(g, buildExpanded ? "本局构筑" : (title.Length > 0 ? title : "本局玩法参考"), normalFont, accent, new Rectangle(x, y, Math.Max(1, width - S(75)), S(23)));
+            bool loading = IsLoadingPreview;
+            Write(g, loading ? "开局前预览" : buildExpanded ? "本局构筑" : (title.Length > 0 ? title : "本局玩法参考"), normalFont, accent, new Rectangle(x, y, Math.Max(1, width - S(75)), S(23)));
             Rectangle toggle = new Rectangle(x + width - S(72), y, S(72), S(24));
             if (viewport.Contains(toggle)) { buildToggle = toggle; PaintButton(g, toggle, buildExpanded ? "收起构筑" : "展开构筑"); }
             y += S(29);
@@ -890,24 +906,46 @@ namespace HexGuide.Desktop
             }
             ArrayList owned = ModelValue.Array(Model, "owned");
             var selected = owned.Count > 0 ? owned[owned.Count - 1] as Dictionary<string, object> : null;
-            Write(g, selected == null ? "等待确认本局海克斯" : "最近确认 · " + ModelValue.Text(selected, "name"), normalFont, ForeColor, new Rectangle(x, y, width, S(23))); y += S(27);
+            Write(g, loading ? "对方阵容 · 加载中" : selected == null ? "等待确认本局海克斯" : "最近确认 · " + ModelValue.Text(selected, "name"), normalFont, ForeColor, new Rectangle(x, y, width, S(23))); y += S(27);
             var enemy = ModelValue.Object(plan, "enemyContext");
+            if (loading)
+            {
+                int enemyIndex = 0, cellWidth = Math.Max(1, width / 5);
+                foreach (object entry in ModelValue.Array(enemy, "champions"))
+                {
+                    if (enemyIndex >= 5) break;
+                    var champion = entry as Dictionary<string, object>;
+                    int cellX = x + enemyIndex++ * cellWidth;
+                    DrawBuildIcon(g, ModelValue.Text(champion, "icon"), new Rectangle(cellX, y, S(34), S(34)));
+                    Write(g, ModelValue.Text(champion, "name"), smallFont, ForeColor, new Rectangle(cellX, y + S(38), Math.Max(1, cellWidth - S(3)), S(30)));
+                }
+                y += S(73);
+            }
             string enemySummary = ModelValue.Text(enemy, "summary");
-            Write(g, enemySummary.Length > 0 ? enemySummary : "等待读取敌方阵容与装备，暂按自身构筑提供选项。", smallFont, muted, new Rectangle(x, y, width, S(57))); y += S(62);
-            Write(g, "装备选项 · 随可见阵容与装备更新", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(33);
+            Write(g, loading ? "根据英雄与对方阵容准备，入场后自动更新。" : enemySummary.Length > 0 ? enemySummary : "等待读取敌方阵容与装备，暂按自身构筑提供选项。", smallFont, muted, new Rectangle(x, y, width, S(loading ? 30 : 57))); y += S(loading ? 35 : 62);
+            Write(g, loading ? "开局出装预设" : "装备选项 · 随可见阵容与装备更新", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(33);
             ArrayList equipment = ModelValue.Array(plan, "buildItems");
             int index = 0;
             foreach (object entry in equipment)
             {
                 if (index++ >= 6) break;
                 var item = entry as Dictionary<string, object>;
+                if (loading)
+                {
+                    int column = (index - 1) % 2, cellWidth = Math.Max(1, width / 2), cellX = x + column * cellWidth;
+                    DrawBuildIcon(g, ModelValue.Text(item, "icon"), new Rectangle(cellX, y + S(2), S(26), S(26)));
+                    Write(g, ModelValue.Text(item, "name"), smallFont, ForeColor, new Rectangle(cellX + S(31), y, Math.Max(1, cellWidth - S(35)), S(24)));
+                    Write(g, ModelValue.Text(item, "effect"), smallFont, muted, new Rectangle(cellX, y + S(30), Math.Max(1, cellWidth - S(5)), S(40)));
+                    if (column == 1 || index == Math.Min(6, equipment.Count)) y += S(77);
+                    continue;
+                }
                 DrawBuildIcon(g, ModelValue.Text(item, "icon"), new Rectangle(x, y + S(2), S(29), S(29)));
                 Write(g, ModelValue.Text(item, "name"), normalFont, ForeColor, new Rectangle(x + S(38), y, Math.Max(1, width - S(38)), S(23)));
                 Write(g, ModelValue.Text(item, "effect"), smallFont, muted, new Rectangle(x + S(38), y + S(25), Math.Max(1, width - S(38)), S(31)));
                 Write(g, ModelValue.Text(item, "reason"), smallFont, accent, new Rectangle(x, y + S(60), width, S(29)));
                 y += S(96);
             }
-            Write(g, "后续遇到可考虑", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(25);
+            Write(g, loading ? "开局关注的海克斯" : "后续遇到可考虑", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(25);
             Write(g, "机制适配参考，不代表下一轮一定出现", smallFont, muted, new Rectangle(x, y, width, S(18))); y += S(21);
             index = 0;
             foreach (object entry in ModelValue.Array(plan, "nextAugments"))
@@ -1152,14 +1190,77 @@ namespace HexGuide.Desktop
                 window.buildExpanded = false; window.scrollOffset = 0;
                 string statusPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-recognition-status.png");
                 int liveStateChecks = ValidateLiveStateFixtures(window, statusPreviewPath);
+                string loadingPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-loading.png");
+                int loadingPreviewChecks = ValidateLoadingPreviewFixtures(window, loadingPreviewPath);
                 int defaultWidth = window.Width, defaultHeight = window.Height;
                 int appearanceChecks = ValidateAppearanceFixtures(window);
                 string placementPreviewPath;
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath } });
             }
+        }
+        private static int ValidateLoadingPreviewFixtures(SidebarWindow window, string previewPath)
+        {
+            var original = window.Model;
+            var roster = new ArrayList();
+            string[] names = { "索拉卡", "盖伦", "墨菲特", "金克丝", "拉克丝" };
+            for (int index = 0; index < names.Length; index++)
+            {
+                string icon = "fixture-loading-hero-" + index;
+                var bitmap = new Bitmap(34, 34);
+                using (var graphics = Graphics.FromImage(bitmap)) graphics.Clear(Color.FromArgb(46 + index * 15, 92 + index * 10, 111 + index * 8));
+                window.buildIcons[icon] = bitmap;
+                roster.Add(new Dictionary<string, object> { { "name", names[index] }, { "icon", icon }, { "level", null }, { "items", new object[0] } });
+            }
+            var plan = new Dictionary<string, object>(ModelValue.Object(original, "plan"));
+            plan["stage"] = "loading-preview"; plan["label"] = "开局前预览";
+            plan["enemyContext"] = new Dictionary<string, object> { { "status", "detected" }, { "source", "loading-roster" }, { "champions", roster } };
+            // Static catalogue names and concise effects; this is an isolated layout fixture,
+            // not a claim that these six items or augments were observed in a real match.
+            string[] equipmentNames = { "莫雷洛秘典", "兰德里的折磨", "瑞莱的冰晶节杖", "灭世者的死亡之帽", "中娅沙漏", "虚空之杖" };
+            string[] equipmentEffects = { "魔法伤害施加3秒40%重伤。", "技能灼烧敌人，按最大生命值造成魔法伤害。", "技能伤害使敌人减速30%，持续1秒。", "总法术强度提升30%。", "进入凝滞状态2.5秒。", "95法术强度，40%法术穿透。" };
+            string[] augmentNames = { "循环往复", "炼狱导管", "珠光护手", "歌利亚巨人", "火上浇油", "面包和黄油" };
+            var equipment = new ArrayList(); var augments = new ArrayList();
+            for (int index = 0; index < equipmentNames.Length; index++)
+            {
+                string icon = "fixture-loading-hero-" + (index % names.Length);
+                equipment.Add(new Dictionary<string, object> { { "name", equipmentNames[index] }, { "effect", equipmentEffects[index] }, { "icon", icon } });
+                augments.Add(new Dictionary<string, object> { { "name", augmentNames[index] }, { "reason", "示例机制方向；实际以出现的三个选项为准。" }, { "icon", icon } });
+            }
+            plan["buildItems"] = equipment; plan["nextAugments"] = augments;
+            var loading = new Dictionary<string, object>(original);
+            loading["phase"] = "GameStart"; loading["stage"] = "loading"; loading["gameId"] = "loading-fixture-one";
+            loading["level"] = null;
+            loading["gameTime"] = null;
+            loading["owned"] = new object[0]; loading["offers"] = new object[0]; loading["plan"] = plan;
+            window.buildExpanded = false; window.Model = loading;
+            Require(window.IsLoadingPreview && window.buildExpanded, "Loading preview did not expand before any augment selection.");
+            window.Notice = "离屏示例 · 未连接真实对局";
+            using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png); }
+            window.Notice = "";
+            Require(window.paintedSections[0] == "plan" && window.buildToggle != Rectangle.Empty, "Loading plan did not move to the first visible section.");
+            Rectangle toggle = window.buildToggle;
+            window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, toggle.Left + 2, toggle.Top + 2, 0));
+            Require(!window.buildExpanded, "Loading preview could not be collapsed by the user.");
+            window.Model = loading;
+            Require(!window.buildExpanded, "Repeated loading poll overrode the user's collapse.");
+            var recovered = new Dictionary<string, object>(loading); recovered["gameId"] = "loading-fixture-two";
+            window.Model = recovered;
+            Require(window.buildExpanded, "A different loading game did not expand its own preview.");
+            var live = new Dictionary<string, object>(recovered);
+            live["phase"] = "InProgress"; live["stage"] = "live";
+            live["plan"] = new Dictionary<string, object> { { "stage", "live" }, { "summary", "入场后的本局推荐" } };
+            window.Model = live;
+            Require(!window.IsLoadingPreview && window.buildExpanded, "Entering live play did not preserve the expanded recommendation view.");
+            Require(!window.Visible && window.ShowWithoutActivation, "Loading fixtures displayed or activated a real window.");
+            var ended = new Dictionary<string, object>(live); ended["phase"] = "EndOfGame";
+            window.Model = ended;
+            Require(!window.buildExpanded, "The ended game kept its previous preview expanded.");
+            window.Model = original; window.buildExpanded = false; window.scrollOffset = 0;
+            window.loadingPreviewOpened = false; window.loadingPreviewGame = "";
+            return 8;
         }
         private static int ValidateLiveStateFixtures(SidebarWindow window, string statusPreviewPath)
         {

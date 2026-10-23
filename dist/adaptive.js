@@ -10,6 +10,12 @@ const AP_ATTACKERS = new Set(['Gwen', 'Kayle', 'Azir', 'Teemo', 'KogMaw', 'Kaisa
 const SPECIAL_ATTACKS = new Set(['Jhin', 'Graves']);
 const ALLY_HEAL_SHIELD = new Set(['Sona', 'Soraka', 'Nami', 'Milio', 'Yuumi', 'Seraphine', 'Janna', 'Karma', 'Lulu', 'Ivern', 'Rakan', 'Taric', 'Renata', 'Senna']);
 const routeAlias = value => ({普攻: 'attack', 技能: 'spell', 坦克: 'tank', 辅助: 'support', 暴击: 'crit'})[value] || value;
+const loadingRequested = live => live.stage === 'loading' || live.championSource === 'loading-screen' || live.teams?.source === 'loading-roster';
+// A loading roster is an explicit collector observation, never a fallback for
+// an idle client or an old live snapshot. Only its hero identities are evidence.
+const loadingRoster = live => live.stage === 'loading' && live.championSource === 'loading-screen'
+  && ['GameStart', 'InProgress'].includes(live.phase) && live.mode?.known === true && live.mode.isMayhem === true
+  && live.teams?.source === 'loading-roster';
 
 function ownedDefinitions(owned, augments) {
   const byId = new Map(list(augments).map(augment => [String(augment.id), augment]));
@@ -61,7 +67,9 @@ function requiresOwnAttacks(item) {
 /** Only current visible opponents and official catalog attributes are used.
  * Champion tags describe mechanisms, never measured damage or hidden stats. */
 export function describeEnemies({champion, live = {}, champions = [], itemsCatalog = {}, now = Date.now()} = {}) {
-  const empty = (status, summary) => ({status, summary, signals: [], champions: [], observedAt: ''});
+  const empty = (status, summary) => ({status, source: '', summary, signals: [], champions: [], observedAt: ''});
+  const rosterOnly = loadingRequested(live);
+  if (rosterOnly && !loadingRoster(live)) return empty('unavailable', '等待本局加载页的英雄与敌方阵容；暂不沿用上一局资料。');
   if (!champion || live.connection?.status !== 'connected' || live.championId !== champion.id || live.teams?.status !== 'detected') {
     return empty('unavailable', '尚未读取当前敌方阵容和装备；推荐暂按自身英雄与已确认海克斯生成。');
   }
@@ -75,12 +83,13 @@ export function describeEnemies({champion, live = {}, champions = [], itemsCatal
   const definitions = new Map(list(champions).flatMap(hero => unique([hero.id, hero.enName, hero.name, hero.title, ...list(hero.aliases)]).map(alias => [normalized(alias), hero])));
   const enemies = list(live.teams.enemies).filter(enemy => enemy && (enemy.championId || enemy.championName)).slice(0, 5).map(enemy => {
     const hero = definitions.get(normalized(enemy.championId)) || definitions.get(normalized(enemy.championName));
-    const items = list(enemy.items).filter(item => Number(item.count ?? 1) > 0).map(item => {
+    const items = (rosterOnly ? [] : list(enemy.items)).filter(item => Number(item.count ?? 1) > 0).map(item => {
       const id = String(item.id ?? item.itemID ?? '');
       return {id, name: catalog.get(id)?.name || text(item.name) || `装备 ${id}`, definition: catalog.get(id)};
     });
-    return {id: hero?.id || text(enemy.championId), name: hero?.title || hero?.name || text(enemy.championName) || text(enemy.championId), icon: hero?.icon || '', level: finite(enemy.level) ? Number(enemy.level) : null, tags: hero ? getChampionTags(hero) : [], items};
-  });
+    if (rosterOnly && !hero) return null;
+    return {id: hero?.id || text(enemy.championId), name: hero?.title || hero?.name || text(enemy.championName) || text(enemy.championId), icon: hero?.icon || '', level: !rosterOnly && finite(enemy.level) ? Number(enemy.level) : null, tags: hero ? getChampionTags(hero) : [], items};
+  }).filter(Boolean);
   if (!enemies.length) return empty('unavailable', '当前未读取到敌方玩家；推荐暂按自身英雄与已确认海克斯生成。');
   const signals = [];
   const add = (id, label, affected, reason, itemFilter = () => false) => {
@@ -96,13 +105,13 @@ export function describeEnemies({champion, live = {}, champions = [], itemsCatal
   const health = item => visibleStat(item, 'FlatHPPoolMod') && Number(item.stats.FlatHPPoolMod) >= 350;
   add('armor', '可见护甲装备', enemies.filter(enemy => enemy.items.some(item => armor(item.definition))), '已读取到敌方护甲装备；这只说明可见装备投入，不是敌方总护甲数值。', armor);
   add('magic-resist', '可见魔抗装备', enemies.filter(enemy => enemy.items.some(item => magicResist(item.definition))), '已读取到敌方魔抗装备；法术路线可比较穿透，未推算敌方总魔抗。', magicResist);
-  add('healing', '治疗与续航条件', enemies.filter(enemy => enemy.tags.includes('heal') || enemy.tags.includes('sustain') || enemy.items.some(item => healing(item.definition))), '敌方英雄机制或可见装备包含治疗/战斗续航来源；重伤仍需实际命中并满足装备触发条件。', healing);
-  add('frontline', '前排或生命值投入', enemies.filter(enemy => enemy.tags.includes('defense') || enemy.tags.includes('health') || enemy.items.some(item => health(item.definition))), '敌方有前排机制或可见大件生命值投入，可比较持续输出；未读取其实际生命值或隐藏抗性。', health);
-  add('magic-mechanisms', '魔法机制倾向', enemies.filter(enemy => enemy.tags.includes('magic') || enemy.items.some(item => visibleStat(item.definition, 'FlatMagicDamageMod'))), '静态英雄标签与可见法强装备提供魔法方向线索，不代表本局实际伤害占比。', item => visibleStat(item, 'FlatMagicDamageMod'));
-  add('physical-mechanisms', '物理机制倾向', enemies.filter(enemy => enemy.tags.includes('physical') || enemy.items.some(item => visibleStat(item.definition, 'FlatPhysicalDamageMod'))), '静态英雄标签与可见攻击力装备提供物理方向线索，不代表本局实际伤害占比。', item => visibleStat(item, 'FlatPhysicalDamageMod'));
+  add('healing', '治疗与续航条件', enemies.filter(enemy => enemy.tags.includes('heal') || enemy.tags.includes('sustain') || enemy.items.some(item => healing(item.definition))), rosterOnly ? '敌方英雄机制包含治疗/战斗续航来源；尚未读取本局装备或实际治疗量。' : '敌方英雄机制或可见装备包含治疗/战斗续航来源；重伤仍需实际命中并满足装备触发条件。', healing);
+  add('frontline', rosterOnly ? '前排机制' : '前排或生命值投入', enemies.filter(enemy => enemy.tags.includes('defense') || enemy.tags.includes('health') || enemy.items.some(item => health(item.definition))), rosterOnly ? '敌方英雄包含前排机制，可比较持续输出；未推算实际生命值或隐藏抗性。' : '敌方有前排机制或可见大件生命值投入，可比较持续输出；未读取其实际生命值或隐藏抗性。', health);
+  add('magic-mechanisms', '魔法机制倾向', enemies.filter(enemy => enemy.tags.includes('magic') || enemy.items.some(item => visibleStat(item.definition, 'FlatMagicDamageMod'))), rosterOnly ? '仅按敌方英雄静态机制提供魔法方向线索，不代表本局实际伤害占比。' : '静态英雄标签与可见法强装备提供魔法方向线索，不代表本局实际伤害占比。', item => visibleStat(item, 'FlatMagicDamageMod'));
+  add('physical-mechanisms', '物理机制倾向', enemies.filter(enemy => enemy.tags.includes('physical') || enemy.items.some(item => visibleStat(item.definition, 'FlatPhysicalDamageMod'))), rosterOnly ? '仅按敌方英雄静态机制提供物理方向线索，不代表本局实际伤害占比。' : '静态英雄标签与可见攻击力装备提供物理方向线索，不代表本局实际伤害占比。', item => visibleStat(item, 'FlatPhysicalDamageMod'));
   return {
-    status: 'detected', observedAt, signals,
-    summary: `已读取 ${enemies.length} 位敌方英雄${signals.length ? `：${signals.slice(0, 4).map(signal => signal.label).join('、')}` : '；当前没有足够的针对性装备线索'}。`,
+    status: 'detected', source: rosterOnly ? 'loading-roster' : 'live-client', observedAt, signals,
+    summary: rosterOnly ? `加载页已读取 ${enemies.length} 位敌方英雄；仅依据阵容机制预设，尚未读取装备、等级或实战面板。` : `已读取 ${enemies.length} 位敌方英雄${signals.length ? `：${signals.slice(0, 4).map(signal => signal.label).join('、')}` : '；当前没有足够的针对性装备线索'}。`,
     champions: enemies.map(enemy => ({...enemy, items: enemy.items.map(({definition, ...item}) => item)}))
   };
 }
@@ -121,7 +130,7 @@ function enemyAugmentAdjustment(augment, enemyContext, {physical, spell}) {
   }
   if (signals.has('frontline') && /(?:敌人|敌方|目标).{0,15}(?:最大生命|当前生命)|真实伤害|持续伤害|灼烧/.test(description)) {
     bonus += 5;
-    reasons.push('敌方有前排或生命值投入，可比较持续伤害、目标生命值相关或真实伤害机制，仍需满足原文条件。');
+    reasons.push(`${enemyContext.source === 'loading-roster' ? '敌方英雄包含前排机制' : '敌方有前排或生命值投入'}，可比较持续伤害、目标生命值相关或真实伤害机制，仍需满足原文条件。`);
   }
   return {bonus, reasons};
 }
@@ -132,7 +141,7 @@ function enemyAugmentAdjustment(augment, enemyContext, {physical, spell}) {
  */
 export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, augments = [], itemsCatalog = {}, champions = [], now = Date.now()} = {}) {
   const context = [];
-  const noPlan = {buildItems: [], nextAugments: [], enemyContext: {status: 'unavailable', summary: '等待当前海克斯大乱斗对局。', signals: [], champions: [], observedAt: ''}};
+  const noPlan = {stage: 'waiting', buildItems: [], nextAugments: [], enemyContext: {status: 'unavailable', source: '', summary: '等待当前海克斯大乱斗对局。', signals: [], champions: [], observedAt: ''}};
   if (live.mode?.known && live.mode.isMayhem === false) return {
     ...noPlan,
     title: '当前模式不是海克斯大乱斗', summary: '切换到海克斯大乱斗后再生成当局玩法选项。', choices: [],
@@ -144,11 +153,20 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
     context: ['尚无当前英雄，暂不推断出装和玩法。'], confidence: 'unavailable', label: '等待英雄'
   };
   const hasLive = live.connection?.status === 'connected' && live.championId === champion.id;
+  const isLoading = loadingRequested(live);
+  const enemyContext = describeEnemies({champion, live, champions, itemsCatalog, now});
+  if (isLoading && (!loadingRoster(live) || !hasLive || enemyContext.status !== 'detected')) return {
+    ...noPlan, enemyContext,
+    title: '等待本局加载阵容', summary: enemyContext.summary, choices: [], context: [enemyContext.summary],
+    confidence: 'unavailable', label: '等待加载阵容'
+  };
   // A previous game/champion snapshot must never influence the current selection.
-  const observed = hasLive ? live : {};
+  // During loading, even a same-champion old inventory or confirmed list is
+  // irrelevant. The new game has no observed purchases or selected augments yet.
+  const observed = hasLive && !isLoading ? live : {};
   const stats = observed.stats || {};
   const tags = getChampionTags(champion);
-  const definitions = ownedDefinitions(owned, augments);
+  const definitions = ownedDefinitions(isLoading ? [] : owned, augments);
   const effectText = definitions.map(augment => text(augment.description)).join('\n');
   const noAttacks = /(?:无法|不能|不可)(?:进行|使用)?(?:普攻|普通攻击|基本攻击)|cannot (?:use |perform )?(?:basic )?attack/i.test(effectText);
   const noCrit = /(?:你|伤害)(?:将|的伤害)?(?:无法|不能|不可)暴击|(?:your damage|you) cannot (?:crit|critically strike)/i.test(effectText);
@@ -160,7 +178,7 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
   const catalog = catalogMap(itemsCatalog);
   const ownedItems = items.map(item => ({...item, definition: catalog.get(String(item.id ?? item.itemID))}));
   const itemTags = unique(ownedItems.flatMap(item => item.definition?.tags || []));
-  const currentRoute = routeAlias(route);
+  const currentRoute = routeAlias(isLoading ? 'auto' : route);
   const isRangedPhysical = tags.includes('physical') && tags.includes('attack');
   const apAttacker = AP_ATTACKERS.has(champion.id);
   const physical = tags.includes('physical');
@@ -170,8 +188,7 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
   const attack = tags.includes('attack') || apAttacker;
   const specialAttacks = SPECIAL_ATTACKS.has(champion.id);
   const championName = champion.title || champion.name || champion.id;
-  const enemyContext = describeEnemies({champion, live, champions, itemsCatalog, now});
-  context.push(`英雄：${championName}；${hasLive ? '本局自动读取' : '静态机制参考'}。`);
+  context.push(`英雄：${championName}；${isLoading ? '本局加载页已确认' : hasLive ? '本局自动读取' : '静态机制参考'}。`);
   context.push(enemyContext.summary);
   if (finite(observed.level)) context.push(`当前 ${Math.round(observed.level)} 级。`);
   if (finite(observed.gameTime)) {
@@ -181,7 +198,7 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
   if (summaryStats(stats)) context.push(`自身面板：${summaryStats(stats)}。`);
   if (ownedItems.length) context.push(`已读取装备：${ownedItems.map(item => item.definition?.name || text(item.name) || `装备 ${item.id ?? item.itemID}`).join('、')}。`);
   if (definitions.length) context.push(`已确认海克斯：${definitions.map(augment => augment.name || augment.id).join('、')}。`);
-  else context.push('尚未确认已选海克斯；当前仅按英雄机制和可用面板提供选项。');
+  else context.push(isLoading ? '开局前按本局英雄与敌方阵容预设；不沿用上一局海克斯或玩法方向。' : '尚未确认已选海克斯；当前仅按英雄机制和可用面板提供选项。');
   if (noAttacks) context.push('已确认效果包含无法普攻的限制，普攻路线已暂停。');
   if (noCrit) context.push('已确认效果包含无法暴击的限制，不再列出暴击装备选项。');
   if (live.augments?.status !== 'detected') context.push('海克斯以你确认的列表为准；未把普通符文或识别草稿加入建议。');
@@ -189,7 +206,8 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
 
   const stage = Number(observed.gameTime) >= 900 || Number(observed.level) >= 16 ? 'late'
     : Number(observed.gameTime) >= 480 || Number(observed.level) >= 11 ? 'mid' : 'early';
-  const stageWhy = !hasLive ? '在真实对局开始前，先比较英雄机制对应的玩法方向。'
+  const stageWhy = isLoading ? '加载阶段先按英雄与敌方阵容比较开局方向；进入对局后再结合已选海克斯和实际装备更新。'
+    : !hasLive ? '在真实对局开始前，先比较英雄机制对应的玩法方向。'
     : stage === 'late' ? '当前已到较高等级或较长对局阶段，优先延续已有装备和海克斯，避免无依据地推翻整套出装。'
       : stage === 'mid' ? '当前进入中段，把已有装备对应的输出方式与海克斯触发条件接起来。'
         : '当前等级或对局时间仍偏早，保留转型空间，先满足海克斯的触发条件。';
@@ -239,7 +257,7 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
     ownedNote(['health', 'defense', 'cc', 'sustain'], '海克斯依据'),
     itemTags.includes('Health') ? '当前装备已有生命值投入，生存路线可围绕现有构筑继续比较。' : '',
     finite(stats.maxHealth) ? `当前最大生命值 ${Math.round(stats.maxHealth)}；生命值不等于额外生命值，不能代入所有海克斯公式。` : ''
-  ], [enemyContext.status === 'detected' ? '敌方英雄机制与可见装备仅提供抗性选项的依据；仍需结合实际承伤决定。' : '没有读取敌方伤害构成，护甲与魔抗的取舍需要你在游戏里判断。',
+  ], [enemyContext.status === 'detected' ? (isLoading ? '当前仅按敌方英雄机制预设抗性选项；进入游戏后结合实际装备与承伤调整。' : '敌方英雄机制与可见装备仅提供抗性选项的依据；仍需结合实际承伤决定。') : '没有读取敌方伤害构成，护甲与魔抗的取舍需要你在游戏里判断。',
     '减速与硬控制的触发条件不同；只有原文允许的控制才能触发对应海克斯。'], [
     ['3068', '生命值与护甲提供承伤属性；附近持续伤害需要保持合适距离，是否需要护甲由你判断。'],
     ...((tags.includes('heal') || tags.includes('shield') || effects.includes('heal') || effects.includes('shield')) ? [['3065', '提供生命值与魔抗，并放大你受到的治疗和护盾；需已有可利用的来源。']] : [])
@@ -250,7 +268,7 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
     '当持续输出或技能循环容易被打断时，可以比较一件符合当前输出属性的生存装备。',
     stageWhy,
     definitions.length ? '保留已确认海克斯的触发方式，先解决能否安全触发的问题。' : ''
-  ], [enemyContext.status === 'detected' ? '已结合可见敌方条件给出装备选项，没有测量本局实际伤害占比。' : '尚无当前敌方资料；请结合游戏内实际承伤再决定抗性。',
+  ], [enemyContext.status === 'detected' ? (isLoading ? '当前仅结合敌方英雄阵容机制预设装备，没有测量实战伤害占比。' : '已结合可见敌方条件给出装备选项，没有测量本局实际伤害占比。') : '尚无当前敌方资料；请结合游戏内实际承伤再决定抗性。',
     '生存装备也有主动、距离或生命值阈值条件，不等于持续无敌。'], spell ? [
     ['3157', '提供法强与护甲，并可主动进入凝滞；需由你判断使用时机。'],
     ['3102', '提供法强与魔抗，并有法术护盾；是否适合本局取决于你在游戏中观察到的威胁。']
@@ -316,19 +334,19 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
   if (signals.has('armor') && physicalRoute) target(noCrit ? '6694' : '3036', `已读取${evidence('armor')}的护甲装备；护甲穿透对应当前物理输出方向，不代表已测得其总护甲。`);
   if (signals.has('magic-resist') && spellRoute) target('3135', `已读取${evidence('magic-resist')}的魔抗装备；法术穿透对应当前法术方向，不代表已测得其总魔抗。`);
   if (signals.has('frontline')) {
-    if (spellRoute) target('6653', '敌方有前排机制或可见生命值投入，技能灼烧可作为持续输出选项；需要技能实际造成伤害，未推算目标血量。');
-    if ((physicalRoute || apAttacker) && attack && !noAttacks && !specialAttacks) target('3153', '敌方有前排机制或可见生命值投入，可比较按目标当前生命值造成伤害的普攻特效；需要持续普攻命中。');
+    if (spellRoute) target('6653', `${isLoading ? '敌方英雄包含前排机制' : '敌方有前排机制或可见生命值投入'}，技能灼烧可作为持续输出选项；需要技能实际造成伤害，未推算目标血量。`);
+    if ((physicalRoute || apAttacker) && attack && !noAttacks && !specialAttacks) target('3153', `${isLoading ? '敌方英雄包含前排机制' : '敌方有前排机制或可见生命值投入'}，可比较按目标当前生命值造成伤害的普攻特效；需要持续普攻命中。`);
   }
   const magicCount = enemySignals.get('magic-mechanisms')?.championIds.length || 0;
   const physicalCount = enemySignals.get('physical-mechanisms')?.championIds.length || 0;
   if (magicCount >= 2 && magicCount > physicalCount) {
-    const reason = '已读取的敌方英雄机制/装备偏魔法方向，可比较魔抗生存选项；这是机制倾向，未测量本局魔法伤害占比。';
+    const reason = `已读取的敌方英雄${isLoading ? '机制' : '机制/装备'}偏魔法方向，可比较魔抗生存选项；这是机制倾向，未测量本局魔法伤害占比。`;
     if (spellRoute) target('3102', reason);
     else if (physicalRoute) target('3156', reason);
     else if (tankRoute) target('4401', reason);
   }
   if (physicalCount >= 2 && physicalCount > magicCount) {
-    const reason = '已读取的敌方英雄机制/装备偏物理方向，可比较护甲生存选项；这是机制倾向，未测量本局物理伤害占比。';
+    const reason = `已读取的敌方英雄${isLoading ? '机制' : '机制/装备'}偏物理方向，可比较护甲生存选项；这是机制倾向，未测量本局物理伤害占比。`;
     if (spellRoute) target('3157', reason);
     else if (tankRoute) target('3143', `${reason} 兰顿减暴击的部分仍需敌方实际造成暴击伤害。`);
   }
@@ -348,13 +366,14 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
     const result = recommend(augment, champion, definitions, currentRoute);
     const adjustment = enemyAugmentAdjustment(augment, enemyContext, {physical: physicalRoute, spell: spellRoute});
     const reasons = unique([...adjustment.reasons, ...result.reasons.filter(reason => !/适配分不代表胜率/.test(reason))]);
-    return {id: augment.id, name: augment.name, icon: augment.icon || '', rarity: augment.rarity, description: augment.description, mechanismLabel: '后续机制参考', reason: reasons[0], reasons, cautions: unique([...result.cautions, '仅为后续遇到时的机制参考；不预测下轮出现，也不代表胜率。']), sourceUrl: augment.sourceUrl || '', confidence: result.confidence, rankingScore: result.score + adjustment.bonus};
+    return {id: augment.id, name: augment.name, icon: augment.icon || '', rarity: augment.rarity, description: augment.description, mechanismLabel: isLoading ? '开局海克斯方向' : '后续机制参考', reason: reasons[0], reasons, cautions: unique([...result.cautions, '仅为后续遇到时的机制参考；不预测下轮出现，也不代表胜率。']), sourceUrl: augment.sourceUrl || '', confidence: result.confidence, rankingScore: result.score + adjustment.bonus};
   }).sort((a, b) => b.rankingScore - a.rankingScore || String(a.id).localeCompare(String(b.id))).slice(0, 6).map(({rankingScore, ...augment}, index) => ({...augment, rank: index + 1}));
   return {
-    title: `${championName}的可选玩法`,
-    summary: `${hasLive ? '已结合当前英雄、自身面板与装备' : '当前基于英雄静态机制'}${definitions.length ? `，以及 ${definitions.length} 个已确认海克斯` : ''}${enemyContext.status === 'detected' ? '；已加入可见敌方阵容与装备条件' : ''}。以下路线供你比较，随状态和确认列表更新。`,
+    stage: isLoading ? 'loading-preview' : hasLive ? 'live' : 'reference',
+    title: isLoading ? `${championName}的开局预设` : `${championName}的可选玩法`,
+    summary: isLoading ? '已结合本局英雄与敌方阵容生成开局预设；尚未读取实战装备与面板。进入游戏后会随装备和确认的海克斯继续调整。' : `${hasLive ? '已结合当前英雄、自身面板与装备' : '当前基于英雄静态机制'}${definitions.length ? `，以及 ${definitions.length} 个已确认海克斯` : ''}${enemyContext.status === 'detected' ? '；已加入可见敌方阵容与装备条件' : ''}。以下路线供你比较，随状态和确认列表更新。`,
     choices, context, buildItems, nextAugments, enemyContext,
-    confidence: hasLive ? 'mechanism-with-live' : 'mechanism',
-    label: hasLive ? '机制建议 · 已读取本局数据' : '机制建议 · 等待本局数据'
+    confidence: isLoading ? 'mechanism-with-roster' : hasLive ? 'mechanism-with-live' : 'mechanism',
+    label: isLoading ? '开局前预览' : hasLive ? '机制建议 · 已读取本局数据' : '机制建议 · 等待本局数据'
   };
 }

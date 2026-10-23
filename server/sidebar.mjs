@@ -119,13 +119,15 @@ export class BackgroundSidebar {
   observe() {
     const live = this.collector.getSnapshot();
     const currentId = gameId(live.gameId);
-    const inGame = ['InProgress', 'Reconnect'].includes(live.phase);
+    const inGame = ['GameStart', 'InProgress', 'Reconnect'].includes(live.phase);
     const last = this.previous;
     const changedGame = currentId && this.session.gameId && currentId !== this.session.gameId;
     const leftGame = (last?.inGame || this.session.gameId) && END_PHASES.has(live.phase);
     const timeReset = live.phase === 'InProgress' && last?.inGame && finite(live.gameTime) && finite(last.time) && live.gameTime + 30 < last.time;
+    // Even an empty previous session may have an OCR capture still in flight.
+    const loadingStarted = live.stage === 'loading' && last?.stage !== 'loading';
     let changed = false;
-    const boundary = Boolean(changedGame || leftGame || timeReset);
+    const boundary = Boolean(changedGame || leftGame || timeReset || loadingStarted);
     if (boundary) { this.clearGame(); changed = true; }
     if (inGame && currentId && this.session.gameId !== currentId) {
       this.session.gameId = currentId;
@@ -133,7 +135,7 @@ export class BackgroundSidebar {
       changed = true;
     }
     // A transient API disconnection must not look like a new game or erase clock history.
-    if (inGame || END_PHASES.has(live.phase)) this.previous = {inGame, time:finite(live.gameTime) ? live.gameTime : inGame && !boundary ? last?.time ?? null : null};
+    if (inGame || END_PHASES.has(live.phase)) this.previous = {inGame, stage:live.stage, time:finite(live.gameTime) ? live.gameTime : inGame && !boundary ? last?.time ?? null : null};
     if (changed) void this.persist();
     if (this.offers.length && this.now() - this.offerTime >= this.offerLifetime) {
       this.offers = [];
@@ -147,7 +149,10 @@ export class BackgroundSidebar {
 
   async setSession(value) {
     const selected = this.validateSession(value);
-    this.observe();
+    const live = this.observe();
+    // A late main-window write must not carry a previous game's choices into
+    // the opening preset. Return authoritative state so clients can reconcile.
+    if (live.stage === 'loading') return structuredClone(this.session);
     if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) || selected.route !== this.session.route) {
       if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned)) this.generation++;
       this.session = {...this.session, ...selected, revision:this.session.revision + 1};
@@ -169,7 +174,7 @@ export class BackgroundSidebar {
     const live = this.observe();
     // Check and mutate synchronously: a roll, another confirmation or a game
     // boundary cannot slip between a UI GET and this authoritative update.
-    if (live.phase !== 'InProgress' || value.gameId !== this.session.gameId || value.revision !== this.session.revision || !this.offers.some(offer => offer.id === value.id) || this.session.owned.includes(value.id) || this.session.owned.length >= 12) throw new SessionConflictError('The current offered choices have changed.');
+    if (live.phase !== 'InProgress' || live.stage === 'loading' || value.gameId !== this.session.gameId || value.revision !== this.session.revision || !this.offers.some(offer => offer.id === value.id) || this.session.owned.includes(value.id) || this.session.owned.length >= 12) throw new SessionConflictError('The current offered choices have changed.');
     const epoch = this.gameEpoch;
     this.generation++;
     this.session = {...this.session, owned:[...this.session.owned, value.id], revision:this.session.revision + 1};
@@ -200,15 +205,15 @@ export class BackgroundSidebar {
     // Both manual requests and the background timer await the same capture.
     if (this.pending) return this.pending;
     const live = this.observe();
-    if (live.phase !== 'InProgress' || live.mode?.known && !live.mode.isMayhem) return {status:'waiting', message:'等待进入海克斯大乱斗对局后识别。', proposals:[]};
+    if (live.phase !== 'InProgress' || live.stage === 'loading' || live.mode?.known && !live.mode.isMayhem) return {status:'waiting', message:'等待进入海克斯大乱斗对局后识别。', proposals:[]};
     const generation = this.generation;
     this.lastScan = this.now();
     this.pending = (async () => {
       let raw;
       try { raw = this.scanner ? await this.scanner() : null; }
       catch { /* Local capture failure contains no public diagnostic details. */ }
-      this.observe();
-      if (generation !== this.generation) return {status:'waiting', message:'本局已变化，请等待新一轮三选一卡片。', proposals:[]};
+      const current = this.observe();
+      if (generation !== this.generation || current.phase !== 'InProgress' || current.stage === 'loading') return {status:'waiting', message:'本局已变化，请等待新一轮三选一卡片。', proposals:[]};
       const status = ['recognized', 'waiting', 'unavailable'].includes(raw?.status) ? raw.status : 'unavailable';
       const proposals = (Array.isArray(raw?.proposals) ? raw.proposals : []).filter(proposal => this.augments.has(proposal?.id)).map(proposal => ({id:proposal.id, name:this.augments.get(proposal.id).name, confidence:'exact'}));
       const complete = status === 'recognized' && proposals.length === 3 && new Set(proposals.map(proposal => proposal.id)).size === 3 && proposals.every(proposal => !this.session.owned.includes(proposal.id));
@@ -243,7 +248,7 @@ export class BackgroundSidebar {
     });
     const plan = buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], champions:[...this.champions.values()], itemsCatalog:this.itemsCatalog, now:this.now()});
     return {
-      version:'1.8.2', connection:live.connection, phase:live.phase, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      version:'1.9.0', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
       level:live.level ?? null, gameTime:live.gameTime ?? null, currentGold:live.currentGold ?? null, items:live.items || [],
       teams:live.teams || {status:'unavailable', ownTeam:null, allies:[], enemies:[], observedAt:live.observedAt || null},
@@ -256,7 +261,7 @@ export class BackgroundSidebar {
 
   async pollOnce() {
     const live = this.observe();
-    if (this.ocr.enabled && live.phase === 'InProgress' && this.now() - this.lastScan >= this.scanInterval) await this.scan();
+    if (this.ocr.enabled && live.phase === 'InProgress' && live.stage !== 'loading' && this.now() - this.lastScan >= this.scanInterval) await this.scan();
   }
 
   start() {

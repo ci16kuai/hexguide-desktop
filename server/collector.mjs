@@ -5,7 +5,8 @@ import {promisify} from 'node:util';
 import {requestLocalJson} from './transport.mjs';
 
 const execute = promisify(execFile);
-const PHASES = new Set(['None', 'Lobby', 'Matchmaking', 'ReadyCheck', 'ChampSelect', 'InProgress', 'Reconnect', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
+const PHASES = new Set(['None', 'Lobby', 'Matchmaking', 'ReadyCheck', 'ChampSelect', 'GameStart', 'InProgress', 'Reconnect', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
+const GAME_PHASES = new Set(['GameStart', 'InProgress', 'Reconnect']);
 const MAYHEM_QUEUES = new Set([2400, 3270]);
 const TEAMS = new Set(['ORDER', 'CHAOS']);
 const STATS = ['abilityPower', 'attackDamage', 'attackSpeed', 'attackRange', 'armor', 'magicResist', 'critChance', 'critDamage', 'abilityHaste', 'cooldownReduction', 'maxHealth', 'currentHealth', 'healthRegenRate', 'resourceMax', 'resourceValue', 'resourceRegenRate', 'lifeSteal', 'spellVamp', 'moveSpeed', 'armorPenetrationFlat', 'armorPenetrationPercent', 'magicPenetrationFlat', 'magicPenetrationPercent'];
@@ -87,10 +88,58 @@ function teamsFromPlayers(players, own, index, now) {
   return {status:'detected', ownTeam:own.team, allies:roster(own.team), enemies:roster(enemyTeam), observedAt:now.toISOString()};
 }
 
+function publicGameId(value) {
+  if (Number.isSafeInteger(value) && value > 0) return String(value);
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(value) && !/^0+$/.test(value) ? value : null;
+}
+
+function summonerId(value) {
+  if (Number.isSafeInteger(value) && value > 0) return String(value);
+  return typeof value === 'string' && /^\d{1,20}$/.test(value) && !/^0+$/.test(value) ? value.replace(/^0+/, '') : null;
+}
+
+function playerIdentity(player) {
+  return {puuid:typeof player?.puuid === 'string' && player.puuid.length > 0 && player.puuid.length <= 160 ? player.puuid : null, summonerId:summonerId(player?.summonerId)};
+}
+
+function samePlayer(player, identity) {
+  const candidate = playerIdentity(player);
+  // Either stable identifier may be absent on a loading roster, but a known
+  // conflict must never be overruled by the other field or a champion match.
+  if (candidate.puuid && identity.puuid && candidate.puuid !== identity.puuid) return false;
+  if (candidate.summonerId && identity.summonerId && candidate.summonerId !== identity.summonerId) return false;
+  return Boolean(candidate.puuid && identity.puuid && candidate.puuid === identity.puuid || candidate.summonerId && identity.summonerId && candidate.summonerId === identity.summonerId);
+}
+
+function loadingRoster(gameData, currentSummoner, index, now) {
+  const unavailable = unavailableTeams(now);
+  const teamOne = gameData?.teamOne;
+  const teamTwo = gameData?.teamTwo;
+  if (!Array.isArray(teamOne) || !Array.isArray(teamTwo) || !teamOne.length || !teamTwo.length) return {teams:unavailable};
+  const identity = playerIdentity(currentSummoner);
+  const local = [...teamOne.map(player => ({player, team:'ORDER'})), ...teamTwo.map(player => ({player, team:'CHAOS'}))].filter(({player}) => samePlayer(player, identity));
+  if (local.length !== 1) return {teams:unavailable};
+  const selections = Array.isArray(gameData.playerChampionSelections) ? gameData.playerChampionSelections : [];
+  const championFromRoster = player => {
+    if (Number.isSafeInteger(player?.championId) && player.championId > 0) return index.numbers.get(player.championId) || null;
+    const matches = selections.filter(selection => samePlayer(selection, playerIdentity(player)));
+    return matches.length === 1 ? index.numbers.get(matches[0].championId) || null : null;
+  };
+  const roster = players => players.map(player => {
+    const championId = championFromRoster(player);
+    return {championId, championName:championId ? index.labels?.get(championId) || championId : '未知英雄', level:null, items:[]};
+  });
+  const ownTeam = local[0].team;
+  return {
+    championId:championFromRoster(local[0].player),
+    teams:{status:'detected', source:'loading-roster', ownTeam, allies:roster(ownTeam === 'ORDER' ? teamOne : teamTwo), enemies:roster(ownTeam === 'ORDER' ? teamTwo : teamOne), observedAt:now.toISOString()},
+  };
+}
+
 export function emptySnapshot(now = new Date()) {
   return {
     connection: {status: 'waiting', message: '等待英雄联盟客户端或对局；本机尚未读取到游戏数据。'},
-    phase: 'None', gameId: null, championId: null, championSource: null,
+    phase: 'None', stage:'waiting', gameId: null, championId: null, championSource: null,
     level: null, gameTime: null, currentGold:null, stats: {}, items: [],
     augments: {status: 'unavailable', ids: []},
     teams:unavailableTeams(now),
@@ -129,6 +178,7 @@ export function snapshotFromLive(data, {index, augmentIndex = new Map(), lcu = n
   const championId = championFromPlayer(own, index);
   result.connection = {status: 'connected', message: championId ? '已读取本局英雄、等级、装备和属性；等待游戏中的海克斯三选一卡片。' : '已连接游戏；当前英雄尚未匹配到资料库。'};
   result.phase = 'InProgress';
+  result.stage = 'live';
   result.championId = championId;
   result.championSource = championId ? 'live-client' : null;
   result.level = numeric(data.activePlayer.level) ? data.activePlayer.level : numeric(own.level) ? own.level : null;
@@ -185,6 +235,9 @@ export class LiveCollector {
     this.failures = 0;
     this.lastDiscovery = 0;
     this.lcu = null;
+    this.lastLiveGameId = null;
+    this.hasSeenLive = false;
+    this.lastLcuPhase = null;
   }
 
   getSnapshot() { return structuredClone(this.snapshot); }
@@ -199,18 +252,43 @@ export class LiveCollector {
     const read = endpoint => this.request(`https://127.0.0.1:${this.lcu.port}${endpoint}`, options);
     try {
       const rawPhase = await read('/lol-gameflow/v1/gameflow-phase');
-      const phase = PHASES.has(rawPhase) ? rawPhase : 'None';
-      const base = {phase, gameId: null, mode: {queueId: null, isMayhem: false, known: false}};
+      const phaseKnown = PHASES.has(rawPhase);
+      const phase = phaseKnown ? rawPhase : 'None';
+      const enteredGameStart = phase === 'GameStart' && this.lastLcuPhase !== 'GameStart';
+      if (phaseKnown) this.lastLcuPhase = phase;
+      const base = {phase, stage:['GameStart','InProgress'].includes(phase) ? 'loading' : phase === 'ChampSelect' ? 'champ-select' : 'waiting', gameId: null, mode: {queueId: null, isMayhem: false, known: false}};
+      let session;
       try {
-        const session = await read('/lol-gameflow/v1/session');
+        session = await read('/lol-gameflow/v1/session');
         base.mode = detectGameMode(session?.gameData);
-        if ((phase === 'InProgress' || phase === 'Reconnect') && (numeric(session?.gameData?.gameId) || typeof session?.gameData?.gameId === 'string')) base.gameId = String(session.gameData.gameId).slice(0, 40);
+        if (GAME_PHASES.has(phase)) base.gameId = publicGameId(session?.gameData?.gameId);
       } catch { /* Queue metadata can be unavailable between gameflow phases. */ }
+      const changedGame = this.lastLiveGameId && base.gameId && base.gameId !== this.lastLiveGameId;
+      if ((phaseKnown && !GAME_PHASES.has(phase)) || enteredGameStart || changedGame) {
+        this.lastLiveGameId = null;
+        this.hasSeenLive = false;
+      }
+      // Live data can become available before LCU supplies a game ID. Bind the
+      // first later ID to that observed match instead of reopening its presets.
+      if (this.hasSeenLive) {
+        if (!this.lastLiveGameId && base.gameId) this.lastLiveGameId = base.gameId;
+        base.stage = 'waiting';
+      }
       if (phase === 'ChampSelect') {
         const select = await read('/lol-champ-select/v1/session');
         const own = (Array.isArray(select?.myTeam) ? select.myTeam : []).find(player => player.cellId === select.localPlayerCellId);
         const championId = this.index.numbers.get(own?.championId);
         if (championId) Object.assign(base, {championId, championSource: 'champ-select'});
+      }
+      // Enemy champions are public once loading begins. Never inspect or cache
+      // these rosters during champion select, and never retain player identity.
+      if (base.stage === 'loading' && base.gameId && Array.isArray(session?.gameData?.teamOne) && Array.isArray(session?.gameData?.teamTwo)) {
+        try {
+          const currentSummoner = await read('/lol-summoner/v1/current-summoner');
+          const roster = loadingRoster(session.gameData, currentSummoner, this.index, this.now());
+          base.teams = roster.teams;
+          if (roster.championId) Object.assign(base, {championId:roster.championId, championSource:'loading-screen'});
+        } catch { /* An unknown local side must stay unknown, never be guessed. */ }
       }
       return base;
     } catch {
@@ -221,17 +299,26 @@ export class LiveCollector {
 
   async pollOnce() {
     const lcu = await this.readLcu();
-    const shouldReadGame = !lcu || ['InProgress', 'Reconnect'].includes(lcu.phase);
+    const shouldReadGame = !lcu || GAME_PHASES.has(lcu.phase);
     if (shouldReadGame) {
       try {
         const data = await this.request('https://127.0.0.1:2999/liveclientdata/allgamedata', {ca: this.ca});
-        this.snapshot = snapshotFromLive(data, {index: this.index, augmentIndex: this.augmentIndex, lcu, now: this.now()});
-        this.failures = this.snapshot.connection.status === 'connected' ? 0 : this.failures + 1;
-        return this.getSnapshot();
+        const snapshot = snapshotFromLive(data, {index: this.index, augmentIndex: this.augmentIndex, lcu, now: this.now()});
+        // The live endpoint can return HTTP 200 before activePlayer is ready.
+        // That partial response must not displace a verified loading roster.
+        if (snapshot.connection.status === 'connected' || lcu?.stage !== 'loading' || lcu.teams?.status !== 'detected') {
+          this.snapshot = snapshot;
+          if (snapshot.connection.status === 'connected') {
+            this.hasSeenLive = true;
+            if (snapshot.gameId) this.lastLiveGameId = snapshot.gameId;
+          }
+          this.failures = snapshot.connection.status === 'connected' ? 0 : this.failures + 1;
+          return this.getSnapshot();
+        }
       } catch { /* A game may be starting or ending; do not expose TLS/secret details. */ }
     }
     this.snapshot = {...emptySnapshot(this.now()), ...(lcu || {})};
-    if (lcu) this.snapshot.connection = {status: 'connected', message: lcu.phase === 'ChampSelect' ? '已连接选人界面；选择英雄后会自动更新。' : lcu.phase === 'InProgress' ? '客户端显示正在游戏，等待本局数据接口响应。' : '已连接英雄联盟客户端，等待进入选人或对局。'};
+    if (lcu) this.snapshot.connection = {status: 'connected', message: lcu.phase === 'ChampSelect' ? '已连接选人界面；选择英雄后会自动更新。' : GAME_PHASES.has(lcu.phase) ? lcu.stage === 'waiting' ? '已连接本局，等待实时数据接口恢复。' : lcu.teams?.status === 'detected' ? '已读取加载页面的英雄与双方阵容，可提前查看本局推荐；实时装备将在进入游戏后更新。' : '已进入加载或对局阶段，等待确认本局英雄和双方阵容。' : '已连接英雄联盟客户端，等待进入选人或对局。'};
     this.failures++;
     return this.getSnapshot();
   }
@@ -243,7 +330,7 @@ export class LiveCollector {
       try { await this.pollOnce(); }
       catch { this.snapshot = emptySnapshot(this.now()); this.failures++; }
       if (this.stopped) return;
-      const live = this.snapshot.connection.status === 'connected' && this.snapshot.phase === 'InProgress';
+      const live = this.snapshot.connection.status === 'connected' && GAME_PHASES.has(this.snapshot.phase);
       const delay = live ? this.interval : Math.min(this.maxBackoff, this.idleInterval * Math.max(1, Math.min(3, this.failures)));
       this.timer = setTimeout(tick, delay);
       this.timer.unref?.();

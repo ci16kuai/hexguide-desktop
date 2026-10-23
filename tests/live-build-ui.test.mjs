@@ -12,8 +12,8 @@ const championMap=new Map(catalog.champions.map(c=>[c.id,c]));
 const owned=catalog.augments.filter(a=>a.id==='firebrand');
 const settle=async()=>{await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));};
 
-async function controllerHarness(){
-  let expanded=true,snapshot={connection:{status:'connected',message:'fixture'},phase:'InProgress',gameId:'ui-fixture',championId:'Ahri',championSource:'live-client',level:11,gameTime:660,stats:{abilityPower:150},items:[],augments:{status:'unavailable',ids:[]},mode:{known:true,isMayhem:true},teams:{status:'detected',ownTeam:'ORDER',allies:[],enemies:[{championId:'Soraka',level:11,items:[{id:6617,count:1}]}],observedAt:new Date().toISOString()}};
+async function controllerHarness(initial={}){
+  let expanded=true,previewOpens=0,resets=0,currentOwned=owned,snapshot={connection:{status:'connected',message:'fixture'},phase:'InProgress',gameId:'ui-fixture',championId:'Ahri',championSource:'live-client',level:11,gameTime:660,stats:{abilityPower:150},items:[],augments:{status:'unavailable',ids:[]},mode:{known:true,isMayhem:true},teams:{status:'detected',ownTeam:'ORDER',allies:[],enemies:[{championId:'Soraka',level:11,items:[{id:6617,count:1}]}],observedAt:new Date().toISOString()},...initial};
   const ticks=[],clicks=[],offers=[];
   const context=vm.createContext({buildLivePlan,shortItemEffect,location:{hash:'#live'},sessionStorage:{getItem:key=>key==='hexguide-local-session'?'fixture-token':null,setItem(){}},history:{replaceState(){}},Date,AbortSignal,console,
     setInterval:fn=>{ticks.push(fn);return ticks.length;},clearInterval(){},setTimeout,
@@ -21,9 +21,9 @@ async function controllerHarness(){
     fetch:async url=>{if(url==='./items.json')return {ok:true,json:async()=>items};if(url==='/api/live')return {ok:true,json:async()=>structuredClone(snapshot)};if(url==='/api/sidebar')return {ok:true,json:async()=>({ocr:{enabled:true,proposals:[]}})};throw Error('Unexpected fixture request '+url);}
   });
   vm.runInContext(source.replace(/^import .*;\r?\n/gm,'').replace('export function createLiveController','function createLiveController')+'\nthis.createController=createLiveController;',context);
-  const controller=context.createController({getChampion:()=>championMap.get('Ahri'),getChampionById:id=>championMap.get(id),getChampions:()=>catalog.champions,getAugments:()=>catalog.augments,getOwned:()=>owned,getRoute:()=> 'auto',getBuildExpanded:()=>expanded,getSelectedAugment:()=>owned[0],onBuildToggle:()=>{expanded=!expanded;},onGameId(){},getGameId:()=>null,onChampion(){},onNewGame(){},onOffers:ids=>offers.push(ids),renderLive(){}});
+  const controller=context.createController({getChampion:()=>championMap.get('Ahri'),getChampionById:id=>championMap.get(id),getChampions:()=>catalog.champions,getAugments:()=>catalog.augments,getOwned:()=>currentOwned,getRoute:()=> 'auto',getBuildExpanded:()=>expanded,getSelectedAugment:()=>currentOwned[0],onBuildToggle:()=>{expanded=!expanded;},onLoadingPreview(){expanded=true;previewOpens++;},onGameId(){},getGameId:()=>null,onChampion(){},onNewGame(){currentOwned=[];expanded=false;resets++;},onOffers:ids=>offers.push(ids),renderLive(){}});
   await settle();
-  return {html:()=>controller.html(),async update(value){snapshot={...snapshot,...value};ticks.forEach(fn=>fn());await settle();},async click(action){clicks.forEach(fn=>fn({target:{closest:()=>({dataset:{liveAction:action}})}}));await settle();}};
+  return {html:()=>controller.html(),get previewOpens(){return previewOpens;},get resets(){return resets;},select(id){currentOwned=catalog.augments.filter(a=>a.id===id);expanded=true;controller.confirmedSelection();},async update(value){snapshot={...snapshot,...value};ticks.forEach(fn=>fn());await settle();},async click(action){clicks.forEach(fn=>fn({target:{closest:()=>({dataset:{liveAction:action}})}}));await settle();}};
 }
 
 test('expanded build renders observed enemies, actual item icons, short effects and six future directions',async()=>{
@@ -60,4 +60,60 @@ test('live build replaces opponent items and recommendations on the next poll an
   assert.doesNotMatch(details,/class="live-item-icon"[^>]+3135\.png/);
   await h.update({connection:{status:'waiting',message:'fixture disconnected'},championId:null,championSource:null,stats:{},items:[]});
   assert.match(h.html(),/等待连接真实对局后生成本局出装/);
+});
+
+const loadingSnapshot=(gameId='loading-one')=>({phase:'GameStart',stage:'loading',gameId,championSource:'loading-screen',gameTime:null,level:null,currentGold:null,stats:{},items:[],teams:{status:'detected',source:'loading-roster',ownTeam:'ORDER',allies:[],enemies:['Soraka','Garen','Malphite','Jinx','Lux'].map(championId=>({championId,level:null,items:[]})),observedAt:new Date().toISOString()}});
+
+test('loading preview opens once per game, shows real roster and directions without stale selected augments or invented stats',async()=>{
+  const h=await controllerHarness(loadingSnapshot());
+  let html=h.html(),details=html.slice(html.indexOf('<div id="live-build-details"'));
+  assert.equal(h.previewOpens,1);
+  assert.match(html,/class="live-plan expanded loading-preview"/);
+  assert.match(html,/开局前预览/);
+  assert.equal((details.match(/class="live-enemy-avatar"/g)||[]).length,5);
+  assert.match(details,/开局出装预设/);
+  assert.match(details,/class="live-item-icon"/);
+  assert.match(details,/开局可关注的海克斯/);
+  assert.match(details,/class="live-next-icon"/);
+  assert.doesNotMatch(details,/live-build-current|0 级|等级未知|尚未读取到装备/);
+  assert.match(html,/已确认 0 个海克斯/);
+  assert.match(html,/data-ui-id="live-owned-button"[^>]*disabled/);
+  assert.match(html,/data-ui-id="live-ocr-scan"[^>]*disabled/);
+  assert.match(html,/<dt>等级<\/dt><dd>—<\/dd>/);
+  assert.match(html,/<dt>游戏时间<\/dt><dd>—<\/dd>/);
+  await h.click('build-toggle');
+  await h.update(loadingSnapshot());
+  assert.equal(h.previewOpens,1,'same loading round does not override user collapse');
+  assert.match(h.html(),/class="live-plan collapsed loading-preview"/);
+  await h.update({...loadingSnapshot('loading-two')});
+  assert.equal(h.previewOpens,2,'a different game opens its own preview');
+  assert.match(h.html(),/class="live-plan expanded loading-preview"/);
+  assert.equal(h.resets,1,'new game clears previous session before preview');
+});
+
+test('loading preview becomes live recommendations and a confirmed choice removes that augment from future directions',async()=>{
+  const h=await controllerHarness(loadingSnapshot());
+  await h.update({stage:'live',phase:'InProgress',championSource:'live-client',gameTime:8,level:3,teams:{status:'detected',source:'live-client',ownTeam:'ORDER',allies:[],enemies:[{championId:'Soraka',level:3,items:[{id:6617,count:1}]}],observedAt:new Date().toISOString()}});
+  assert.doesNotMatch(h.html(),/loading-preview|开局前预览/);
+  assert.match(h.html(),/本局装备选择/);
+  assert.doesNotMatch(h.html(),/data-ui-id="live-owned-button"[^>]*disabled/);
+  assert.match(h.html(),/class="live-enemy-items"[\s\S]+6617\.png/);
+  h.select('firebrand');
+  const html=h.html(),next=html.slice(html.indexOf('<section class="live-next-augments"'));
+  assert.match(html,/已选择「火上浇油」/);
+  assert.doesNotMatch(next,/<h4>火上浇油/);
+  await h.update({connection:{status:'waiting',message:'fixture disconnected'},stage:'waiting',championId:null,championSource:null,teams:{status:'unavailable',enemies:[]}});
+  assert.doesNotMatch(h.html(),/class="live-enemy-avatar"/);
+  assert.match(h.html(),/等待连接真实对局后生成本局出装/);
+});
+
+test('old game clock followed by a new loading screen resets only once before the first live update',async()=>{
+  const h=await controllerHarness();
+  await h.update(loadingSnapshot('next-loading-game'));
+  assert.equal(h.resets,1);
+  assert.equal(h.previewOpens,1);
+  h.select('firebrand');
+  await h.update({stage:'live',phase:'InProgress',championSource:'live-client',gameTime:20});
+  assert.equal(h.resets,1,'the previous game clock cannot clear the new game a second time');
+  assert.match(h.html(),/已选择「火上浇油」/);
 });
