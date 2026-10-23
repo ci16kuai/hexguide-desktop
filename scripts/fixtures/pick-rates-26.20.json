@@ -1,0 +1,824 @@
+{
+  "sourceUrl": "https://arammayhem.com/data/v1/26-20/augments.json",
+  "sourceSha256": "6ca5cd46fe03f35dba65a2992017f60697e9cf8d5155313f08a731df4a9cb61c",
+  "extractedAt": "2026-10-23T06:43:21.828Z",
+  "meta": {
+    "patch": "26.20",
+    "patchReleaseDate": "2026-10-07",
+    "statsDate": "2026-10-20",
+    "statsDateSource": "release",
+    "comparedTo": {
+      "patch": "26.19",
+      "patchReleaseDate": "2026-09-23",
+      "statsDate": "2026-10-06",
+      "statsDateSource": "estimated"
+    },
+    "releaseId": "website:20261021_104017:af619b3fdf81"
+  },
+  "rows": [
+    {
+      "augmentId": "transmute_prismatic",
+      "pickRate": 64.16
+    },
+    {
+      "augmentId": "recursion",
+      "pickRate": 61.04
+    },
+    {
+      "augmentId": "shrink_engine",
+      "pickRate": 56.56
+    },
+    {
+      "augmentId": "jeweled_gauntlet",
+      "pickRate": 51.58
+    },
+    {
+      "augmentId": "blunt_force",
+      "pickRate": 47.51
+    },
+    {
+      "augmentId": "adapt",
+      "pickRate": 44.96
+    },
+    {
+      "augmentId": "warlock_juicebox",
+      "pickRate": 43.94
+    },
+    {
+      "augmentId": "ethereal_weapon",
+      "pickRate": 43.54
+    },
+    {
+      "augmentId": "tank_engine",
+      "pickRate": 43.46
+    },
+    {
+      "augmentId": "purist___caster",
+      "pickRate": 42.18
+    },
+    {
+      "augmentId": "critical_missile",
+      "pickRate": 41.83
+    },
+    {
+      "augmentId": "eureka",
+      "pickRate": 40.16
+    },
+    {
+      "augmentId": "goredrink",
+      "pickRate": 40
+    },
+    {
+      "augmentId": "tooth_fairy",
+      "pickRate": 39.27
+    },
+    {
+      "augmentId": "twin_fire",
+      "pickRate": 39.27
+    },
+    {
+      "augmentId": "escape_plan",
+      "pickRate": 38.7
+    },
+    {
+      "augmentId": "dropkick",
+      "pickRate": 38.38
+    },
+    {
+      "augmentId": "combusting_interest",
+      "pickRate": 37.95
+    },
+    {
+      "augmentId": "vulnerability",
+      "pickRate": 37.92
+    },
+    {
+      "augmentId": "upgrade_infinity_edge",
+      "pickRate": 37.04
+    },
+    {
+      "augmentId": "heavy_hitter",
+      "pickRate": 36.78
+    },
+    {
+      "augmentId": "soul_siphon",
+      "pickRate": 36.1
+    },
+    {
+      "augmentId": "phenomenal_evil",
+      "pickRate": 35.65
+    },
+    {
+      "augmentId": "archmage",
+      "pickRate": 35.06
+    },
+    {
+      "augmentId": "forged_by_the_master",
+      "pickRate": 33.7
+    },
+    {
+      "augmentId": "goliath",
+      "pickRate": 33.44
+    },
+    {
+      "augmentId": "mad_scientist",
+      "pickRate": 32.77
+    },
+    {
+      "augmentId": "infinite_recursion",
+      "pickRate": 32.61
+    },
+    {
+      "augmentId": "upgrade_collector",
+      "pickRate": 32.43
+    },
+    {
+      "augmentId": "from_beginning_to_end",
+      "pickRate": 32.15
+    },
+    {
+      "augmentId": "quest_steel_your_heart",
+      "pickRate": 32.02
+    },
+    {
+      "augmentId": "deft",
+      "pickRate": 31.48
+    },
+    {
+      "augmentId": "zealot",
+      "pickRate": 30.72
+    },
+    {
+      "augmentId": "thread_the_needle",
+      "pickRate": 30.32
+    },
+    {
+      "augmentId": "witchful_thinking",
+      "pickRate": 29.5
+    },
+    {
+      "augmentId": "magic_missile",
+      "pickRate": 29.29
+    },
+    {
+      "augmentId": "scopier_weapons",
+      "pickRate": 29.2
+    },
+    {
+      "augmentId": "bread_and_butter",
+      "pickRate": 29.13
+    },
+    {
+      "augmentId": "back_to_basics",
+      "pickRate": 29.01
+    },
+    {
+      "augmentId": "dive_bomber",
+      "pickRate": 28.89
+    },
+    {
+      "augmentId": "pursuit_of_haste",
+      "pickRate": 28.85
+    },
+    {
+      "augmentId": "transmute_chaos",
+      "pickRate": 28.65
+    },
+    {
+      "augmentId": "homeguard",
+      "pickRate": 28.41
+    },
+    {
+      "augmentId": "leg_day",
+      "pickRate": 28.15
+    },
+    {
+      "augmentId": "giant_slayer",
+      "pickRate": 28.1
+    },
+    {
+      "augmentId": "mystic_punch",
+      "pickRate": 27.97
+    },
+    {
+      "augmentId": "celestial_body",
+      "pickRate": 27.47
+    },
+    {
+      "augmentId": "ice_cold",
+      "pickRate": 27.43
+    },
+    {
+      "augmentId": "dual_wield",
+      "pickRate": 26.91
+    },
+    {
+      "augmentId": "donation",
+      "pickRate": 26.87
+    },
+    {
+      "augmentId": "skilled_sniper",
+      "pickRate": 26.59
+    },
+    {
+      "augmentId": "clown_college",
+      "pickRate": 26.38
+    },
+    {
+      "augmentId": "pursuit_of_power",
+      "pickRate": 26.21
+    },
+    {
+      "augmentId": "critical_rhythm",
+      "pickRate": 24.75
+    },
+    {
+      "augmentId": "shadow_runner",
+      "pickRate": 24.59
+    },
+    {
+      "augmentId": "biggest_snowball_ever",
+      "pickRate": 24.45
+    },
+    {
+      "augmentId": "endless_decimation",
+      "pickRate": 23.71
+    },
+    {
+      "augmentId": "infernal_conduit",
+      "pickRate": 23.35
+    },
+    {
+      "augmentId": "bread_and_cheese",
+      "pickRate": 22.95
+    },
+    {
+      "augmentId": "fan_the_hammer",
+      "pickRate": 22.65
+    },
+    {
+      "augmentId": "upgrade_zhonyas",
+      "pickRate": 22.53
+    },
+    {
+      "augmentId": "get_excited!",
+      "pickRate": 22.39
+    },
+    {
+      "augmentId": "final_form",
+      "pickRate": 21.77
+    },
+    {
+      "augmentId": "marksmage",
+      "pickRate": 21.74
+    },
+    {
+      "augmentId": "erosion",
+      "pickRate": 21.69
+    },
+    {
+      "augmentId": "escapade",
+      "pickRate": 21.69
+    },
+    {
+      "augmentId": "ultimate_awakening",
+      "pickRate": 21.55
+    },
+    {
+      "augmentId": "its_killing_time",
+      "pickRate": 21.5
+    },
+    {
+      "augmentId": "ravenous_bind",
+      "pickRate": 21.28
+    },
+    {
+      "augmentId": "ocean_soul",
+      "pickRate": 20.06
+    },
+    {
+      "augmentId": "upgrade_immolate",
+      "pickRate": 20.04
+    },
+    {
+      "augmentId": "scoped_weapons",
+      "pickRate": 19.97
+    },
+    {
+      "augmentId": "bread_and_jam",
+      "pickRate": 19.79
+    },
+    {
+      "augmentId": "mind_to_matter",
+      "pickRate": 19.55
+    },
+    {
+      "augmentId": "pandorasbox",
+      "pickRate": 19.37
+    },
+    {
+      "augmentId": "ultimate_unstoppable",
+      "pickRate": 19.2
+    },
+    {
+      "augmentId": "slap_around",
+      "pickRate": 19
+    },
+    {
+      "augmentId": "tank_it_or_leave_it",
+      "pickRate": 19
+    },
+    {
+      "augmentId": "dropbear",
+      "pickRate": 18.86
+    },
+    {
+      "augmentId": "ultimate_revolution",
+      "pickRate": 18.65
+    },
+    {
+      "augmentId": "nightstalking",
+      "pickRate": 18.59
+    },
+    {
+      "augmentId": "pressure_cooker",
+      "pickRate": 18.59
+    },
+    {
+      "augmentId": "typhoon",
+      "pickRate": 18.42
+    },
+    {
+      "augmentId": "with_haste",
+      "pickRate": 18.36
+    },
+    {
+      "augmentId": "from_downtown",
+      "pickRate": 18.2
+    },
+    {
+      "augmentId": "scopiest_weapons",
+      "pickRate": 17.8
+    },
+    {
+      "augmentId": "spin_to_win",
+      "pickRate": 17.66
+    },
+    {
+      "augmentId": "siphon",
+      "pickRate": 17.51
+    },
+    {
+      "augmentId": "growth_spurt",
+      "pickRate": 17.39
+    },
+    {
+      "augmentId": "stats_on_stats!",
+      "pickRate": 16.82
+    },
+    {
+      "augmentId": "quest_wooglets_witchcap",
+      "pickRate": 16.66
+    },
+    {
+      "augmentId": "double_tap",
+      "pickRate": 16.65
+    },
+    {
+      "augmentId": "upgrade_sheen",
+      "pickRate": 16.63
+    },
+    {
+      "augmentId": "its_critical",
+      "pickRate": 15.97
+    },
+    {
+      "augmentId": "draw_your_sword",
+      "pickRate": 15.83
+    },
+    {
+      "augmentId": "infernal_soul",
+      "pickRate": 15.63
+    },
+    {
+      "augmentId": "dawnbringers_resolve",
+      "pickRate": 15.52
+    },
+    {
+      "augmentId": "quest_urfs_champion",
+      "pickRate": 15.51
+    },
+    {
+      "augmentId": "titans_resolve",
+      "pickRate": 15.45
+    },
+    {
+      "augmentId": "dashing",
+      "pickRate": 15.32
+    },
+    {
+      "augmentId": "overloaded",
+      "pickRate": 15.24
+    },
+    {
+      "augmentId": "lil_extra_help",
+      "pickRate": 14.88
+    },
+    {
+      "augmentId": "triggered_inferno",
+      "pickRate": 14.36
+    },
+    {
+      "augmentId": "hextech_soul",
+      "pickRate": 14.32
+    },
+    {
+      "augmentId": "apex_inventor",
+      "pickRate": 14.27
+    },
+    {
+      "augmentId": "firebrand",
+      "pickRate": 14
+    },
+    {
+      "augmentId": "rite_of_ascension",
+      "pickRate": 13.31
+    },
+    {
+      "augmentId": "high_roller",
+      "pickRate": 13.2
+    },
+    {
+      "augmentId": "tap_dancer",
+      "pickRate": 13.17
+    },
+    {
+      "augmentId": "snowday",
+      "pickRate": 13.14
+    },
+    {
+      "augmentId": "symphony_of_war",
+      "pickRate": 12.99
+    },
+    {
+      "augmentId": "pinball",
+      "pickRate": 12.79
+    },
+    {
+      "augmentId": "swift_and_safe",
+      "pickRate": 12.61
+    },
+    {
+      "augmentId": "juiced",
+      "pickRate": 12.42
+    },
+    {
+      "augmentId": "shrink_ray",
+      "pickRate": 12.1
+    },
+    {
+      "augmentId": "spiritual_purification",
+      "pickRate": 11.78
+    },
+    {
+      "augmentId": "overflow",
+      "pickRate": 11.75
+    },
+    {
+      "augmentId": "fey_magic",
+      "pickRate": 11.67
+    },
+    {
+      "augmentId": "cant_touch_this",
+      "pickRate": 11.61
+    },
+    {
+      "augmentId": "divine_intervention",
+      "pickRate": 11.11
+    },
+    {
+      "augmentId": "big_brain",
+      "pickRate": 11.06
+    },
+    {
+      "augmentId": "master_of_duality",
+      "pickRate": 11
+    },
+    {
+      "augmentId": "blade_waltz",
+      "pickRate": 10.52
+    },
+    {
+      "augmentId": "crit_n_cast",
+      "pickRate": 10.41
+    },
+    {
+      "augmentId": "outlaws_grit",
+      "pickRate": 10.33
+    },
+    {
+      "augmentId": "stay_resolute",
+      "pickRate": 10.33
+    },
+    {
+      "augmentId": "kill_secured",
+      "pickRate": 10.15
+    },
+    {
+      "augmentId": "yowch_my_coins",
+      "pickRate": 10.11
+    },
+    {
+      "augmentId": "soul_eater",
+      "pickRate": 10.04
+    },
+    {
+      "augmentId": "bonk",
+      "pickRate": 10.03
+    },
+    {
+      "augmentId": "firefox",
+      "pickRate": 9.93
+    },
+    {
+      "augmentId": "light_em_up!",
+      "pickRate": 9.48
+    },
+    {
+      "augmentId": "quickstep",
+      "pickRate": 9.47
+    },
+    {
+      "augmentId": "snowblast",
+      "pickRate": 9.24
+    },
+    {
+      "augmentId": "porcupine",
+      "pickRate": 9.1
+    },
+    {
+      "augmentId": "double_defense",
+      "pickRate": 9.02
+    },
+    {
+      "augmentId": "void_immolation",
+      "pickRate": 9
+    },
+    {
+      "augmentId": "circle_of_death",
+      "pickRate": 8.87
+    },
+    {
+      "augmentId": "omni_soul",
+      "pickRate": 8.73
+    },
+    {
+      "augmentId": "stats!",
+      "pickRate": 8.57
+    },
+    {
+      "augmentId": "cruelty",
+      "pickRate": 8.56
+    },
+    {
+      "augmentId": "spell_split",
+      "pickRate": 8.47
+    },
+    {
+      "augmentId": "trusty_weapon",
+      "pickRate": 8.43
+    },
+    {
+      "augmentId": "its_go_time",
+      "pickRate": 8.4
+    },
+    {
+      "augmentId": "ominous_pact",
+      "pickRate": 8.4
+    },
+    {
+      "augmentId": "stackosaurusrex",
+      "pickRate": 8.33
+    },
+    {
+      "augmentId": "courage_of_the_colossus",
+      "pickRate": 8.29
+    },
+    {
+      "augmentId": "shark_tempest",
+      "pickRate": 8.29
+    },
+    {
+      "augmentId": "stats_on_stats_on_stats!",
+      "pickRate": 7.4
+    },
+    {
+      "augmentId": "echo_cast",
+      "pickRate": 7.39
+    },
+    {
+      "augmentId": "en_passant",
+      "pickRate": 7.38
+    },
+    {
+      "augmentId": "holy_snowball",
+      "pickRate": 7.38
+    },
+    {
+      "augmentId": "dont_change_the_channel",
+      "pickRate": 7.37
+    },
+    {
+      "augmentId": "chain_reaction",
+      "pickRate": 7.3
+    },
+    {
+      "augmentId": "nature_is_healing",
+      "pickRate": 7.17
+    },
+    {
+      "augmentId": "dont_blink",
+      "pickRate": 6.96
+    },
+    {
+      "augmentId": "multishot",
+      "pickRate": 6.72
+    },
+    {
+      "augmentId": "shark_bait",
+      "pickRate": 6.59
+    },
+    {
+      "augmentId": "goldrend",
+      "pickRate": 6.53
+    },
+    {
+      "augmentId": "minionmancer",
+      "pickRate": 6.28
+    },
+    {
+      "augmentId": "our_healing",
+      "pickRate": 6.26
+    },
+    {
+      "augmentId": "impassable",
+      "pickRate": 6.1
+    },
+    {
+      "augmentId": "hellbent",
+      "pickRate": 5.77
+    },
+    {
+      "augmentId": "adaptive_ward",
+      "pickRate": 5.74
+    },
+    {
+      "augmentId": "tripleshot",
+      "pickRate": 5.52
+    },
+    {
+      "augmentId": "first_aid_kit",
+      "pickRate": 5.5
+    },
+    {
+      "augmentId": "stuck_in_here_with_me",
+      "pickRate": 5.3
+    },
+    {
+      "augmentId": "terraind",
+      "pickRate": 5.26
+    },
+    {
+      "augmentId": "pin_cushion",
+      "pickRate": 4.97
+    },
+    {
+      "augmentId": "sonic_boom",
+      "pickRate": 4.76
+    },
+    {
+      "augmentId": "hand_of_baron",
+      "pickRate": 4.54
+    },
+    {
+      "augmentId": "glass_cannon",
+      "pickRate": 4.45
+    },
+    {
+      "augmentId": "mountainsoul",
+      "pickRate": 4.26
+    },
+    {
+      "augmentId": "sonata",
+      "pickRate": 4.02
+    },
+    {
+      "augmentId": "surge_field",
+      "pickRate": 3.73
+    },
+    {
+      "augmentId": "pat_on_the_back",
+      "pickRate": 3.71
+    },
+    {
+      "augmentId": "king_me",
+      "pickRate": 3.69
+    },
+    {
+      "augmentId": "searing_dawn",
+      "pickRate": 3.67
+    },
+    {
+      "augmentId": "all_for_you",
+      "pickRate": 3.6
+    },
+    {
+      "augmentId": "rabble_rousing",
+      "pickRate": 3.6
+    },
+    {
+      "augmentId": "critical_healing",
+      "pickRate": 3.55
+    },
+    {
+      "augmentId": "overextender",
+      "pickRate": 3.53
+    },
+    {
+      "augmentId": "windspeakers_blessing",
+      "pickRate": 3.45
+    },
+    {
+      "augmentId": "spirit_bomb",
+      "pickRate": 3.36
+    },
+    {
+      "augmentId": "mighty_shield",
+      "pickRate": 3.34
+    },
+    {
+      "augmentId": "ok_boomerang",
+      "pickRate": 3.29
+    },
+    {
+      "augmentId": "poltergeist",
+      "pickRate": 3.29
+    },
+    {
+      "augmentId": "squishy_slappy_grab",
+      "pickRate": 3.2
+    },
+    {
+      "augmentId": "spin_me_right_round",
+      "pickRate": 3.18
+    },
+    {
+      "augmentId": "wee_woo_wee_woo",
+      "pickRate": 2.84
+    },
+    {
+      "augmentId": "empowered_by_the_faithful",
+      "pickRate": 2.76
+    },
+    {
+      "augmentId": "prom_queen",
+      "pickRate": 2.6
+    },
+    {
+      "augmentId": "protein_shake",
+      "pickRate": 2.31
+    },
+    {
+      "augmentId": "terror",
+      "pickRate": 2.31
+    },
+    {
+      "augmentId": "mercys_strike",
+      "pickRate": 2.05
+    },
+    {
+      "augmentId": "hide_on_bush",
+      "pickRate": 1.78
+    },
+    {
+      "augmentId": "dimension_shift",
+      "pickRate": 1.63
+    },
+    {
+      "augmentId": "empyrean_promise",
+      "pickRate": 1.3
+    },
+    {
+      "augmentId": "poro_stampede",
+      "pickRate": 1.17
+    },
+    {
+      "augmentId": "flashbang",
+      "pickRate": 0.71
+    },
+    {
+      "augmentId": "flash_2",
+      "pickRate": 0.67
+    }
+  ]
+}

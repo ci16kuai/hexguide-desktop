@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b1420">
+  <meta name="description" content="海克斯大乱斗中文选择助手：查海克斯、找英雄适配、探索联动，比较本轮三个选项。推荐有理由，资料有出处。">
+  <title>海克斯指南 · 桌面实战助手</title>
+  <link rel="icon" href="./assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css?v=4-0-2621"><link rel="stylesheet" href="./live.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+<header class="topbar">
+  <a class="brand" href="#library" aria-label="海克斯指南首页"><span class="brand-mark">✧</span><span>海克斯<span class="brand-light">指南</span><small>大乱斗选择助手</small></span></a>
+  <nav class="main-nav" aria-label="主要功能">
+    <a href="#live" data-nav="live"><span>◉</span>实战助手</a>
+    <a href="#library" data-nav="library"><span>◈</span>海克斯库</a>
+    <a href="#champions" data-nav="champions"><span>♜</span>英雄适配</a>
+    <a href="#synergy" data-nav="synergy"><span>⌘</span>联动查询</a>
+    <a href="#compare" data-nav="compare"><span>⚡</span>三选一推荐</a>
+  </nav>
+  <button class="source-button" data-action="sources"><span class="status-dot"></span><span id="version-label">资料载入中</span><span class="source-info">ⓘ</span></button>
+</header>
+<main id="main" tabindex="-1">
+  <div id="loading" class="loading"><span class="loading-rune">✧</span><h1>正在展开海克斯图鉴</h1><p>载入英雄与海克斯资料…</p></div>
+  <div id="app" hidden></div>
+</main>
+<footer class="footer"><span class="footer-brand">✧ 海克斯指南</span><span>每次选择，都有思路。</span><button data-action="sources">数据来源与推荐说明</button><small>独立玩家工具，非 Riot Games 官方产品。游戏素材归各自权利人所有。</small></footer>
+<dialog id="detail-dialog" class="detail-dialog"><div id="detail-content"></div></dialog>
+<dialog id="picker-dialog" class="picker-dialog"><div class="dialog-head"><div><span class="eyebrow">本局选择</span><h2 id="picker-title">选择海克斯</h2></div><button class="icon-button" data-action="close-picker" aria-label="关闭选择窗口">✕</button></div><label class="search-field picker-search"><span>⌕</span><input id="picker-search" type="search" placeholder="搜索名称、昵称或效果" aria-label="搜索选择项" autocomplete="off"></label><div id="picker-list" class="picker-list"></div></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="./app.js?v=4-0-2621"></script>
+<noscript><p class="empty">请启用 JavaScript，以使用搜索和推荐功能。</p></noscript>
+</body></html>

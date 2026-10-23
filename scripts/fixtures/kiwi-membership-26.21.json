@@ -1,0 +1,1256 @@
+{
+  "sourceUrl": "https://raw.communitydragon.org/16.21/game/maps/modespecificdata/kiwi.bin.json",
+  "gamePatch": "26.21",
+  "sourceVersion": "16.21",
+  "mode": "KIWI",
+  "definitionGroup": "{51c6c2b4}",
+  "sourceSha256": "e1ed4bfa49ae574f9ea27e9261587e363f2ac3b0f2299a78b5ca42e518053351",
+  "extractedAt": "2026-10-23T06:43:21.825Z",
+  "entries": [
+    {
+      "sourceGameId": "ARAM_BigBrain",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_BigBrain",
+      "gameDataId": 1180
+    },
+    {
+      "sourceGameId": "ARAM_AllForYou",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_AllForYou",
+      "gameDataId": 1141
+    },
+    {
+      "sourceGameId": "ARAM_ApexInventor",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ApexInventor",
+      "gameDataId": 1002
+    },
+    {
+      "sourceGameId": "ARAM_BacktoBasics",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_BacktoBasics",
+      "gameDataId": 1004
+    },
+    {
+      "sourceGameId": "ARAM_BluntForce",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_BluntForce",
+      "gameDataId": 1007
+    },
+    {
+      "sourceGameId": "ARAM_BreadAndButter",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_BreadAndButter",
+      "gameDataId": 1103
+    },
+    {
+      "sourceGameId": "ARAM_BreadAndCheese",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_BreadAndCheese",
+      "gameDataId": 1151
+    },
+    {
+      "sourceGameId": "ARAM_BreadAndJam",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_BreadAndJam",
+      "gameDataId": 1150
+    },
+    {
+      "sourceGameId": "ARAM_CantTouchThis",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_CantTouchThis",
+      "gameDataId": 1011
+    },
+    {
+      "sourceGameId": "ARAM_CelestialBody",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_CelestialBody",
+      "gameDataId": 1013
+    },
+    {
+      "sourceGameId": "ARAM_CircleofDeath",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_CircleofDeath",
+      "gameDataId": 1015
+    },
+    {
+      "sourceGameId": "ARAM_CourageoftheColossus",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_CourageoftheColossus",
+      "gameDataId": 1018
+    },
+    {
+      "sourceGameId": "ARAM_CriticalHealing",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_CriticalHealing",
+      "gameDataId": 1118
+    },
+    {
+      "sourceGameId": "ARAM_Dashing",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Dashing",
+      "gameDataId": 1019
+    },
+    {
+      "sourceGameId": "ARAM_DawnbringersResolve",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_DawnbringersResolve",
+      "gameDataId": 1020
+    },
+    {
+      "sourceGameId": "ARAM_Deft",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Deft",
+      "gameDataId": 1022
+    },
+    {
+      "sourceGameId": "ARAM_DiveBomber",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_DiveBomber",
+      "gameDataId": 1025
+    },
+    {
+      "sourceGameId": "ARAM_DontBlink",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_DontBlink",
+      "gameDataId": 1026
+    },
+    {
+      "sourceGameId": "ARAM_EtherealWeapon",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_EtherealWeapon",
+      "gameDataId": 1029
+    },
+    {
+      "sourceGameId": "ARAM_Eureka",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Eureka",
+      "gameDataId": 1030
+    },
+    {
+      "sourceGameId": "ARAM_Firebrand",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Firebrand",
+      "gameDataId": 1036
+    },
+    {
+      "sourceGameId": "ARAM_FirstAidKit",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_FirstAidKit",
+      "gameDataId": 1037
+    },
+    {
+      "sourceGameId": "ARAM_Flashy",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Flashy",
+      "gameDataId": 1116
+    },
+    {
+      "sourceGameId": "ARAM_GetExcited",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_GetExcited",
+      "gameDataId": 1322
+    },
+    {
+      "sourceGameId": "ARAM_Goliath",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Goliath",
+      "gameDataId": 1041
+    },
+    {
+      "sourceGameId": "ARAM_Goredrink",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Goredrink",
+      "gameDataId": 1138
+    },
+    {
+      "sourceGameId": "ARAM_HeavyHitter",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_HeavyHitter",
+      "gameDataId": 1181
+    },
+    {
+      "sourceGameId": "ARAM_IceCold",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_IceCold",
+      "gameDataId": 1044
+    },
+    {
+      "sourceGameId": "ARAM_InfernalConduit",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_InfernalConduit",
+      "gameDataId": 1045
+    },
+    {
+      "sourceGameId": "ARAM_InfernalSoul",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_InfernalSoul",
+      "gameDataId": 1046
+    },
+    {
+      "sourceGameId": "ARAM_ItsCritical",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ItsCritical",
+      "gameDataId": 1047
+    },
+    {
+      "sourceGameId": "ARAM_JeweledGauntlet",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_JeweledGauntlet",
+      "gameDataId": 1048
+    },
+    {
+      "sourceGameId": "ARAM_LegDay",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_LegDay",
+      "gameDataId": 1305
+    },
+    {
+      "sourceGameId": "ARAM_MadScientist",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_MadScientist",
+      "gameDataId": 1053
+    },
+    {
+      "sourceGameId": "ARAM_Marksmage",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Marksmage",
+      "gameDataId": 1129
+    },
+    {
+      "sourceGameId": "ARAM_MasterofDuality",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_MasterofDuality",
+      "gameDataId": 1054
+    },
+    {
+      "sourceGameId": "ARAM_MindtoMatter",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_MindtoMatter",
+      "gameDataId": 1056
+    },
+    {
+      "sourceGameId": "ARAM_Minionmancer",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Minionmancer",
+      "gameDataId": 1104
+    },
+    {
+      "sourceGameId": "ARAM_MountainSoul",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_MountainSoul",
+      "gameDataId": 1057
+    },
+    {
+      "sourceGameId": "ARAM_MysticPunch",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_MysticPunch",
+      "gameDataId": 1058
+    },
+    {
+      "sourceGameId": "ARAM_OceanSoul",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_OceanSoul",
+      "gameDataId": 1060
+    },
+    {
+      "sourceGameId": "ARAM_OmniSoul",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_OmniSoul",
+      "gameDataId": 1062
+    },
+    {
+      "sourceGameId": "ARAM_OutlawsGrit",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_OutlawsGrit",
+      "gameDataId": 1063
+    },
+    {
+      "sourceGameId": "ARAM_Overflow",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Overflow",
+      "gameDataId": 1311
+    },
+    {
+      "sourceGameId": "ARAM_Perseverance",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Perseverance",
+      "gameDataId": 1064
+    },
+    {
+      "sourceGameId": "ARAM_ProteinShake",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ProteinShake",
+      "gameDataId": 1324
+    },
+    {
+      "sourceGameId": "ARAM_Quest_UrfsChampion",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Quest_UrfsChampion",
+      "gameDataId": 1154
+    },
+    {
+      "sourceGameId": "ARAM_Quest_WoogletsWitchcap",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Quest_WoogletsWitchcap",
+      "gameDataId": 1156
+    },
+    {
+      "sourceGameId": "ARAM_RabbleRousing",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_RabbleRousing",
+      "gameDataId": 1067
+    },
+    {
+      "sourceGameId": "ARAM_Recursion",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Recursion",
+      "gameDataId": 1068
+    },
+    {
+      "sourceGameId": "ARAM_ScopedWeapons",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ScopedWeapons",
+      "gameDataId": 1170
+    },
+    {
+      "sourceGameId": "ARAM_ScopierWeapons",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ScopierWeapons",
+      "gameDataId": 1071
+    },
+    {
+      "sourceGameId": "ARAM_ScopiestWeapons",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ScopiestWeapons",
+      "gameDataId": 1115
+    },
+    {
+      "sourceGameId": "ARAM_SkilledSniper",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_SkilledSniper",
+      "gameDataId": 1113
+    },
+    {
+      "sourceGameId": "ARAM_SlapAround",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_SlapAround",
+      "gameDataId": 1136
+    },
+    {
+      "sourceGameId": "ARAM_SonicBoom",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_SonicBoom",
+      "gameDataId": 1076
+    },
+    {
+      "sourceGameId": "ARAM_SoulSiphon",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_SoulSiphon",
+      "gameDataId": 1077
+    },
+    {
+      "sourceGameId": "ARAM_SpinToWin",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_SpinToWin",
+      "gameDataId": 1214
+    },
+    {
+      "sourceGameId": "ARAM_TankEngine",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_TankEngine",
+      "gameDataId": 1353
+    },
+    {
+      "sourceGameId": "ARAM_TankItOrLeaveIt",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_TankItOrLeaveIt",
+      "gameDataId": 1080
+    },
+    {
+      "sourceGameId": "ARAM_TapDancer",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_TapDancer",
+      "gameDataId": 1081
+    },
+    {
+      "sourceGameId": "ARAM_ThreadtheNeedle",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ThreadtheNeedle",
+      "gameDataId": 1084
+    },
+    {
+      "sourceGameId": "ARAM_Upgrade_Collector",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Upgrade_Collector",
+      "gameDataId": 1320
+    },
+    {
+      "sourceGameId": "ARAM_Upgrade_IE",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Upgrade_IE",
+      "gameDataId": 1336
+    },
+    {
+      "sourceGameId": "ARAM_Upgrade_Immolate",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Upgrade_Immolate",
+      "gameDataId": 1319
+    },
+    {
+      "sourceGameId": "ARAM_Upgrade_ZH",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Upgrade_ZH",
+      "gameDataId": 1318
+    },
+    {
+      "sourceGameId": "ARAM_Vulnerability",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Vulnerability",
+      "gameDataId": 1092
+    },
+    {
+      "sourceGameId": "ARAM_WitchfulThinking",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_WitchfulThinking",
+      "gameDataId": 1097
+    },
+    {
+      "sourceGameId": "ARAM_WithHaste",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_WithHaste",
+      "gameDataId": 1098
+    },
+    {
+      "sourceGameId": "Nightstalking",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Nightstalking",
+      "gameDataId": 1326
+    },
+    {
+      "sourceGameId": "ARAM_Erosion",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Erosion",
+      "gameDataId": 1028
+    },
+    {
+      "sourceGameId": "VeilOfWarding",
+      "sourcePath": "Maps/ModeSpecificData/Augments/VeilOfWarding",
+      "gameDataId": 1034
+    },
+    {
+      "sourceGameId": "ARAM_ItsKillingTime",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ItsKillingTime",
+      "gameDataId": 1211
+    },
+    {
+      "sourceGameId": "ARAM_Homeguard",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Homeguard",
+      "gameDataId": 1105
+    },
+    {
+      "sourceGameId": "ARAM_LightemUp",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_LightemUp",
+      "gameDataId": 1051
+    },
+    {
+      "sourceGameId": "ARAM_SearingDawn",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_SearingDawn",
+      "gameDataId": 1072
+    },
+    {
+      "sourceGameId": "ARAM_ShadowRunner",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ShadowRunner",
+      "gameDataId": 1073
+    },
+    {
+      "sourceGameId": "Adamant",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Adamant",
+      "gameDataId": 1327
+    },
+    {
+      "sourceGameId": "ARAM_Typhoon",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Typhoon",
+      "gameDataId": 1087
+    },
+    {
+      "sourceGameId": "ARAM_WindspeakersBlessing",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_WindspeakersBlessing",
+      "gameDataId": 1095
+    },
+    {
+      "sourceGameId": "ARAM_UltimateUnstoppable",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_UltimateUnstoppable",
+      "gameDataId": 1112
+    },
+    {
+      "sourceGameId": "ARAM_DivineIntervention",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_DivineIntervention",
+      "gameDataId": 1301
+    },
+    {
+      "sourceGameId": "ARAM_DrawYourSword",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_DrawYourSword",
+      "gameDataId": 1134
+    },
+    {
+      "sourceGameId": "ARAM_DualWield",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_DualWield",
+      "gameDataId": 1225
+    },
+    {
+      "sourceGameId": "ARAM_FeyMagic",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_FeyMagic",
+      "gameDataId": 1194
+    },
+    {
+      "sourceGameId": "ARAM_Flashbang",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Flashbang",
+      "gameDataId": 1187
+    },
+    {
+      "sourceGameId": "ARAM_UltimateRevolution",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_UltimateRevolution",
+      "gameDataId": 1088
+    },
+    {
+      "sourceGameId": "ARAM_MagicMissile",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_MagicMissile",
+      "gameDataId": 1133
+    },
+    {
+      "sourceGameId": "ARAM_OkBoomerang",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_OkBoomerang",
+      "gameDataId": 1061
+    },
+    {
+      "sourceGameId": "ARAM_QuantumComputing",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_QuantumComputing",
+      "gameDataId": 1066
+    },
+    {
+      "sourceGameId": "ARAM_FromBeginningToEnd",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_FromBeginningToEnd",
+      "gameDataId": 1038
+    },
+    {
+      "sourceGameId": "ARAM_Impassable",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Impassable",
+      "gameDataId": 1149
+    },
+    {
+      "sourceGameId": "ARAM_SymphonyofWar",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_SymphonyofWar",
+      "gameDataId": 1079
+    },
+    {
+      "sourceGameId": "OminousPact",
+      "sourcePath": "Maps/ModeSpecificData/Augments/OminousPact",
+      "gameDataId": 1332
+    },
+    {
+      "sourceGameId": "CriticalRhythm",
+      "sourcePath": "Maps/ModeSpecificData/Augments/CriticalRhythm",
+      "gameDataId": 1328
+    },
+    {
+      "sourceGameId": "EscapePlan",
+      "sourcePath": "Maps/ModeSpecificData/Augments/EscapePlan",
+      "gameDataId": 1333
+    },
+    {
+      "sourceGameId": "GlassCannon",
+      "sourcePath": "Maps/ModeSpecificData/Augments/GlassCannon",
+      "gameDataId": 1325
+    },
+    {
+      "sourceGameId": "ARAM_Quest_SteelYourHeart",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Quest_SteelYourHeart",
+      "gameDataId": 1152
+    },
+    {
+      "sourceGameId": "SnowballUpgrade",
+      "sourcePath": "Maps/ModeSpecificData/Augments/SnowballUpgrade",
+      "gameDataId": 1334
+    },
+    {
+      "sourceGameId": "BiggestSnowballEver",
+      "sourcePath": "Maps/ModeSpecificData/Augments/BiggestSnowballEver",
+      "gameDataId": 1329
+    },
+    {
+      "sourceGameId": "KingMe",
+      "sourcePath": "Maps/ModeSpecificData/Augments/KingMe",
+      "gameDataId": 1337
+    },
+    {
+      "sourceGameId": "Goldrend",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Goldrend",
+      "gameDataId": 1335
+    },
+    {
+      "sourceGameId": "ARAM_ADAPt",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ADAPt",
+      "gameDataId": 1205
+    },
+    {
+      "sourceGameId": "ARAM_escAPADe",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_escAPADe",
+      "gameDataId": 1206
+    },
+    {
+      "sourceGameId": "EmpyreanPromise",
+      "sourcePath": "Maps/ModeSpecificData/Augments/EmpyreanPromise",
+      "gameDataId": 1331
+    },
+    {
+      "sourceGameId": "ARAM_GiantSlayer",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_GiantSlayer",
+      "gameDataId": 1195
+    },
+    {
+      "sourceGameId": "ARAM_Cruelty",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Cruelty",
+      "gameDataId": 1323
+    },
+    {
+      "sourceGameId": "Quest_Sneakerhead",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Quest_Sneakerhead",
+      "gameDataId": 1343
+    },
+    {
+      "sourceGameId": "ARAM_TransmutePrismatic",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_TransmutePrismatic",
+      "gameDataId": 1238
+    },
+    {
+      "sourceGameId": "ARAM_TransmuteChaos",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_TransmuteChaos",
+      "gameDataId": 1243
+    },
+    {
+      "sourceGameId": "FinalForm",
+      "sourcePath": "Maps/ModeSpecificData/Augments/FinalForm",
+      "gameDataId": 1344
+    },
+    {
+      "sourceGameId": "Poltergeist",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Poltergeist",
+      "gameDataId": 1347
+    },
+    {
+      "sourceGameId": "Flash2",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Flash2",
+      "gameDataId": 1348
+    },
+    {
+      "sourceGameId": "ARAM_Upgrade_Sheen",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Upgrade_Sheen",
+      "gameDataId": 1996
+    },
+    {
+      "sourceGameId": "UltimateAwakening",
+      "sourcePath": "Maps/ModeSpecificData/Augments/UltimateAwakening",
+      "gameDataId": 1349
+    },
+    {
+      "sourceGameId": "MightyShield",
+      "sourcePath": "Maps/ModeSpecificData/Augments/MightyShield",
+      "gameDataId": 1314
+    },
+    {
+      "sourceGameId": "SwiftAndSafe",
+      "sourcePath": "Maps/ModeSpecificData/Augments/SwiftAndSafe",
+      "gameDataId": 1315
+    },
+    {
+      "sourceGameId": "Vampirism",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Vampirism",
+      "gameDataId": 1346
+    },
+    {
+      "sourceGameId": "ARAM_Earthwake",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Earthwake",
+      "gameDataId": 1027
+    },
+    {
+      "sourceGameId": "ARAM_ShrinkRay",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ShrinkRay",
+      "gameDataId": 1074
+    },
+    {
+      "sourceGameId": "ARAM_StatsOnStatsOnStats",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_StatsOnStatsOnStats",
+      "gameDataId": 1402
+    },
+    {
+      "sourceGameId": "ARAM_PandorasBox",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_PandorasBox",
+      "gameDataId": 12317
+    },
+    {
+      "sourceGameId": "PinballSnowball",
+      "sourcePath": "Maps/ModeSpecificData/Augments/PinballSnowball",
+      "gameDataId": 1358
+    },
+    {
+      "sourceGameId": "ARAM_Quest_VoidImmolation",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Quest_VoidImmolation",
+      "gameDataId": 1361
+    },
+    {
+      "sourceGameId": "ARAM_StatsOnStats",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_StatsOnStats",
+      "gameDataId": 1403
+    },
+    {
+      "sourceGameId": "InfiniteRecursion",
+      "sourcePath": "Maps/ModeSpecificData/Augments/InfiniteRecursion",
+      "gameDataId": 1388
+    },
+    {
+      "sourceGameId": "ARAM_Stats",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Stats",
+      "gameDataId": 1404
+    },
+    {
+      "sourceGameId": "Donation",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Donation",
+      "gameDataId": 1384
+    },
+    {
+      "sourceGameId": "ShrinkEngine",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ShrinkEngine",
+      "gameDataId": 1373
+    },
+    {
+      "sourceGameId": "ARAM_BladeWaltz",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_BladeWaltz",
+      "gameDataId": 1006
+    },
+    {
+      "sourceGameId": "YouSpinMeRightRound",
+      "sourcePath": "Maps/ModeSpecificData/Augments/YouSpinMeRightRound",
+      "gameDataId": 1386
+    },
+    {
+      "sourceGameId": "SoulEater",
+      "sourcePath": "Maps/ModeSpecificData/Augments/SoulEater",
+      "gameDataId": 1375
+    },
+    {
+      "sourceGameId": "GrowthSpurt",
+      "sourcePath": "Maps/ModeSpecificData/Augments/GrowthSpurt",
+      "gameDataId": 1401
+    },
+    {
+      "sourceGameId": "ARAM_PhenomenalEvil",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_PhenomenalEvil",
+      "gameDataId": 1390
+    },
+    {
+      "sourceGameId": "GoldenSnowball",
+      "sourcePath": "Maps/ModeSpecificData/Augments/GoldenSnowball",
+      "gameDataId": 1392
+    },
+    {
+      "sourceGameId": "ARAM_StuckInHereWithMe",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_StuckInHereWithMe",
+      "gameDataId": 1413
+    },
+    {
+      "sourceGameId": "ARAM_EmpoweredByTheFaithful",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_EmpoweredByTheFaithful",
+      "gameDataId": 2004
+    },
+    {
+      "sourceGameId": "Twinfire",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Twinfire",
+      "gameDataId": 1415
+    },
+    {
+      "sourceGameId": "HextechSoul",
+      "sourcePath": "Maps/ModeSpecificData/Augments/HextechSoul",
+      "gameDataId": 1416
+    },
+    {
+      "sourceGameId": "ARAM_InfernoTriggered",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_InfernoTriggered",
+      "gameDataId": 2005
+    },
+    {
+      "sourceGameId": "ARAM_TransmuteGold",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_TransmuteGold",
+      "gameDataId": 1237
+    },
+    {
+      "sourceGameId": "HandOfBaron",
+      "sourcePath": "Maps/ModeSpecificData/Augments/HandOfBaron",
+      "gameDataId": 1389
+    },
+    {
+      "sourceGameId": "Sonata",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Sonata",
+      "gameDataId": 1420
+    },
+    {
+      "sourceGameId": "PromQueen",
+      "sourcePath": "Maps/ModeSpecificData/Augments/PromQueen",
+      "gameDataId": 1421
+    },
+    {
+      "sourceGameId": "KillSecured",
+      "sourcePath": "Maps/ModeSpecificData/Augments/KillSecured",
+      "gameDataId": 2026
+    },
+    {
+      "sourceGameId": "ARAM_Firefox",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Firefox",
+      "gameDataId": 1308
+    },
+    {
+      "sourceGameId": "ARAM_LittleDevil",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_LittleDevil",
+      "gameDataId": 2007
+    },
+    {
+      "sourceGameId": "ARAM_Zealot",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Zealot",
+      "gameDataId": 2009
+    },
+    {
+      "sourceGameId": "ARAM_Purist_Caster",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Purist_Caster",
+      "gameDataId": 2018
+    },
+    {
+      "sourceGameId": "ARAM_DoubleTap",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_DoubleTap",
+      "gameDataId": 2010
+    },
+    {
+      "sourceGameId": "ARAM_Juiced",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Juiced",
+      "gameDataId": 2016
+    },
+    {
+      "sourceGameId": "Upgrade_SwordOfBlossom",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Upgrade_SwordOfBlossom",
+      "gameDataId": 1379
+    },
+    {
+      "sourceGameId": "FishBait",
+      "sourcePath": "Maps/ModeSpecificData/Augments/FishBait",
+      "gameDataId": 2032
+    },
+    {
+      "sourceGameId": "SharkTempest",
+      "sourcePath": "Maps/ModeSpecificData/Augments/SharkTempest",
+      "gameDataId": 2034
+    },
+    {
+      "sourceGameId": "NatureIsHealing",
+      "sourcePath": "Maps/ModeSpecificData/Augments/NatureIsHealing",
+      "gameDataId": 2043
+    },
+    {
+      "sourceGameId": "SpellVolley",
+      "sourcePath": "Maps/ModeSpecificData/Augments/SpellVolley",
+      "gameDataId": 2054
+    },
+    {
+      "sourceGameId": "ARAM_Multishot",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Multishot",
+      "gameDataId": 2055
+    },
+    {
+      "sourceGameId": "ARAM_Terror",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Terror",
+      "gameDataId": 2065
+    },
+    {
+      "sourceGameId": "ARAM_Quickstep",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Quickstep",
+      "gameDataId": 2064
+    },
+    {
+      "sourceGameId": "Missile_Split",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Missile_Split",
+      "gameDataId": 2072
+    },
+    {
+      "sourceGameId": "ARAM_SustainingStrike",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_SustainingStrike",
+      "gameDataId": 2073
+    },
+    {
+      "sourceGameId": "TitansPulse",
+      "sourcePath": "Maps/ModeSpecificData/Augments/TitansPulse",
+      "gameDataId": 2076
+    },
+    {
+      "sourceGameId": "ChainReaction",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ChainReaction",
+      "gameDataId": 2078
+    },
+    {
+      "sourceGameId": "DarkWind",
+      "sourcePath": "Maps/ModeSpecificData/Augments/DarkWind",
+      "gameDataId": 2077
+    },
+    {
+      "sourceGameId": "BurstingTeeth",
+      "sourcePath": "Maps/ModeSpecificData/Augments/BurstingTeeth",
+      "gameDataId": 2083
+    },
+    {
+      "sourceGameId": "ARAM_ImTheJuggernaut",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ImTheJuggernaut",
+      "gameDataId": 1001
+    },
+    {
+      "sourceGameId": "ARAM_Snowday",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Snowday",
+      "gameDataId": 2088
+    },
+    {
+      "sourceGameId": "Ability_SelfAOE_DoubleCast",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Ability_SelfAOE_DoubleCast",
+      "gameDataId": 2062
+    },
+    {
+      "sourceGameId": "EndlessDecimation",
+      "sourcePath": "Maps/ModeSpecificData/Augments/EndlessDecimation",
+      "gameDataId": 2091
+    },
+    {
+      "sourceGameId": "ARAM_WeeWooWeeWoo",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_WeeWooWeeWoo",
+      "gameDataId": 1005
+    },
+    {
+      "sourceGameId": "ARAM_Archmage",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Archmage",
+      "gameDataId": 2087
+    },
+    {
+      "sourceGameId": "ARAM_StackosaurusRex",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_StackosaurusRex",
+      "gameDataId": 1204
+    },
+    {
+      "sourceGameId": "LittleExtraHelp",
+      "sourcePath": "Maps/ModeSpecificData/Augments/LittleExtraHelp",
+      "gameDataId": 2096
+    },
+    {
+      "sourceGameId": "VoidDash",
+      "sourcePath": "Maps/ModeSpecificData/Augments/VoidDash",
+      "gameDataId": 2097
+    },
+    {
+      "sourceGameId": "ARAM_SpecializedRecursion",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_SpecializedRecursion",
+      "gameDataId": 2100
+    },
+    {
+      "sourceGameId": "ARAM_DivineDomain",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_DivineDomain",
+      "gameDataId": 2099
+    },
+    {
+      "sourceGameId": "ARAM_BangBang",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_BangBang",
+      "gameDataId": 2103
+    },
+    {
+      "sourceGameId": "ARAM_SpiritBomb",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_SpiritBomb",
+      "gameDataId": 2104
+    },
+    {
+      "sourceGameId": "ARAM_Hellbent",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_Hellbent",
+      "gameDataId": 2107
+    },
+    {
+      "sourceGameId": "ARAM_EndlessHunt",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_EndlessHunt",
+      "gameDataId": 2098
+    },
+    {
+      "sourceGameId": "Snowbomb",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Snowbomb",
+      "gameDataId": 2080
+    },
+    {
+      "sourceGameId": "PressureCooker",
+      "sourcePath": "Maps/ModeSpecificData/Augments/PressureCooker",
+      "gameDataId": 2102
+    },
+    {
+      "sourceGameId": "SnapBack",
+      "sourcePath": "Maps/ModeSpecificData/Augments/SnapBack",
+      "gameDataId": 2109
+    },
+    {
+      "sourceGameId": "SpecializedEmpowerment",
+      "sourcePath": "Maps/ModeSpecificData/Augments/SpecializedEmpowerment",
+      "gameDataId": 2116
+    },
+    {
+      "sourceGameId": "Overextender",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Overextender",
+      "gameDataId": 2119
+    },
+    {
+      "sourceGameId": "SquishySlappyGrab",
+      "sourcePath": "Maps/ModeSpecificData/Augments/SquishySlappyGrab",
+      "gameDataId": 2115
+    },
+    {
+      "sourceGameId": "Bonk",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Bonk",
+      "gameDataId": 2111
+    },
+    {
+      "sourceGameId": "Overloaded",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Overloaded",
+      "gameDataId": 2123
+    },
+    {
+      "sourceGameId": "ItsGoTime",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ItsGoTime",
+      "gameDataId": 2125
+    },
+    {
+      "sourceGameId": "KeepGoing",
+      "sourcePath": "Maps/ModeSpecificData/Augments/KeepGoing",
+      "gameDataId": 2126
+    },
+    {
+      "sourceGameId": "Terraind",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Terraind",
+      "gameDataId": 2129
+    },
+    {
+      "sourceGameId": "DontChangeTheChannel",
+      "sourcePath": "Maps/ModeSpecificData/Augments/DontChangeTheChannel",
+      "gameDataId": 2131
+    },
+    {
+      "sourceGameId": "MercysStrike",
+      "sourcePath": "Maps/ModeSpecificData/Augments/MercysStrike",
+      "gameDataId": 2133
+    },
+    {
+      "sourceGameId": "ForgedByTheMaster",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ForgedByTheMaster",
+      "gameDataId": 2127
+    },
+    {
+      "sourceGameId": "SurgeField",
+      "sourcePath": "Maps/ModeSpecificData/Augments/SurgeField",
+      "gameDataId": 2134
+    },
+    {
+      "sourceGameId": "TrustyWeapon",
+      "sourcePath": "Maps/ModeSpecificData/Augments/TrustyWeapon",
+      "gameDataId": 2136
+    },
+    {
+      "sourceGameId": "WarlockJuicebox",
+      "sourcePath": "Maps/ModeSpecificData/Augments/WarlockJuicebox",
+      "gameDataId": 2132
+    },
+    {
+      "sourceGameId": "Overkill",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Overkill",
+      "gameDataId": 2135
+    },
+    {
+      "sourceGameId": "PatOnTheBack",
+      "sourcePath": "Maps/ModeSpecificData/Augments/PatOnTheBack",
+      "gameDataId": 2137
+    },
+    {
+      "sourceGameId": "PinCushion",
+      "sourcePath": "Maps/ModeSpecificData/Augments/PinCushion",
+      "gameDataId": 2139
+    },
+    {
+      "sourceGameId": "DoubleDefense",
+      "sourcePath": "Maps/ModeSpecificData/Augments/DoubleDefense",
+      "gameDataId": 2144
+    },
+    {
+      "sourceGameId": "WardingWeapon",
+      "sourcePath": "Maps/ModeSpecificData/Augments/WardingWeapon",
+      "gameDataId": 2138
+    },
+    {
+      "sourceGameId": "DoubleStrike",
+      "sourcePath": "Maps/ModeSpecificData/Augments/DoubleStrike",
+      "gameDataId": 2148
+    },
+    {
+      "sourceGameId": "SupportMain",
+      "sourcePath": "Maps/ModeSpecificData/Augments/SupportMain",
+      "gameDataId": 2108
+    },
+    {
+      "sourceGameId": "Upgrade_SunderedSky",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Upgrade_SunderedSky",
+      "gameDataId": 2143
+    },
+    {
+      "sourceGameId": "Upgrade_Ravenous",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Upgrade_Ravenous",
+      "gameDataId": 2140
+    },
+    {
+      "sourceGameId": "Sound_Barrier",
+      "sourcePath": "{2ee0fcd5}",
+      "gameDataId": 3025
+    },
+    {
+      "sourceGameId": "Salvation",
+      "sourcePath": "{652231a9}",
+      "gameDataId": 3039
+    },
+    {
+      "sourceGameId": "BrassBlast",
+      "sourcePath": "{29c88527}",
+      "gameDataId": 3071
+    },
+    {
+      "sourceGameId": "MoshMonster",
+      "sourcePath": "{6fe7d8a5}",
+      "gameDataId": 3053
+    },
+    {
+      "sourceGameId": "Recoil",
+      "sourcePath": "{5a79b648}",
+      "gameDataId": 3075
+    },
+    {
+      "sourceGameId": "Totentanz",
+      "sourcePath": "{b212b3fd}",
+      "gameDataId": 3079
+    },
+    {
+      "sourceGameId": "Quest_UltraHydra",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Quest_UltraHydra",
+      "gameDataId": 2141
+    },
+    {
+      "sourceGameId": "TickleMonster",
+      "sourcePath": "{31a9b8be}",
+      "gameDataId": 3058
+    },
+    {
+      "sourceGameId": "NoManaNoProblem",
+      "sourcePath": "{b2d9e618}",
+      "gameDataId": 3059
+    },
+    {
+      "sourceGameId": "GiftoftheDrowned",
+      "sourcePath": "{d01dd487}",
+      "gameDataId": 3063
+    },
+    {
+      "sourceGameId": "LichBrain",
+      "sourcePath": "{3e826c7a}",
+      "gameDataId": 3094
+    },
+    {
+      "sourceGameId": "BigShot",
+      "sourcePath": "{4726b778}",
+      "gameDataId": 3018
+    },
+    {
+      "sourceGameId": "BouncingBees",
+      "sourcePath": "{db7ff5d0}",
+      "gameDataId": 3048
+    },
+    {
+      "sourceGameId": "DoubleTime",
+      "sourcePath": "{57a3fa32}",
+      "gameDataId": 3036
+    },
+    {
+      "sourceGameId": "ThirdTimesTheHarm",
+      "sourcePath": "{990f5430}",
+      "gameDataId": 3016
+    },
+    {
+      "sourceGameId": "Upgrade_DeathDance",
+      "sourcePath": "Maps/ModeSpecificData/Augments/Upgrade_DeathDance",
+      "gameDataId": 2157
+    },
+    {
+      "sourceGameId": "BEES",
+      "sourcePath": "{3a66fcab}",
+      "gameDataId": 3086
+    },
+    {
+      "sourceGameId": "ARAM_ClownCollege",
+      "sourcePath": "Maps/ModeSpecificData/Augments/ARAM_ClownCollege",
+      "gameDataId": 1310
+    },
+    {
+      "sourceGameId": "TheBoomAndTheBass",
+      "sourcePath": "{2fa76fdd}",
+      "gameDataId": 3078
+    },
+    {
+      "sourceGameId": "TakeemDownDownDown",
+      "sourcePath": "{32445793}",
+      "gameDataId": 3116
+    },
+    {
+      "sourceGameId": "ArmoredImpact",
+      "sourcePath": "{a32d6afe}",
+      "gameDataId": 3049
+    },
+    {
+      "sourceGameId": "Fruitify",
+      "sourcePath": "{58bac436}",
+      "gameDataId": 3121
+    },
+    {
+      "sourceGameId": "JeweledBracelet",
+      "sourcePath": "{bf14bda8}",
+      "gameDataId": 3123
+    },
+    {
+      "sourceGameId": "GetJinxed",
+      "sourcePath": "{b8b91114}",
+      "gameDataId": 3004
+    },
+    {
+      "sourceGameId": "StillHere",
+      "sourcePath": "{969bd53e}",
+      "gameDataId": 3131
+    },
+    {
+      "sourceGameId": "SapMagic",
+      "sourcePath": "{8ff62a3d}",
+      "gameDataId": 3129
+    },
+    {
+      "sourceGameId": "HeavyIsTheCrown",
+      "sourcePath": "{e797c1ff}",
+      "gameDataId": 3132
+    },
+    {
+      "sourceGameId": "BlueBarrier",
+      "sourcePath": "{1e82fad5}",
+      "gameDataId": 3051
+    },
+    {
+      "sourceGameId": "CrimsonCobalt",
+      "sourcePath": "{fb8cf33c}",
+      "gameDataId": 3088
+    },
+    {
+      "sourceGameId": "WeaponOfDestiny",
+      "sourcePath": "{1888e37b}",
+      "gameDataId": 3081
+    },
+    {
+      "sourceGameId": "FlowOfSpirit",
+      "sourcePath": "{df038206}",
+      "gameDataId": 3085
+    },
+    {
+      "sourceGameId": "GroupHug",
+      "sourcePath": "{ec1af3af}",
+      "gameDataId": 3149
+    },
+    {
+      "sourceGameId": "EnchantingButterflies",
+      "sourcePath": "{aa10921c}",
+      "gameDataId": 3163
+    },
+    {
+      "sourceGameId": "UltimateRecursion",
+      "sourcePath": "{400a964f}",
+      "gameDataId": 3055
+    },
+    {
+      "sourceGameId": "HandsOffTheTalent",
+      "sourcePath": "{6f1fd202}",
+      "gameDataId": 3052
+    },
+    {
+      "sourceGameId": "LonelyWarrior",
+      "sourcePath": "{95695009}",
+      "gameDataId": 3134
+    },
+    {
+      "sourceGameId": "GoH_PentakillAug_Q",
+      "sourcePath": "{a6c26eaf}",
+      "gameDataId": 3170
+    },
+    {
+      "sourceGameId": "GoH_PentakillAug_W",
+      "sourcePath": "{a4c26b89}",
+      "gameDataId": 3171
+    },
+    {
+      "sourceGameId": "GoH_PentakillAug_E",
+      "sourcePath": "{92c24f33}",
+      "gameDataId": 3172
+    },
+    {
+      "sourceGameId": "GoH_PentakillAug_R",
+      "sourcePath": "{a7c27042}",
+      "gameDataId": 3173
+    },
+    {
+      "sourceGameId": "ArcaneAxiom",
+      "sourcePath": "{eed14418}",
+      "gameDataId": 3118
+    },
+    {
+      "sourceGameId": "GoH_PentakillAug_Generic",
+      "sourcePath": "{34bd76c9}",
+      "gameDataId": 3176
+    },
+    {
+      "sourceGameId": "Upgrade_Stormsurge",
+      "sourcePath": "{c4a713ba}",
+      "gameDataId": 3150
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+artifacts/
+runtime/
+appdata/
+node_modules/
+.env
+*.log
+*.zip
+*.nupkg
+*.pdb
+*.user
+.DS_Store
+.openai/
+.build-cache/
