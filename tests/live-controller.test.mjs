@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {UI_ELEMENTS} from '../dist/layout-elements.js';
 
 const data = JSON.parse(await readFile(new URL('../dist/data.json', import.meta.url), 'utf8'));
 const items = JSON.parse(await readFile(new URL('../dist/items.json', import.meta.url), 'utf8'));
@@ -139,7 +140,7 @@ test('live controller follows game boundaries without presenting drafts as curre
     h.state.championId = 'Jinx';
     await h.tick(snapshot({championId: 'Ahri', mode: {known: true, isMayhem: false, queueId: 450}}));
     assert.equal(h.state.championId, 'Jinx');
-    assert.match(h.html(), /<h2>当前模式不是海克斯大乱斗<\/h2>/);
+    assert.match(h.html(), /<h2\b[^>]*>当前模式不是海克斯大乱斗<\/h2>/);
     assert.doesNotMatch(h.html(), /<h3>保持普攻输出<\/h3>/);
     await h.click('follow');
     assert.equal(h.state.championId, 'Ahri');
@@ -247,4 +248,52 @@ test('live controller follows game boundaries without presenting drafts as curre
     assert.match(h.html(), /<dt>法术强度<\/dt><dd>—<\/dd>/);
     assert.doesNotMatch(h.html(), /TEST_OLD_ITEM/);
   });
+});
+
+test('live editor targets keep valid stable identities through polling and conditional notices', {concurrency: false}, async t => {
+  const registry = new Map(UI_ELEMENTS.map(element => [element.id, element]));
+  const voidTags = new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
+  const inspect = html => {
+    const stack = [{tag: 'live-root', container: 'live-content'}], seen = new Set();
+    for (const match of html.matchAll(/<(\/?)([a-z][a-z0-9-]*)(\s[^>]*|)>/gi)) {
+      const [,closing,rawTag,attributes] = match, tag = rawTag.toLowerCase();
+      if (closing) {
+        const index = stack.findLastIndex(entry => entry.tag === tag);
+        if (index > 0) stack.length = index;
+        continue;
+      }
+      const id = /\bdata-ui-id="([^"]+)"/.exec(attributes)?.[1];
+      const container = /\bdata-ui-container="([^"]+)"/.exec(attributes)?.[1];
+      if (id) {
+        assert.ok(registry.has(id), `unregistered editor target ${id}`);
+        assert.ok(!seen.has(id), `duplicate editor target ${id}`);
+        seen.add(id);
+        assert.equal(registry.get(id).parent, stack.at(-1).container || null, `incorrect parent for ${id}`);
+        assert.equal(Boolean(container), registry.get(id).container, `incorrect container flag for ${id}`);
+        if (container) assert.equal(container, id);
+      }
+      if (!voidTags.has(tag)) stack.push({tag,container});
+    }
+    return seen;
+  };
+  const h = await browserHarness(t);
+  const initial = inspect(h.html());
+  for (const id of ['live-title','live-background-guide','live-connection','live-champion','live-stats','live-stat-ap','live-owned-note','live-ocr','live-plan','live-next','live-help']) assert.ok(initial.has(id), id);
+  await h.tick(snapshot({level: 12,gameTime: 690,stats: {abilityPower: 200}}));
+  assert.deepEqual(inspect(h.html()), initial, 'data refresh does not change layout identities');
+  await h.click('ocr-auto');
+  assert.ok(inspect(h.html()).has('live-ocr-notice'));
+  h.setSidebar({ocr:{enabled:true,status:'recognized',message:'编辑目标测试',observedAt:new Date(Date.now()).toISOString(),proposals:[
+    {id:'firebrand',name:'火上浇油'},{id:'goliath',name:'歌利亚巨人'},{id:'jeweled_gauntlet',name:'珠光护手'}
+  ]}});
+  await h.tick();
+  const withOffers = inspect(h.html());
+  assert.ok(withOffers.has('live-ocr-confirm'));
+  assert.ok(withOffers.has('live-ocr-proposals'));
+  assert.ok(!withOffers.has('live-ocr-manual'));
+  await h.click('sample');
+  assert.ok(inspect(h.html()).has('live-sample-notice'));
+  await h.click('sample');
+  await h.tick(snapshot({mode: {known: true,isMayhem: false,queueId: 450}}));
+  assert.ok(inspect(h.html()).has('live-mode-notice'));
 });

@@ -19,9 +19,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.3.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.0")]
-[assembly: AssemblyInformationalVersion("1.3.0")]
+[assembly: AssemblyVersion("1.4.0.0")]
+[assembly: AssemblyFileVersion("1.4.0.0")]
+[assembly: AssemblyInformationalVersion("1.4.0")]
 
 namespace HexGuide.Desktop
 {
@@ -79,7 +79,7 @@ namespace HexGuide.Desktop
         private readonly Timer refreshTimer;
         private readonly bool startHidden;
         private bool sidebarEnabled = true, previewSidebar, explicitActivation, trayHintShown;
-        private bool fetching, scanChanging, confirmChanging, hotKeyRegistered, appearanceRequested, appearanceOpening;
+        private bool fetching, scanChanging, confirmChanging, hotKeyRegistered, appearanceRequested, appearanceOpening, layoutRequested, layoutOpening;
         private string sessionToken;
         private IntPtr lastGame;
         private DateTime nextFetch = DateTime.MinValue;
@@ -90,7 +90,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             previewSidebar = preview;
-            Text = "海克斯指南 1.3.0 · 实时助手";
+            Text = "海克斯指南 1.4.0 · 实时助手";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -117,6 +117,8 @@ namespace HexGuide.Desktop
             gameButton.Click += delegate { ReturnToGame(); };
             var appearanceButton = new ToolStripButton("界面设置");
             appearanceButton.Click += async delegate { await OpenAppearanceAsync(); };
+            var layoutButton = new ToolStripButton("编辑界面");
+            layoutButton.Click += async delegate { await OpenLayoutAsync(); };
             reload = new ToolStripButton("刷新页面");
             reload.Enabled = false;
             reload.Click += delegate { if (browser.CoreWebView2 != null) browser.Reload(); };
@@ -126,6 +128,7 @@ namespace HexGuide.Desktop
             toolbar.Items.Add(sidebarButton);
             toolbar.Items.Add(gameButton);
             toolbar.Items.Add(appearanceButton);
+            toolbar.Items.Add(layoutButton);
             toolbar.Items.Add(reload);
             shortcutStatus = new ToolStripLabel("Alt + Shift + H：切换侧栏");
             shortcutStatus.ForeColor = Color.FromArgb(163, 178, 196);
@@ -152,6 +155,7 @@ namespace HexGuide.Desktop
             var menu = new ContextMenuStrip();
             menu.Items.Add("打开完整助手", null, delegate { ShowMain(); });
             menu.Items.Add("界面设置", null, async delegate { await OpenAppearanceAsync(); });
+            menu.Items.Add("编辑整个界面", null, async delegate { await OpenLayoutAsync(); });
             menu.Items.Add("显示 / 收起游戏侧栏", null, delegate { ToggleSidebar(); });
             menu.Items.Add("预览侧栏（不切换窗口）", null, delegate { sidebarEnabled = true; previewSidebar = true; UpdateSidebarVisibility(); });
             scanMenu = new ToolStripMenuItem("后台识别海克斯");
@@ -170,6 +174,7 @@ namespace HexGuide.Desktop
                 UpdateSidebarVisibility();
                 if (DateTime.UtcNow >= nextFetch) { nextFetch = DateTime.UtcNow.AddSeconds(2); await FetchSidebarAsync(); }
                 if (appearanceRequested) await OpenRequestedAppearanceAsync();
+                if (layoutRequested) await OpenRequestedLayoutAsync();
             };
             refreshTimer.Start();
             Shown += async delegate { if (startHidden) Hide(); await StartAsync(); };
@@ -262,6 +267,29 @@ namespace HexGuide.Desktop
             catch (InvalidOperationException) { }
             catch (COMException) { }
             finally { appearanceOpening = false; }
+        }
+
+        private async Task OpenLayoutAsync()
+        {
+            if (closing) return;
+            layoutRequested = true;
+            ShowMain();
+            await OpenRequestedLayoutAsync();
+        }
+
+        private async Task OpenRequestedLayoutAsync()
+        {
+            if (!layoutRequested || layoutOpening || closing || browser.CoreWebView2 == null || !browser.Visible) return;
+            layoutOpening = true;
+            try
+            {
+                string result = await browser.CoreWebView2.ExecuteScriptAsync("Boolean(window.hexguideLayout && (window.hexguideLayout.open(), true))");
+                if (string.Equals(result, "true", StringComparison.Ordinal)) layoutRequested = false;
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+            catch (COMException) { }
+            finally { layoutOpening = false; }
         }
 
         private void UpdateSidebarVisibility()
@@ -373,6 +401,7 @@ namespace HexGuide.Desktop
                     browser.Visible = true;
                     reload.Enabled = true;
                     await OpenRequestedAppearanceAsync();
+                    await OpenRequestedLayoutAsync();
                 };
                 // The token stays in this process and the fragment, never an HTTP query or log.
                 browser.Source = new Uri(localOrigin, "#session=" + Uri.EscapeDataString(token));

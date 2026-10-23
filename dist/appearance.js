@@ -37,11 +37,19 @@ function orderMarkup(){return draft.sidebar.sections.map((section,index)=>`<li><
 function statusText(){return notice||(source==='desktop'?'设置保存在本机，重新打开软件后仍然有效。':'网页预览：设置保存在当前浏览器。游戏侧栏需在桌面版中使用。');}
 function setStatus(message,error=false){const status=dialog.querySelector('#appearance-status');if(status){status.textContent=message;status.classList.toggle('error',error);}}
 function close(){if(saving)return;applyMain(saved);dialog.close();trigger?.focus({preventScroll:true});}
+function layoutIsEditing(){
+  if(!window.hexguideLayout?.isEditing())return false;
+  window.hexguideLayout.notify?.('请先保存或取消当前界面编辑，再打开界面设置。');
+  return true;
+}
 async function open(){
+  if(layoutIsEditing())return false;
   await loading;
-  if(dialog.open)return;
+  if(layoutIsEditing())return false;
+  if(dialog.open)return true;
   trigger=document.activeElement;draft=clone(saved);render();dialog.showModal();
   dialog.querySelector('select')?.focus({preventScroll:true});
+  return true;
 }
 
 async function load(){
