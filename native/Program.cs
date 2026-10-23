@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.9.0.0")]
-[assembly: AssemblyFileVersion("1.9.0.0")]
-[assembly: AssemblyInformationalVersion("1.9.0")]
+[assembly: AssemblyVersion("1.9.1.0")]
+[assembly: AssemblyFileVersion("1.9.1.0")]
+[assembly: AssemblyInformationalVersion("1.9.1")]
 
 namespace HexGuide.Desktop
 {
@@ -62,6 +62,62 @@ namespace HexGuide.Desktop
         }
     }
 
+    // Automatic display follows the foreground game. Explicit opening remains pinned
+    // until the user closes it, independent of the main window or foreground app.
+    internal sealed class SidebarVisibilityState
+    {
+        internal bool Enabled { get; private set; }
+        internal bool Pinned { get; private set; }
+        internal SidebarVisibilityState(bool initiallyPinned)
+        {
+            Enabled = true; Pinned = initiallyPinned;
+        }
+        internal bool ShouldShow(bool gameForeground) { return Enabled && (Pinned || gameForeground); }
+        internal bool HideForMainWindow { get { return !Pinned; } }
+        internal void OpenPinned() { Enabled = true; Pinned = true; }
+        internal void Close() { Enabled = false; Pinned = false; }
+        internal void Toggle(bool currentlyVisible)
+        {
+            if (Pinned || currentlyVisible) Close();
+            else OpenPinned();
+        }
+        internal static int ValidateFixtures()
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool condition, string message)
+            { if (!condition) throw new InvalidOperationException(message); checks++; };
+            var automatic = new SidebarVisibilityState(false);
+            check(automatic.Enabled && !automatic.Pinned, "Default sidebar intent must remain automatic.");
+            check(automatic.ShouldShow(true), "Automatic sidebar did not follow the foreground game.");
+            check(!automatic.ShouldShow(false), "Automatic sidebar appeared over an unrelated foreground app.");
+            check(automatic.HideForMainWindow, "Automatic sidebar must yield when the main window is opened.");
+            // Exercise only policy transitions. Actual message dispatch, hotkey
+            // registration and main-window visibility require separate UI verification.
+            var requested = new SidebarVisibilityState(false);
+            requested.Toggle(false);
+            check(requested.Enabled && requested.Pinned, "Explicit opening was not pinned.");
+            foreach (bool gameForeground in new bool[] { true, false, false, true, false })
+                check(requested.ShouldShow(gameForeground), "A foreground transition hid the explicitly opened sidebar.");
+            check(!requested.HideForMainWindow && requested.Pinned, "The main-window hiding policy would hide a pinned sidebar.");
+            requested.Toggle(true);
+            check(!requested.Enabled && !requested.Pinned, "Explicit toggling did not close and unpin the sidebar.");
+            check(!requested.ShouldShow(true) && !requested.ShouldShow(false), "A manually closed sidebar reopened on a foreground change.");
+            requested.OpenPinned();
+            check(requested.ShouldShow(false), "Explicit preview opening did not pin the sidebar over a non-game foreground.");
+            requested.Close();
+            check(!requested.ShouldShow(true), "Closing the visibility policy did not keep the sidebar closed.");
+            var launchPreview = new SidebarVisibilityState(true);
+            check(launchPreview.Pinned && launchPreview.ShouldShow(false), "Sidebar-preview startup did not preserve an explicit open request.");
+            launchPreview.Toggle(false);
+            check(!launchPreview.Enabled && !launchPreview.Pinned, "A temporarily hidden pinned window could not be closed by the next toggle.");
+            automatic.Toggle(true);
+            check(!automatic.ShouldShow(true), "Toggling an automatically visible sidebar did not close it.");
+            automatic.Toggle(false);
+            check(automatic.Pinned && automatic.ShouldShow(false), "Reopening after a manual close did not pin the sidebar.");
+            return checks;
+        }
+    }
+
     internal sealed class MainWindow : Form
     {
         private readonly string dataDirectory;
@@ -79,7 +135,8 @@ namespace HexGuide.Desktop
         private readonly SidebarWindow sidebar;
         private readonly Timer refreshTimer;
         private readonly bool startHidden;
-        private bool sidebarEnabled = true, previewSidebar, explicitActivation, trayHintShown;
+        private readonly SidebarVisibilityState sidebarVisibility;
+        private bool explicitActivation, trayHintShown;
         private bool fetching, scanChanging, confirmChanging, hotKeyRegistered, appearanceRequested, appearanceOpening, layoutRequested, layoutOpening;
         private long sidebarRequestGeneration;
         private string sessionToken;
@@ -91,8 +148,8 @@ namespace HexGuide.Desktop
         {
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
-            previewSidebar = preview;
-            Text = "海克斯指南 1.9.0 · 我的这一局";
+            sidebarVisibility = new SidebarVisibilityState(preview);
+            Text = "海克斯指南 1.9.1 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -152,7 +209,7 @@ namespace HexGuide.Desktop
             Controls.Add(toolbar);
             toolbar.Dock = DockStyle.Top;
             sidebar = new SidebarWindow();
-            sidebar.HideRequested += delegate { sidebarEnabled = false; previewSidebar = false; sidebar.Hide(); };
+            sidebar.HideRequested += delegate { sidebarVisibility.Close(); sidebar.Hide(); };
             sidebar.DetailsRequested += delegate { ShowMain(); };
             sidebar.GameRequested += delegate { ReturnToGame(); };
             sidebar.OfferConfirmed += async delegate(string id) { await ConfirmOfferAsync(id); };
@@ -161,7 +218,7 @@ namespace HexGuide.Desktop
             menu.Items.Add("界面设置", null, async delegate { await OpenAppearanceAsync(); });
             menu.Items.Add("编辑整个界面", null, async delegate { await OpenLayoutAsync(); });
             menu.Items.Add("显示 / 收起游戏侧栏", null, delegate { ToggleSidebar(); });
-            menu.Items.Add("预览侧栏（不切换窗口）", null, delegate { sidebarEnabled = true; previewSidebar = true; UpdateSidebarVisibility(); });
+            menu.Items.Add("预览侧栏（不切换窗口）", null, delegate { sidebarVisibility.OpenPinned(); UpdateSidebarVisibility(); });
             scanMenu = new ToolStripMenuItem("后台识别海克斯");
             scanMenu.Enabled = false;
             scanMenu.ToolTipText = "只在游戏位于前台时识别；结果仍需人工核对。";
@@ -186,7 +243,7 @@ namespace HexGuide.Desktop
             KeyDown += delegate(object sender, KeyEventArgs e)
             {
                 // Escape is local to this app; no hook, game-key polling, or global Escape registration.
-                if (e.KeyCode == Keys.Escape) { sidebarEnabled = false; previewSidebar = false; sidebar.Hide(); }
+                if (e.KeyCode == Keys.Escape) { sidebarVisibility.Close(); sidebar.Hide(); }
             };
             FormClosing += delegate(object sender, FormClosingEventArgs e)
             {
@@ -235,7 +292,7 @@ namespace HexGuide.Desktop
         private void ShowMain()
         {
             if (closing) return;
-            previewSidebar = false; sidebar.Hide();
+            if (sidebarVisibility.HideForMainWindow) sidebar.Hide();
             explicitActivation = true;
             if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
             Show(); Activate();
@@ -243,9 +300,7 @@ namespace HexGuide.Desktop
 
         private void ToggleSidebar()
         {
-            bool visible = sidebar.Visible;
-            sidebarEnabled = !visible;
-            previewSidebar = !visible && !GameWindow.IsGameForeground();
+            sidebarVisibility.Toggle(sidebar.Visible);
             UpdateSidebarVisibility();
         }
 
@@ -301,7 +356,7 @@ namespace HexGuide.Desktop
             if (closing || sidebar.IsDisposed) return;
             IntPtr foreground = GameWindow.ForegroundGame();
             if (foreground != IntPtr.Zero) lastGame = foreground;
-            if (!sidebarEnabled || (!previewSidebar && foreground == IntPtr.Zero)) { if (sidebar.Visible) sidebar.Hide(); UpdateSidebarHint(false); return; }
+            if (!sidebarVisibility.ShouldShow(foreground != IntPtr.Zero)) { if (sidebar.Visible) sidebar.Hide(); UpdateSidebarHint(false); return; }
             IntPtr target = foreground != IntPtr.Zero ? foreground : lastGame;
             Rectangle area = GameWindow.PlacementArea(target);
             sidebar.Place(area);
@@ -323,7 +378,7 @@ namespace HexGuide.Desktop
                 tray.ShowBalloonTip(2500, "没有找到游戏窗口", "请确认已进入游戏。助手不会尝试激活其他程序。", ToolTipIcon.Info);
                 return;
             }
-            lastGame = target; previewSidebar = false; HideMain();
+            lastGame = target; HideMain();
             if (!GameWindow.ActivateGame(target)) tray.ShowBalloonTip(2500, "Windows 暂未允许切换", "请使用 Alt + Tab 返回游戏；助手不会模拟按键。", ToolTipIcon.Info);
         }
 
@@ -1192,13 +1247,14 @@ namespace HexGuide.Desktop
                 int liveStateChecks = ValidateLiveStateFixtures(window, statusPreviewPath);
                 string loadingPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-loading.png");
                 int loadingPreviewChecks = ValidateLoadingPreviewFixtures(window, loadingPreviewPath);
+                int visibilityChecks = SidebarVisibilityState.ValidateFixtures();
                 int defaultWidth = window.Width, defaultHeight = window.Height;
                 int appearanceChecks = ValidateAppearanceFixtures(window);
                 string placementPreviewPath;
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath } });
             }
         }
         private static int ValidateLoadingPreviewFixtures(SidebarWindow window, string previewPath)
