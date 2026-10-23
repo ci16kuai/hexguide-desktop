@@ -2,6 +2,7 @@ import http from 'node:http';
 import {randomBytes, timingSafeEqual} from 'node:crypto';
 import {readFile, realpath, stat} from 'node:fs/promises';
 import path from 'node:path';
+import {SessionValidationError} from './sidebar.mjs';
 
 const MIME = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.ico':'image/x-icon','.woff2':'font/woff2'};
 const isInside = (root, candidate) => candidate === root || candidate.startsWith(root + path.sep);
@@ -13,7 +14,7 @@ function equalToken(received, expected) {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-export async function createLocalServer({collector, scanner, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
+export async function createLocalServer({collector, scanner, sidebar, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
   if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
   const root = await realpath(staticDirectory);
   let expectedHost;
@@ -32,33 +33,42 @@ export async function createLocalServer({collector, scanner, staticDirectory, po
     let pathname;
     try { pathname = decodeURIComponent(new URL(request.url, `http://${expectedHost}`).pathname); }
     catch { return send(response, 400, {error:'Invalid URL.'}); }
-    const ocrRequest = pathname === '/api/ocr' && request.method === 'POST';
-    if (!ocrRequest && (!['GET', 'HEAD'].includes(request.method) || request.headers['transfer-encoding'] || Number(request.headers['content-length'] || 0) !== 0)) {
+    const writeRequest = ['/api/ocr', '/api/session', '/api/sidebar/ocr'].includes(pathname) && request.method === 'POST';
+    if (!writeRequest && (!['GET', 'HEAD'].includes(request.method) || request.headers['transfer-encoding'] || Number(request.headers['content-length'] || 0) !== 0)) {
       request.resume();
       return send(response, 405, {error:'Only bodyless GET and HEAD requests are permitted.'});
     }
     if (pathname.startsWith('/api/')) {
       if (!equalToken(request.headers['x-hexguide-session'], token)) { request.resume(); return send(response, 401, {error:'A local session is required.'}); }
-      if (ocrRequest) {
+      if (writeRequest) {
         let bytes = 0;
         const chunks = [];
+        let parsed = {};
         try {
           for await (const chunk of request) {
             bytes += chunk.length;
-            if (bytes > 4096) return send(response, 413, {error:'Request body is too large.'});
+            if (bytes > 4096) { request.resume(); return send(response, 413, {error:'Request body is too large.'}); }
             chunks.push(chunk);
           }
           const body = Buffer.concat(chunks).toString('utf8').trim();
           if (body) {
-            const parsed = JSON.parse(body);
-            if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' || Object.keys(parsed).length) return send(response, 400, {error:'OCR takes no input.'});
+            parsed = JSON.parse(body);
+            if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return send(response, 400, {error:'An object is required.'});
           }
         } catch { return send(response, 400, {error:'Invalid request body.'}); }
-        try { return send(response, 200, scanner ? await scanner() : {status:'unavailable',message:'屏幕识别不可用，可手动选择。',proposals:[]}); }
-        catch { return send(response, 200, {status:'unavailable',message:'本次识别未完成，可手动选择。',proposals:[]}); }
+        if (pathname === '/api/ocr') {
+          if (Object.keys(parsed).length) return send(response, 400, {error:'OCR takes no input.'});
+          try { return send(response, 200, sidebar ? await sidebar.scan() : scanner ? await scanner() : {status:'unavailable',message:'屏幕识别不可用，可手动选择。',proposals:[]}); }
+          catch { return send(response, 200, {status:'unavailable',message:'本次识别未完成，可手动选择。',proposals:[]}); }
+        }
+        if (!sidebar) return send(response, 503, {error:'Shared session is unavailable.'});
+        try { return send(response, 200, pathname === '/api/session' ? await sidebar.setSession(parsed) : sidebar.setOcr(parsed)); }
+        catch (error) { return send(response, error instanceof SessionValidationError ? 400 : 500, {error:error instanceof SessionValidationError ? 'Invalid assistant state.' : 'Assistant state could not be saved.'}); }
       }
-      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.0.1', localOnly:true});
+      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.1.0', localOnly:true});
       if (pathname === '/api/live') return send(response, 200, collector.getSnapshot());
+      if (pathname === '/api/sidebar') return sidebar ? send(response, 200, sidebar.getModel()) : send(response, 503, {error:'Sidebar is unavailable.'});
+      if (pathname === '/api/session') return sidebar ? send(response, 200, sidebar.getSession()) : send(response, 503, {error:'Shared session is unavailable.'});
       return send(response, 404, {error:'Unknown endpoint.'});
     }
     try {
@@ -79,9 +89,12 @@ export async function createLocalServer({collector, scanner, staticDirectory, po
     server.once('error', reject);
     server.listen(port, '127.0.0.1', () => { expectedHost = `127.0.0.1:${server.address().port}`; resolve(); });
   });
-  return {server, port:server.address().port, token, close:() => new Promise(resolve => {
+  return {server, port:server.address().port, token, close:async () => {
+    await sidebar?.stop();
+    return new Promise(resolve => {
     collector.stop?.();
     server.close(resolve);
     server.closeIdleConnections?.();
-  })};
+    });
+  }};
 }

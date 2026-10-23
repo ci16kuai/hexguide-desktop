@@ -4,6 +4,7 @@ import path from 'node:path';
 import {LiveCollector} from './collector.mjs';
 import {createLocalServer} from './http.mjs';
 import {createOcrScanner} from './ocr.mjs';
+import {BackgroundSidebar} from './sidebar.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 function argument(name) {
@@ -16,17 +17,20 @@ try {
   if (!/^\d+$/.test(requestedPort) || Number(requestedPort) > 65535) throw new Error('Invalid port.');
   const dataDirectory = argument('--data-dir');
   if (dataDirectory) await mkdir(path.resolve(dataDirectory), {recursive:true});
-  const [dataset, championResource, ca] = await Promise.all([
+  const [dataset, championResource, ca, itemsCatalog] = await Promise.all([
     readFile(path.join(directory, '../dist/data.json'), 'utf8').then(JSON.parse),
     readFile(path.join(directory, 'resources/champions-16.21.1.json'), 'utf8').then(JSON.parse),
     readFile(path.join(directory, 'resources/riotgames.pem')),
+    readFile(path.join(directory, '../dist/items.json'), 'utf8').then(JSON.parse),
   ]);
   const collector = new LiveCollector({champions:dataset.champions, officialChampions:championResource.champions, augments:dataset.augments, ca});
   const scanner = createOcrScanner({applicationDirectory:path.resolve(directory, '..'), dataDirectory, augments:dataset.augments});
-  const local = await createLocalServer({collector, scanner, staticDirectory:path.join(directory, '../dist'), port:Number(requestedPort)});
+  const sidebar = await new BackgroundSidebar({collector, scanner, data:dataset, itemsCatalog, dataDirectory}).load();
+  const local = await createLocalServer({collector, scanner, sidebar, staticDirectory:path.join(directory, '../dist'), port:Number(requestedPort)});
   // This is the sole stdout bootstrap line; the native parent owns the token.
   process.stdout.write(JSON.stringify({port:local.port, token:local.token}) + '\n');
   collector.start();
+  sidebar.start();
   let closing = false;
   const close = async () => {
     if (closing) return;

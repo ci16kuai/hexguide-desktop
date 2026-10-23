@@ -1,0 +1,196 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import path from 'node:path';
+import {BackgroundSidebar, SessionValidationError} from '../server/sidebar.mjs';
+import {createLocalServer} from '../server/http.mjs';
+
+const data = JSON.parse(await readFile(new URL('../dist/data.json', import.meta.url), 'utf8'));
+const itemsCatalog = JSON.parse(await readFile(new URL('../dist/items.json', import.meta.url), 'utf8'));
+const current = data.augments.filter(a => a.availability === 'current' && !a.retiredPatch && a.recommendable !== false && !a.isInternalTemplate);
+const ids = current.slice(0, 3).map(a => a.id);
+const recognized = () => ({status:'recognized', message:'fixture', proposals:ids.map(id => ({id, name:'Do not trust remote name', confidence:'exact'}))});
+function setup(options = {}) {
+  let clock = Date.parse('2026-10-23T12:00:00Z');
+  let snapshot = {connection:{status:'connected', message:'fixture'}, phase:'InProgress', gameId:'123', championId:'Ahri', level:12, gameTime:600, items:[{id:3020,name:'法师之靴',count:1}], stats:{abilityPower:250}, augments:{status:'unavailable',ids:[]}, mode:{known:true,isMayhem:true}, observedAt:new Date(clock).toISOString()};
+  const collector = {getSnapshot:() => structuredClone(snapshot)};
+  const sidebar = new BackgroundSidebar({collector, data, itemsCatalog, now:() => clock, scanner:async () => recognized(), ...options});
+  return {sidebar, collector, update:values => {snapshot = {...snapshot,...values};}, advance:ms => {clock += ms;}};
+}
+async function folder(t) {
+  const root = process.env.HEXGUIDE_TEST_WORK || 'H:\\Chatgpt\\work\\2026-10-23\\hexguide-desktop';
+  await mkdir(root, {recursive:true});
+  const result = await mkdtemp(path.join(root, 'sidebar-test-'));
+  t.after(() => rm(result,{recursive:true,force:true}));
+  return result;
+}
+
+test('shared selections are validated and persist only assistant IDs and route', async t => {
+  const directory = await folder(t);
+  const {sidebar, collector} = setup({dataDirectory:directory});
+  await sidebar.load();
+  assert.equal(sidebar.getModel().ocr.enabled, false);
+  const saved = await sidebar.setSession({owned:[ids[0]],route:'spell'});
+  assert.deepEqual(saved.owned,[ids[0]]);
+  assert.equal(saved.gameId,'123');
+  const disk = JSON.parse(await readFile(path.join(directory,'session.json'),'utf8'));
+  assert.deepEqual(Object.keys(disk).sort(),['gameId','owned','revision','route']);
+  assert.ok(!JSON.stringify(disk).includes('Do not trust remote name'));
+  const restored = await new BackgroundSidebar({collector,data,dataDirectory:directory}).load();
+  assert.deepEqual(restored.getSession().owned,[ids[0]]);
+  assert.equal(restored.getSession().route,'spell');
+  assert.equal(restored.getModel().ocr.enabled,false,'screen capture consent is never restored on app restart');
+  for (const value of [{owned:[],route:'unknown'},{owned:['not-real'],route:'auto'},{owned:[ids[0],ids[0]],route:'auto'},{owned:[],route:'auto',playerName:'forbidden'},{owned:[],route:'auto',token:'forbidden'},null]) await assert.rejects(sidebar.setSession(value),SessionValidationError);
+  for (const value of [{enabled:1},{enabled:true,extra:true},[],null]) assert.throws(() => sidebar.setOcr(value),SessionValidationError);
+  await sidebar.stop();
+});
+
+test('confirmed state survives reconnects but clears on new game ID, end phase, or clock reset', async () => {
+  const {sidebar,update} = setup();
+  await sidebar.setSession({owned:[ids[0]],route:'tank'});
+  update({phase:'Reconnect',gameTime:null});
+  assert.deepEqual(sidebar.getSession().owned,[ids[0]]);
+  update({phase:'None',connection:{status:'waiting'},gameId:null,gameTime:null});
+  assert.deepEqual(sidebar.getSession().owned,[ids[0]],'transient loss is not a game boundary');
+  update({phase:'InProgress',gameId:'456',gameTime:20,connection:{status:'connected'}});
+  assert.deepEqual(sidebar.getSession().owned,[]);
+  assert.equal(sidebar.getSession().route,'auto');
+  assert.equal(sidebar.getSession().gameId,'456');
+  await sidebar.setSession({owned:[ids[1]],route:'attack'});
+  update({phase:'EndOfGame'});
+  assert.deepEqual(sidebar.getSession().owned,[]);
+  update({phase:'InProgress',gameId:null,gameTime:800});
+  await sidebar.setSession({owned:[ids[2]],route:'crit'});
+  update({gameTime:40});
+  assert.deepEqual(sidebar.getSession().owned,[],'clock reset detects a new game even without LCU game ID');
+  update({gameTime:900});
+  await sidebar.setSession({owned:[ids[0]],route:'tank'});
+  update({phase:'Reconnect',gameTime:null});
+  sidebar.getSession();
+  update({phase:'InProgress',gameTime:4});
+  assert.deepEqual(sidebar.getSession().owned,[],'reconnect with no clock does not discard the last known game clock');
+});
+
+test('OCR candidates are not confirmed selections; empty frames retain three cards only for 60 seconds', async () => {
+  let result = recognized();
+  const {sidebar,advance} = setup({scanner:async () => result});
+  const scanned = await sidebar.scan();
+  assert.equal(scanned.status,'recognized');
+  const first = sidebar.getModel();
+  assert.deepEqual(first.owned,[]);
+  assert.deepEqual(first.offers.map(a => a.id),ids,'physical left-to-right card order is retained');
+  assert.deepEqual(first.ocr.proposals.map(a => a.id),ids);
+  assert.deepEqual(first.offers.map(a => a.rank).sort(),[1,2,3]);
+  assert.ok(first.offers.every(a => a.reason && Array.isArray(a.cautions)));
+  assert.ok(!JSON.stringify(first).includes('Do not trust remote name'),'names come from trusted current dataset');
+  advance(30000);
+  result = {status:'waiting',message:'No cards',proposals:[]};
+  await sidebar.scan();
+  assert.deepEqual(sidebar.getModel().offers,first.offers);
+  assert.equal(sidebar.getModel().ocr.observedAt,first.ocr.observedAt,'empty frames never extend recognized frame lifetime');
+  advance(30001);
+  assert.deepEqual(sidebar.getModel().offers,[]);
+  assert.deepEqual(sidebar.getModel().ocr.proposals,[]);
+});
+
+test('manual and background scan requests share one capture and ignore late results from an ended game', async () => {
+  let calls = 0;
+  let finish;
+  const {sidebar,update} = setup({scanner:() => {calls++;return new Promise(resolve => {finish=resolve;});}});
+  sidebar.setOcr({enabled:true});
+  const first = sidebar.scan();
+  const concurrent = sidebar.scan();
+  assert.equal(calls,1);
+  update({gameId:'new-game',gameTime:1});
+  sidebar.getSession();
+  finish(recognized());
+  assert.equal((await first).status,'waiting');
+  assert.equal((await concurrent).status,'waiting');
+  assert.deepEqual(sidebar.getModel().offers,[]);
+});
+
+test('background capture requires explicit consent and current game, and honors interval with no visible UI', async () => {
+  let scans = 0;
+  const {sidebar,update,advance} = setup({scanner:async () => {scans++;return recognized();}});
+  await sidebar.pollOnce();
+  assert.equal(scans,0);
+  sidebar.setOcr({enabled:true});
+  await sidebar.pollOnce();
+  assert.equal(scans,1);
+  await sidebar.pollOnce();
+  assert.equal(scans,1);
+  advance(7000);
+  await sidebar.pollOnce();
+  assert.equal(scans,2);
+  update({phase:'ChampSelect'});
+  advance(7000);
+  await sidebar.pollOnce();
+  assert.equal(scans,2);
+  update({phase:'InProgress',mode:{known:true,isMayhem:false}});
+  await sidebar.pollOnce();
+  assert.equal(scans,2);
+  update({mode:{known:true,isMayhem:true}});
+  sidebar.setOcr({enabled:false});
+  await sidebar.pollOnce();
+  assert.equal(scans,2);
+});
+
+test('confirming a selected card dismisses old offers and recommendations reflect confirmed state', async () => {
+  const {sidebar} = setup();
+  await sidebar.scan();
+  await sidebar.setSession({owned:[ids[0]],route:'spell'});
+  const model = sidebar.getModel();
+  assert.deepEqual(model.offers,[]);
+  assert.deepEqual(model.owned.map(a => a.id),[ids[0]]);
+  assert.equal(model.route,'spell');
+  assert.match(model.plan.summary,/1 个已确认海克斯/);
+  assert.equal(model.champion.id,'Ahri');
+  assert.equal(model.level,12);
+  assert.equal(model.items[0].name,'法师之靴');
+});
+
+function request(port, target, {headers={},method='GET',body} = {}) {
+  return new Promise((resolve,reject) => {
+    const req = http.request({host:'127.0.0.1',port,path:target,method,headers},response => {
+      const chunks=[];
+      response.on('data',chunk => chunks.push(chunk));
+      response.on('end',() => resolve({status:response.statusCode,body:Buffer.concat(chunks).toString('utf8')}));
+    });
+    req.on('error',reject);
+    req.end(body);
+  });
+}
+
+test('sidebar and shared session endpoints retain Host, Origin, token, body limit and strict write validation', async t => {
+  const directory = await folder(t);
+  await writeFile(path.join(directory,'index.html'),'<!doctype html><title>fixture</title>');
+  let captures=0;
+  const {sidebar,collector} = setup({scanner:async () => {captures++;return recognized();}});
+  const local = await createLocalServer({collector,sidebar,staticDirectory:directory,token:'b'.repeat(64)});
+  t.after(() => local.close());
+  const headers = {'X-Hexguide-Session':local.token,'Content-Type':'application/json'};
+  for (const endpoint of ['/api/session','/api/sidebar']) {
+    assert.equal((await request(local.port,endpoint)).status,401);
+    assert.equal((await request(local.port,endpoint,{headers:{...headers,Origin:'https://attacker.example'}})).status,403);
+    assert.equal((await request(local.port,endpoint,{headers:{...headers,Host:'attacker.example'}})).status,403);
+    assert.equal((await request(local.port,endpoint,{headers})).status,200);
+  }
+  let response = await request(local.port,'/api/session',{headers,method:'POST',body:JSON.stringify({owned:[ids[0]],route:'tank'})});
+  assert.equal(response.status,200);
+  assert.deepEqual(JSON.parse(response.body).owned,[ids[0]]);
+  assert.equal((await request(local.port,'/api/session',{headers,method:'POST',body:'{"owned":[],"route":"auto","secret":true}'})).status,400);
+  assert.equal((await request(local.port,'/api/session',{headers,method:'POST',body:' '.repeat(4097)})).status,413);
+  assert.equal((await request(local.port,'/api/sidebar/ocr',{headers,method:'POST',body:'{"enabled":"true"}'})).status,400);
+  assert.equal((await request(local.port,'/api/sidebar/ocr',{headers:{...headers,Origin:'null'},method:'POST',body:'{"enabled":true}'})).status,403);
+  response = await request(local.port,'/api/sidebar/ocr',{headers,method:'POST',body:'{"enabled":true}'});
+  assert.equal(response.status,200);
+  assert.equal(JSON.parse(response.body).ocr.enabled,true);
+  assert.equal(captures,0,'enabling state alone does not execute capture in the HTTP handler');
+  await request(local.port,'/api/session',{headers,method:'POST',body:'{"owned":[],"route":"auto"}'});
+  assert.equal((await request(local.port,'/api/ocr',{headers,method:'POST',body:'{}'})).status,200);
+  assert.equal(captures,1);
+  const model = JSON.parse((await request(local.port,'/api/sidebar',{headers})).body);
+  assert.equal(model.offers.length,3);
+  assert.deepEqual(model.owned,[]);
+});

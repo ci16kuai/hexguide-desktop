@@ -29,6 +29,7 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
   const session = new Map([['hexguide-local-session', 'test-only-local-session'], ...Object.entries(stored)]);
   const state = {championId, owned: [...owned], gameId, resets: 0, offers: [], renders: 0, ocrRequests: 0};
   let nextSnapshot = initial;
+  let sidebarModel={ocr:{enabled:false,status:'disabled',message:'',proposals:[],observedAt:null}};
   const OriginalDate = globalThis.Date;
   let currentTime = OriginalDate.now();
   const define = (key, value) => Object.defineProperty(globalThis, key, {configurable: true, writable: true, value});
@@ -48,8 +49,10 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
     if (milliseconds === 3000) { delays.push(() => callback(...args)); return delays.length; }
     return realSetTimeout(callback, milliseconds, ...args);
   });
-  define('fetch', async url => {
+  define('fetch', async (url, options={}) => {
     if (url === './items.json') return {ok: true, json: async () => items};
+    if (url === '/api/sidebar') return {ok:true,json:async()=>structuredClone(sidebarModel)};
+    if (url === '/api/sidebar/ocr') {sidebarModel.ocr.enabled=JSON.parse(options.body).enabled;return {ok:true,json:async()=>structuredClone(sidebarModel)};}
     if (url === '/api/live') {
       const value = liveReplies.length ? await liveReplies.shift() : nextSnapshot;
       if (value instanceof Error) throw value;
@@ -96,6 +99,7 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
   return {
     state, controller, session,
     advance(milliseconds) { currentTime += milliseconds; },
+    setSidebar(value) { sidebarModel=value; },
     html: () => controller.html(),
     deferLive: () => pendingReply('live'), deferOcr: () => pendingReply('ocr'),
     async tick(value) { if (value !== undefined) nextSnapshot = value; for (const callback of intervals) callback(); await settle(); },
@@ -199,7 +203,7 @@ test('live controller follows game boundaries without presenting drafts as curre
   await t.test('valid offers survive an empty scan but never have their age extended by polling', async t => {
     const h = await browserHarness(t);
     const resolve = h.deferOcr();
-    await h.click('ocr-auto');
+    await h.click('ocr-scan');
     await h.finishScanDelay();
     resolve({status:'recognized', message:'VERIFIED_CARD_TITLES',proposals:[
       {id:'firebrand',name:'火上浇油'},{id:'goliath',name:'歌利亚巨人'},{id:'jeweled_gauntlet',name:'珠光护手'}
@@ -207,6 +211,7 @@ test('live controller follows game boundaries without presenting drafts as curre
     await settle();
     assert.match(h.html(), /VERIFIED_CARD_TITLES/);
     h.advance(10000);
+    await h.click('ocr-scan');await h.finishScanDelay();
     await h.tick();
     assert.match(h.html(), /VERIFIED_CARD_TITLES/);
     assert.match(h.html(), /最近识别 · 10 秒前/);
@@ -218,6 +223,20 @@ test('live controller follows game boundaries without presenting drafts as curre
     assert.doesNotMatch(h.html(), /VERIFIED_CARD_TITLES/);
     await h.click('ocr-confirm');
     assert.equal(h.state.offers.length,1,'expired offers cannot be adopted');
+  });
+
+  await t.test('automatic OCR runs in the backend and its offers hydrate the main window',async t=>{
+    const h=await browserHarness(t);
+    await h.click('ocr-auto');
+    assert.match(h.html(),/自动扫描已开/);
+    h.advance(10000);await h.tick();
+    assert.equal(h.state.ocrRequests,0,'the frontend never starts its own automatic capture loop');
+    h.setSidebar({ocr:{enabled:true,status:'recognized',message:'BACKGROUND_VERIFIED_OFFERS',observedAt:new Date(Date.now()).toISOString(),proposals:[
+      {id:'firebrand',name:'火上浇油'},{id:'goliath',name:'歌利亚巨人'},{id:'jeweled_gauntlet',name:'珠光护手'}
+    ]}});
+    await h.tick();assert.match(h.html(),/BACKGROUND_VERIFIED_OFFERS/);
+    assert.deepEqual(h.state.offers,[],'background drafts do not auto-adopt choices');
+    await h.click('ocr-confirm');assert.equal(h.state.offers.length,1);
   });
 
   await t.test('a disconnected snapshot does not leave old stats or items on screen', async t => {
