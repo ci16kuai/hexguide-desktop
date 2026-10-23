@@ -11,10 +11,27 @@ const gameId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.tes
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 
 export class SessionValidationError extends Error {}
+export class SessionConflictError extends Error {}
+
+// Only machine-readable diagnostics may leave the OCR wrapper. Never retain
+// raw screen text, player names, paths or frame IDs in the sidebar model.
+const OCR_CODES = new Set(['title-layout-confirmed', 'capture-size-invalid', 'ocr-no-text', 'title-name-unmatched', 'title-layout-incomplete', 'title-layout-ambiguous', 'game-not-foreground', 'foreground-changed', 'window-bounds-unavailable', 'window-size-unsupported', 'ocr-language-missing', 'ocr-engine-unavailable', 'ocr-passes-incomplete', 'ocr-unavailable', 'scan-loop-failed', ...['capture', 'window-bounds', 'ocr-language', 'ocr-engine', 'resize', 'encode', 'stream-write', 'decode', 'software-bitmap', 'recognize', 'result'].map(stage => `ocr-${stage}-failed`)]);
+function publicOcrDetails(raw) {
+  const details = {};
+  if (OCR_CODES.has(raw?.code)) details.code = raw.code;
+  const diagnostics = {};
+  for (const key of ['width', 'height', 'lineCount', 'passCount', 'titleRegionCount', 'exactTitleCount', 'layoutCount', 'passesCompleted', 'passesFailed']) {
+    if (Number.isSafeInteger(raw?.diagnostics?.[key]) && raw.diagnostics[key] >= 0 && raw.diagnostics[key] <= 100_000) diagnostics[key] = raw.diagnostics[key];
+  }
+  if (Number.isFinite(raw?.diagnostics?.elapsedMs) && raw.diagnostics.elapsedMs >= 0 && raw.diagnostics.elapsedMs <= 100_000) diagnostics.elapsedMs = raw.diagnostics.elapsedMs;
+  if (typeof raw?.diagnostics?.budgetReached === 'boolean') diagnostics.budgetReached = raw.diagnostics.budgetReached;
+  if (Object.keys(diagnostics).length) details.diagnostics = diagnostics;
+  return details;
+}
 
 /** Confirmed choices and public game observations, shared by both app windows. */
 export class BackgroundSidebar {
-  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, now = () => Date.now(), scanInterval = 7000, offerLifetime = 60000} = {}) {
+  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, now = () => Date.now(), scanInterval = 2500, offerLifetime = 60000} = {}) {
     if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
     Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, now, scanInterval, offerLifetime});
     this.champions = new Map((data.champions || []).map(champion => [champion.id, champion]));
@@ -25,6 +42,7 @@ export class BackgroundSidebar {
     this.offerTime = 0;
     this.lastScan = -Infinity;
     this.generation = 0;
+    this.gameEpoch = 0;
     this.persistTail = Promise.resolve();
     this.preferencesTail = Promise.resolve();
     this.stopped = true;
@@ -90,9 +108,12 @@ export class BackgroundSidebar {
     this.offers = [];
     this.offerTime = 0;
     this.generation++;
+    this.gameEpoch++;
     this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
     this.ocr.message = this.ocr.enabled ? '等待本局海克斯三选一卡片。' : '后台识别已关闭。';
     this.ocr.observedAt = null;
+    delete this.ocr.code;
+    delete this.ocr.diagnostics;
   }
 
   observe() {
@@ -131,15 +152,44 @@ export class BackgroundSidebar {
       if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned)) this.generation++;
       this.session = {...this.session, ...selected, revision:this.session.revision + 1};
       // Once the player confirms a card, that previous round is no longer offered.
-      if (this.offers.some(offer => selected.owned.includes(offer.id))) { this.offers = []; this.offerTime = 0; }
+      if (this.offers.some(offer => selected.owned.includes(offer.id))) {
+        this.offers = []; this.offerTime = 0;
+        this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
+        this.ocr.message = '已确认选择；等待下一轮三选一卡片。';
+        delete this.ocr.code;
+        delete this.ocr.diagnostics;
+      }
       await this.persist();
     }
     return this.getSession();
   }
 
+  async confirmOffer(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 3 || Object.keys(value).some(key => !['id', 'gameId', 'revision'].includes(key)) || typeof value.id !== 'string' || !this.augments.has(value.id) || !(value.gameId === null || gameId(value.gameId) === value.gameId) || !Number.isSafeInteger(value.revision) || value.revision < 0) throw new SessionValidationError('Invalid confirmation.');
+    const live = this.observe();
+    // Check and mutate synchronously: a roll, another confirmation or a game
+    // boundary cannot slip between a UI GET and this authoritative update.
+    if (live.phase !== 'InProgress' || value.gameId !== this.session.gameId || value.revision !== this.session.revision || !this.offers.some(offer => offer.id === value.id) || this.session.owned.includes(value.id) || this.session.owned.length >= 12) throw new SessionConflictError('The current offered choices have changed.');
+    const epoch = this.gameEpoch;
+    this.generation++;
+    this.session = {...this.session, owned:[...this.session.owned, value.id], revision:this.session.revision + 1};
+    this.offers = [];
+    this.offerTime = 0;
+    this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
+    this.ocr.message = '已确认选择；等待下一轮三选一卡片。';
+    delete this.ocr.code;
+    delete this.ocr.diagnostics;
+    await this.persist();
+    const model = this.getModel();
+    if (epoch !== this.gameEpoch || model.phase !== 'InProgress' || !model.owned.some(augment => augment.id === value.id)) throw new SessionConflictError('The game changed while saving the choice.');
+    return model;
+  }
+
   setOcr(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1 || typeof value.enabled !== 'boolean') throw new SessionValidationError('An enabled boolean is required.');
     this.ocr.enabled = value.enabled;
+    delete this.ocr.code;
+    delete this.ocr.diagnostics;
     if (!value.enabled) { this.generation++; this.ocr.status = 'disabled'; this.ocr.message = '自动识别已暂停；已确认海克斯仍保留。'; }
     else if (!this.offers.length) { this.ocr.status = 'waiting'; this.ocr.message = '后台识别已开启；游戏在前台并出现三选一卡片时检查。'; }
     void this.persistRecognition();
@@ -166,8 +216,14 @@ export class BackgroundSidebar {
       if (complete) {
         this.offers = proposals;
         this.offerTime = this.now();
-        Object.assign(this.ocr, {status:'recognized', message:'已识别三个候选；请核对后自行选择，确认已选海克斯后推荐会更新。', observedAt:scannedAt});
-      } else if (!this.offers.length) Object.assign(this.ocr, {status, message:text(raw?.message) || '尚未确认到三个海克斯标题，可在主窗口手动选择。', observedAt:scannedAt});
+        delete this.ocr.code;
+        delete this.ocr.diagnostics;
+        Object.assign(this.ocr, {status:'recognized', message:'已识别三个候选；请核对后自行选择，确认已选海克斯后推荐会更新。', observedAt:scannedAt}, publicOcrDetails(raw));
+      } else if (!this.offers.length) {
+        delete this.ocr.code;
+        delete this.ocr.diagnostics;
+        Object.assign(this.ocr, {status, message:text(raw?.message) || '尚未确认到三个海克斯标题，可在主窗口手动选择。', observedAt:scannedAt}, publicOcrDetails(raw));
+      }
       // Empty battle frames do not replace the most recent valid three-card frame.
       return {status:complete ? 'recognized' : status === 'recognized' ? 'unavailable' : status, message:text(raw?.message) || this.ocr.message, proposals:complete ? proposals : [], observedAt:scannedAt};
     })().finally(() => { this.pending = null; });
@@ -187,7 +243,7 @@ export class BackgroundSidebar {
     });
     const plan = buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], champions:[...this.champions.values()], itemsCatalog:this.itemsCatalog, now:this.now()});
     return {
-      version:'1.8.1', connection:live.connection, phase:live.phase,
+      version:'1.8.2', connection:live.connection, phase:live.phase, gameId:this.session.gameId, sessionRevision:this.session.revision,
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
       level:live.level ?? null, gameTime:live.gameTime ?? null, currentGold:live.currentGold ?? null, items:live.items || [],
       teams:live.teams || {status:'unavailable', ownTeam:null, allies:[], enemies:[], observedAt:live.observedAt || null},
@@ -207,8 +263,12 @@ export class BackgroundSidebar {
     if (!this.stopped) return;
     this.stopped = false;
     const tick = async () => {
-      await this.pollOnce();
-      if (!this.stopped) { this.timer = setTimeout(tick, 1000); this.timer.unref?.(); }
+      try { await this.pollOnce(); }
+      catch {
+        if (!this.offers.length) Object.assign(this.ocr, {status:'unavailable', code:'scan-loop-failed', message:'本次自动识别暂未完成，稍后会自动重试。', observedAt:new Date(this.now()).toISOString()});
+      } finally {
+        if (!this.stopped) { this.timer = setTimeout(tick, 1000); this.timer.unref?.(); }
+      }
     };
     void tick();
   }

@@ -19,7 +19,9 @@ test('three exact titles in the real Windows OCR geometry become a confirmation 
   assert.ok(result.proposals.every(item => item.confidence === 'exact'));
   assert.match(result.message,/核对/);
   assert.ok(!('owned' in result));
-  assert.ok(!JSON.stringify(result).includes('diagnostics'));
+  assert.equal(result.code,'title-layout-confirmed');
+  assert.equal(result.diagnostics.layoutCount,1);
+  assert.ok(!('text' in result) && !('lines' in result),'safe matching diagnostics never echo raw OCR text');
 });
 
 test('a battle player name containing Goliath and descriptions cannot become card offers', () => {
@@ -99,5 +101,87 @@ test('missing geometry, misspellings, ambiguous punctuation and stale catalog na
   assert.equal(run(['罪恶快感！','歌利亚巨人','渴血']).proposals[0]?.name,'罪恶快感！');
   const retired = augments.find(item => item.availability !== 'current');
   assert.equal(run([retired.name,'歌利亚巨人','渴血']).status,'unavailable');
+});
+
+const crops = [{x:435,y:475,width:666,height:231},{x:973,y:475,width:614,height:231},{x:1459,y:475,width:666,height:231}];
+const cropped = (text, column, extra = {}) => title(text,column,{x:[570,1170,1770][column],y:592,pass:'card-titles-color',frameId:'same-capture',region:'card-title',column,crop:crops[column],...extra});
+
+test('scoped title passes recognize the actual missed title names with full-window coordinates', () => {
+  const names = ['升级：耀光','贪欲束缚','急急小子'];
+  assert.ok(names.every(name => byName.has(name)));
+  const result = matchOcrProposals(frame(names.map((name,column) => cropped(name,column))),augments);
+  assert.equal(result.status,'recognized');
+  assert.deepEqual(result.proposals.map(item => item.name),names);
+  assert.equal(result.diagnostics.titleRegionCount,3);
+});
+
+test('a scoped title split horizontally into OCR lines is rebuilt with whole visual-row coverage', () => {
+  const split = [cropped('升级：',0,{width:84}),cropped('耀光',0,{x:656,width:56})];
+  const lines = [...split,cropped('贪欲束缚',1),cropped('急急小子',2)];
+  assert.deepEqual(matchOcrProposals(frame(lines),augments).proposals.map(item => item.name),['升级：耀光','贪欲束缚','急急小子']);
+  assert.equal(matchOcrProposals(frame(lines.map(({region,column,crop,...line}) => line)),augments).status,'unavailable','full-window fragments never acquire relaxed title-region privileges');
+  const contamination = [...split,cropped('玩家名字',0,{x:720,width:112}),cropped('贪欲束缚',1),cropped('急急小子',2)];
+  assert.equal(matchOcrProposals(frame(contamination),augments).status,'unavailable','full visual row includes unrelated text and is rejected');
+});
+
+test('a scoped whole-column OCR line is separated into complete visual rows, never title substrings', () => {
+  const names = ['升级：耀光','贪欲束缚','急急小子'];
+  const lines = names.map((name,column) => {
+    const words = [cropped('黄金阶',column,{y:530,width:84,height:20}),cropped(name,column),cropped('命中时获得额外伤害',column,{y:656,width:250,height:20})];
+    return cropped(words.map(word => word.text).join(' '),column,{y:530,width:250,height:146,words});
+  });
+  const result = matchOcrProposals(frame(lines),augments);
+  assert.deepEqual(result.proposals.map(item => item.name),names);
+  const described = {...lines[0],text:'黄金阶 获得升级：耀光效果 命中时获得额外伤害',words:[lines[0].words[0],{...lines[0].words[1],text:'获得升级：耀光效果',width:252},lines[0].words[2]]};
+  assert.equal(matchOcrProposals(frame([described,...lines.slice(1)]),augments).status,'unavailable');
+  assert.equal(matchOcrProposals(frame(lines.map(({region,column,crop,...line}) => line)),augments).status,'unavailable','ordinary full-window lines keep exact complete-line rules');
+});
+
+test('a two-row exact title supersedes a catalog word that is only half of that title', () => {
+  const lines = [cropped('灵魂',0,{width:56}),cropped('虹吸',0,{y:628,width:56}),cropped('贪欲束缚',1),cropped('急急小子',2)];
+  const result = matchOcrProposals(frame(lines),augments);
+  assert.deepEqual(result.proposals.map(item => item.name),['灵魂虹吸','贪欲束缚','急急小子']);
+  assert.equal(matchOcrProposals(frame(lines.map(line => line.text === '虹吸' ? {...line,y:665} : line)),augments).status,'unavailable','distant text rows never form a title');
+});
+
+test('scoped OCR still rejects mixed passes, frames, malformed crops, misspellings and duplicate columns', () => {
+  const names = ['升级：耀光','贪欲束缚','急急小子'];
+  for (const alter of [
+    line => ({...line,pass:`pass-${line.column}`}),
+    line => ({...line,frameId:`frame-${line.column}`}),
+    line => ({...line,crop:{...line.crop,y:0}}),
+    line => ({...line,column:0}),
+    line => ({...line,text:line.column === 0 ? '升级：耀先' : line.text}),
+  ]) assert.equal(matchOcrProposals(frame(names.map((name,column) => alter(cropped(name,column)))),augments).status,'unavailable');
+  const outOfBoundsWord = cropped('升级：耀光',0,{words:[{text:'升级：耀光',x:10,y:592,width:100,height:31}]});
+  assert.equal(matchOcrProposals(frame([outOfBoundsWord,cropped('贪欲束缚',1),cropped('急急小子',2)]),augments).status,'recognized','invalid word geometry falls back to the exact complete line, not the out-of-crop word');
+});
+
+test('failure diagnostics identify empty, unmatched, incomplete and conflicting layouts without screen text', () => {
+  assert.equal(matchOcrProposals(frame([]),augments).code,'ocr-no-text');
+  const privateText = '私人玩家名字：升级耀先';
+  const unmatched = matchOcrProposals(frame([title(privateText,0)]),augments);
+  assert.equal(unmatched.code,'title-name-unmatched');
+  assert.ok(!JSON.stringify(unmatched).includes(privateText));
+  assert.equal(run(['贪欲束缚','急急小子']).code,'title-layout-incomplete');
+  const ambiguous = matchOcrProposals(frame([
+    ...['升级：耀光','贪欲束缚','急急小子'].map((name,column) => cropped(name,column)),
+    ...['大力','易损','渴血'].map((name,column) => cropped(name,column,{pass:'card-titles-contrast'})),
+  ]),augments);
+  assert.equal(ambiguous.code,'title-layout-ambiguous');
+  assert.equal(ambiguous.diagnostics.layoutCount,2);
+  assert.ok(ambiguous.diagnostics.titleGeometry.every(box => Object.keys(box).every(key => ['x','y','width','height','column'].includes(key))));
+});
+
+test('native failures retain only fixed codes, stages and bounded numeric diagnostics', () => {
+  const result = matchOcrProposals({status:'unavailable',code:'ocr-passes-incomplete',stage:'result',message:'本次识别未完成',text:'私人的屏幕内容',diagnostics:{width:2560,height:1440,passesCompleted:1,passesFailed:2,elapsedMs:4500,budgetReached:true,errorType:'Private.Player.Name',lastPassErrorType:'Private.Path',text:'screen text'}},augments);
+  assert.equal(result.code,'ocr-passes-incomplete');
+  assert.equal(result.stage,'result');
+  assert.deepEqual(result.diagnostics,{width:2560,height:1440,passesCompleted:1,passesFailed:2,elapsedMs:4500,budgetReached:true});
+  assert.ok(!JSON.stringify(result).includes('Private') && !JSON.stringify(result).includes('私人的屏幕内容'));
+  const arbitrary = matchOcrProposals({status:'waiting',code:'private-player-name',stage:'C:\\private\\path',diagnostics:{width:Infinity,elapsedMs:-1}},augments);
+  assert.equal(arbitrary.code,'ocr-unavailable');
+  assert.equal(arbitrary.stage,'native');
+  assert.deepEqual(arbitrary.diagnostics,{});
 });
 

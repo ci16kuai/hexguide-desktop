@@ -2,7 +2,7 @@ import http from 'node:http';
 import {randomBytes, timingSafeEqual} from 'node:crypto';
 import {readFile, realpath, stat} from 'node:fs/promises';
 import path from 'node:path';
-import {SessionValidationError} from './sidebar.mjs';
+import {SessionValidationError, SessionConflictError} from './sidebar.mjs';
 import {AppearanceValidationError} from './appearance.mjs';
 import {LayoutValidationError} from './layout.mjs';
 import {MAX_LAYOUT_BYTES} from '../dist/layout-config.js';
@@ -36,7 +36,7 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
     let pathname;
     try { pathname = decodeURIComponent(new URL(request.url, `http://${expectedHost}`).pathname); }
     catch { return send(response, 400, {error:'Invalid URL.'}); }
-    const writeRequest = ['/api/ocr', '/api/session', '/api/sidebar/ocr', '/api/appearance', '/api/layout'].includes(pathname) && request.method === 'POST';
+    const writeRequest = ['/api/ocr', '/api/session', '/api/session/confirm', '/api/sidebar/ocr', '/api/appearance', '/api/layout'].includes(pathname) && request.method === 'POST';
     if (!writeRequest && (!['GET', 'HEAD'].includes(request.method) || request.headers['transfer-encoding'] || Number(request.headers['content-length'] || 0) !== 0)) {
       request.resume();
       return send(response, 405, {error:'Only bodyless GET and HEAD requests are permitted.'});
@@ -76,10 +76,10 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
           catch { return send(response, 200, {status:'unavailable',message:'本次识别未完成，可手动选择。',proposals:[]}); }
         }
         if (!sidebar) return send(response, 503, {error:'Shared session is unavailable.'});
-        try { return send(response, 200, pathname === '/api/session' ? await sidebar.setSession(parsed) : sidebar.setOcr(parsed)); }
-        catch (error) { return send(response, error instanceof SessionValidationError ? 400 : 500, {error:error instanceof SessionValidationError ? 'Invalid assistant state.' : 'Assistant state could not be saved.'}); }
+        try { return send(response, 200, pathname === '/api/session/confirm' ? await sidebar.confirmOffer(parsed) : pathname === '/api/session' ? await sidebar.setSession(parsed) : sidebar.setOcr(parsed)); }
+        catch (error) { return send(response, error instanceof SessionConflictError ? 409 : error instanceof SessionValidationError ? 400 : 500, {error:error instanceof SessionConflictError ? 'The current offered choices have changed.' : error instanceof SessionValidationError ? 'Invalid assistant state.' : 'Assistant state could not be saved.'}); }
       }
-      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.8.1', localOnly:true});
+      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.8.2', localOnly:true});
       if (pathname === '/api/live') return send(response, 200, collector.getSnapshot());
       if (pathname === '/api/sidebar') return sidebar ? send(response, 200, sidebar.getModel()) : send(response, 503, {error:'Sidebar is unavailable.'});
       if (pathname === '/api/session') return sidebar ? send(response, 200, sidebar.getSession()) : send(response, 503, {error:'Shared session is unavailable.'});

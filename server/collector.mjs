@@ -6,12 +6,21 @@ import {requestLocalJson} from './transport.mjs';
 
 const execute = promisify(execFile);
 const PHASES = new Set(['None', 'Lobby', 'Matchmaking', 'ReadyCheck', 'ChampSelect', 'InProgress', 'Reconnect', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
-const MAYHEM_QUEUES = new Set([2400]);
+const MAYHEM_QUEUES = new Set([2400, 3270]);
 const TEAMS = new Set(['ORDER', 'CHAOS']);
 const STATS = ['abilityPower', 'attackDamage', 'attackSpeed', 'attackRange', 'armor', 'magicResist', 'critChance', 'critDamage', 'abilityHaste', 'cooldownReduction', 'maxHealth', 'currentHealth', 'healthRegenRate', 'resourceMax', 'resourceValue', 'resourceRegenRate', 'lifeSteal', 'spellVamp', 'moveSpeed', 'armorPenetrationFlat', 'armorPenetrationPercent', 'magicPenetrationFlat', 'magicPenetrationPercent'];
 const numeric = value => typeof value === 'number' && Number.isFinite(value);
 const cleanText = value => typeof value === 'string' ? value.slice(0, 160) : '';
 const normalized = value => cleanText(value).normalize('NFKC').toLowerCase().replace(/[\s'’._-]/g, '');
+
+export function detectGameMode(gameData) {
+  const rawQueueId = gameData?.queue?.id ?? gameData?.queueId;
+  const queueId = numeric(rawQueueId) ? rawQueueId : null;
+  // KIWI is Riot's explicit mode identifier for Mayhem, including custom
+  // matches. Map 12, ordinary ARAM and localized display names are not proof.
+  const explicitMayhem = gameData?.queue?.gameMode === 'KIWI' || gameData?.gameMode === 'KIWI';
+  return {queueId, isMayhem:MAYHEM_QUEUES.has(queueId) || explicitMayhem, known:queueId !== null || explicitMayhem};
+}
 
 export function buildChampionIndex(champions = [], officialChampions = []) {
   const names = new Map();
@@ -105,6 +114,13 @@ function knownAugments(active, own, augmentIndex) {
 export function snapshotFromLive(data, {index, augmentIndex = new Map(), lcu = null, now = new Date()} = {}) {
   const result = emptySnapshot(now);
   if (lcu) Object.assign(result, lcu);
+  // LCU queue metadata can disappear between phases. Only an explicit live
+  // KIWI mode fills that gap; ordinary live ARAM leaves the mode unknown and
+  // cannot override an already known LCU queue.
+  if (!result.mode?.known) {
+    const liveMode = detectGameMode(data?.gameData);
+    if (liveMode.isMayhem) result.mode = liveMode;
+  }
   const own = findOwnPlayer(data);
   if (!own) {
     result.connection = {status: 'error', message: '游戏接口已响应，但暂时无法确认当前玩家；未使用其他玩家的数据。'};
@@ -187,8 +203,7 @@ export class LiveCollector {
       const base = {phase, gameId: null, mode: {queueId: null, isMayhem: false, known: false}};
       try {
         const session = await read('/lol-gameflow/v1/session');
-        const queueId = session?.gameData?.queue?.id ?? session?.gameData?.queueId;
-        if (numeric(queueId)) base.mode = {queueId, isMayhem: MAYHEM_QUEUES.has(queueId), known: true};
+        base.mode = detectGameMode(session?.gameData);
         if ((phase === 'InProgress' || phase === 'Reconnect') && (numeric(session?.gameData?.gameId) || typeof session?.gameData?.gameId === 'string')) base.gameId = String(session.gameData.gameId).slice(0, 40);
       } catch { /* Queue metadata can be unavailable between gameflow phases. */ }
       if (phase === 'ChampSelect') {

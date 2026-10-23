@@ -7,17 +7,129 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
 $bitmap = $null
-$scaled = $null
-$memory = $null
-$stream = $null
-$writer = $null
-$softwareBitmap = $null
 $stage = 'initializing'
 $diagnostics = @{}
+$frameId = [Guid]::NewGuid().ToString('N')
+$scanClock = [Diagnostics.Stopwatch]::StartNew()
+$scanDeadlineMs = 10000
 
 function Write-Result([string]$Status, [string]$Message, [object[]]$Lines = @(), [string]$Text = '', [string]$Code = 'ok') {
-    [Console]::WriteLine((@{status=$Status; code=$Code; stage=$script:stage; diagnostics=$script:diagnostics; message=$Message; text=$Text; lines=@($Lines)} | ConvertTo-Json -Compress -Depth 5))
+    [Console]::WriteLine((@{status=$Status; code=$Code; stage=$script:stage; diagnostics=$script:diagnostics; frameId=$script:frameId; message=$Message; text=$Text; lines=@($Lines)} | ConvertTo-Json -Compress -Depth 7))
 }
+
+# OCR_REGION_HELPERS_BEGIN
+function Get-TitleRegions([int]$Width, [int]$Height) {
+    # The three cards occupy the centered 16:9 game viewport, including on an
+    # ultrawide display. Keep generous overlapping columns and the whole title
+    # band; this avoids assuming a particular title length or a single baseline.
+    $viewportWidth = [Math]::Min($Width, $Height * 16.0 / 9.0)
+    $viewportLeft = ($Width - $viewportWidth) / 2.0
+    $ranges = @(@(.17, .43), @(.38, .62), @(.57, .83))
+    for ($column = 0; $column -lt 3; $column++) {
+        $left = [int][Math]::Floor($viewportLeft + $ranges[$column][0] * $viewportWidth)
+        $right = [int][Math]::Ceiling($viewportLeft + $ranges[$column][1] * $viewportWidth)
+        $top = [int][Math]::Floor($Height * .33)
+        $bottom = [int][Math]::Ceiling($Height * .49)
+        @{x=$left; y=$top; width=$right-$left; height=$bottom-$top; column=$column}
+    }
+}
+
+function Await-WinRT($Operation, [Type]$ResultType) {
+    # The parent process also has a 15 second timeout. A single slow recognition
+    # must not consume that entire budget and discard already completed passes.
+    $remaining = [int]($script:scanDeadlineMs - $script:scanClock.ElapsedMilliseconds)
+    if ($remaining -lt 100) { throw 'OCR operation timed out.' }
+    $task = $script:asTaskMethod.MakeGenericMethod($ResultType).Invoke($null, @($Operation))
+    if (-not $task.Wait([Math]::Min(4000, $remaining))) { throw 'OCR operation timed out.' }
+    return $task.Result
+}
+
+function Invoke-ImageRegionOcr($Image, $Region, [double]$RequestedScale, [string]$Pass, [bool]$Contrast = $false) {
+    $regionBitmap = $null
+    $regionMemory = $null
+    $regionStream = $null
+    $regionWriter = $null
+    $regionSoftwareBitmap = $null
+    try {
+        $scale = [Math]::Min($RequestedScale, $script:maxDimension / [double][Math]::Max($Region.width, $Region.height))
+        $targetWidth = [Math]::Max(1, [int][Math]::Floor($Region.width * $scale))
+        $targetHeight = [Math]::Max(1, [int][Math]::Floor($Region.height * $scale))
+        # Use the actual rounded horizontal/vertical scale for the inverse map.
+        $scaleX = $targetWidth / [double]$Region.width
+        $scaleY = $targetHeight / [double]$Region.height
+        $regionBitmap = New-Object System.Drawing.Bitmap($targetWidth, $targetHeight, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb))
+        $resize = [System.Drawing.Graphics]::FromImage($regionBitmap)
+        $attributes = $null
+        try {
+            $resize.Clear([System.Drawing.Color]::White)
+            $resize.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $destination = New-Object System.Drawing.Rectangle(0, 0, $targetWidth, $targetHeight)
+            if ($Contrast) {
+                # Grayscale, invert and increase contrast: pale gold/white card
+                # headings become dark text on a light background. The original
+                # color pass remains independent, so no OCR guesses are merged.
+                $matrix = New-Object System.Drawing.Imaging.ColorMatrix
+                $matrix.Matrix00 = -.38268; $matrix.Matrix01 = -.38268; $matrix.Matrix02 = -.38268
+                $matrix.Matrix10 = -1.28736; $matrix.Matrix11 = -1.28736; $matrix.Matrix12 = -1.28736
+                $matrix.Matrix20 = -.12996; $matrix.Matrix21 = -.12996; $matrix.Matrix22 = -.12996
+                $matrix.Matrix40 = 1.4; $matrix.Matrix41 = 1.4; $matrix.Matrix42 = 1.4
+                $attributes = New-Object System.Drawing.Imaging.ImageAttributes
+                $attributes.SetColorMatrix($matrix)
+                $resize.DrawImage($Image, $destination, [single]$Region.x, [single]$Region.y, [single]$Region.width, [single]$Region.height, [System.Drawing.GraphicsUnit]::Pixel, $attributes)
+            } else {
+                $resize.DrawImage($Image, $destination, [single]$Region.x, [single]$Region.y, [single]$Region.width, [single]$Region.height, [System.Drawing.GraphicsUnit]::Pixel)
+            }
+        } finally {
+            if ($attributes) { $attributes.Dispose() }
+            $resize.Dispose()
+        }
+        $script:stage = 'encode'
+        $regionMemory = New-Object System.IO.MemoryStream
+        $regionBitmap.Save($regionMemory, [System.Drawing.Imaging.ImageFormat]::Png)
+        $script:stage = 'stream-write'
+        $regionStream = New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
+        $regionWriter = New-Object Windows.Storage.Streams.DataWriter($regionStream)
+        $regionWriter.WriteBytes($regionMemory.ToArray())
+        $null = Await-WinRT ($regionWriter.StoreAsync()) ([uint32])
+        $regionStream.Seek(0)
+        $script:stage = 'decode'
+        $decoder = Await-WinRT ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($regionStream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+        $script:stage = 'software-bitmap'
+        $regionSoftwareBitmap = Await-WinRT ($decoder.GetSoftwareBitmapAsync([Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, [Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied)) ([Windows.Graphics.Imaging.SoftwareBitmap])
+        $script:stage = 'recognize'
+        $result = Await-WinRT ($script:engine.RecognizeAsync($regionSoftwareBitmap)) ([Windows.Media.Ocr.OcrResult])
+        foreach ($line in $result.Lines) {
+            $words = @($line.Words)
+            if (-not $words.Count) { continue }
+            $left = ($words | ForEach-Object {$_.BoundingRect.X} | Measure-Object -Minimum).Minimum
+            $top = ($words | ForEach-Object {$_.BoundingRect.Y} | Measure-Object -Minimum).Minimum
+            $right = ($words | ForEach-Object {$_.BoundingRect.X + $_.BoundingRect.Width} | Measure-Object -Maximum).Maximum
+            $bottom = ($words | ForEach-Object {$_.BoundingRect.Y + $_.BoundingRect.Height} | Measure-Object -Maximum).Maximum
+            $entry = @{
+                text=$line.Text; frameId=$script:frameId; pass=$Pass
+                x=[Math]::Round($Region.x + $left / $scaleX, 1); y=[Math]::Round($Region.y + $top / $scaleY, 1)
+                width=[Math]::Round(($right-$left) / $scaleX, 1); height=[Math]::Round(($bottom-$top) / $scaleY, 1)
+                words=@($words | ForEach-Object {@{
+                    text=$_.Text; x=[Math]::Round($Region.x + $_.BoundingRect.X / $scaleX, 1); y=[Math]::Round($Region.y + $_.BoundingRect.Y / $scaleY, 1)
+                    width=[Math]::Round($_.BoundingRect.Width / $scaleX, 1); height=[Math]::Round($_.BoundingRect.Height / $scaleY, 1)
+                }})
+            }
+            if ($Region.ContainsKey('column')) {
+                $entry.region = 'card-title'
+                $entry.column = $Region.column
+                $entry.crop = @{x=$Region.x; y=$Region.y; width=$Region.width; height=$Region.height}
+            }
+            $entry
+        }
+    } finally {
+        if ($regionSoftwareBitmap) { $regionSoftwareBitmap.Dispose() }
+        if ($regionWriter) { $regionWriter.Dispose() }
+        if ($regionStream) { $regionStream.Dispose() }
+        if ($regionMemory) { $regionMemory.Dispose() }
+        if ($regionBitmap) { $regionBitmap.Dispose() }
+    }
+}
+# OCR_REGION_HELPERS_END
 
 try {
     $stage = 'native-window'
@@ -112,61 +224,53 @@ public static class HexGuideGameWindow {
         Write-Result 'waiting' '前台窗口已切换，本次扫描已取消。' @() '' 'foreground-changed'
         exit 0
     }
-    $stage = 'resize'
     $maxDimension = [Windows.Media.Ocr.OcrEngine]::MaxImageDimension
-    $scale = [Math]::Min(1.0, $maxDimension / [double][Math]::Max($width, $height))
-    if ($scale -lt 1) {
-        $targetWidth = [Math]::Max(1, [int][Math]::Floor($width * $scale))
-        $targetHeight = [Math]::Max(1, [int][Math]::Floor($height * $scale))
-        $scaled = New-Object System.Drawing.Bitmap($targetWidth, $targetHeight)
-        $resize = [System.Drawing.Graphics]::FromImage($scaled)
-        try {
-            $resize.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-            $resize.DrawImage($bitmap, 0, 0, $targetWidth, $targetHeight)
-        } finally { $resize.Dispose() }
-    } else { $scaled = $bitmap }
-    $diagnostics.ocrMaxDimension = $maxDimension
-    $diagnostics.scale = $scale
-    $stage = 'encode'
-    $memory = New-Object System.IO.MemoryStream
-    $scaled.Save($memory, [System.Drawing.Imaging.ImageFormat]::Png)
-    $bytes = $memory.ToArray()
-
     $asTaskMethod = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
         $_.Name -eq 'AsTask' -and $_.IsGenericMethod -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
     } | Select-Object -First 1
-    function Await-WinRT($Operation, [Type]$ResultType) {
-        $task = $asTaskMethod.MakeGenericMethod($ResultType).Invoke($null, @($Operation))
-        if (-not $task.Wait(15000)) { throw 'OCR operation timed out.' }
-        return $task.Result
+    $diagnostics.ocrMaxDimension = $maxDimension
+    $diagnostics.passesCompleted = 0
+    $diagnostics.passesFailed = 0
+    $diagnostics.passCodes = @()
+    $regions = @(Get-TitleRegions $width $height)
+    $passes = @()
+    foreach ($region in $regions) { $passes += @{region=$region; name='card-titles-color'; scale=3.0; contrast=$false} }
+    foreach ($region in $regions) { $passes += @{region=$region; name='card-titles-contrast'; scale=3.0; contrast=$true} }
+    $passes += @{region=@{x=0; y=0; width=$width; height=$height}; name='full-window'; scale=1.0; contrast=$false}
+    $lines = @()
+    foreach ($pass in $passes) {
+        if ($scanClock.ElapsedMilliseconds -gt ($scanDeadlineMs - 700)) {
+            $diagnostics.budgetReached = $true
+            break
+        }
+        try {
+            # All crops are derived from the one captured frame. Coordinates are
+            # mapped back to that frame; different recognition variants never
+            # share a pass identifier and therefore cannot fabricate a triple.
+            $lines += @(Invoke-ImageRegionOcr $bitmap $pass.region $pass.scale $pass.name $pass.contrast)
+            $diagnostics.passesCompleted++
+            $diagnostics.passCodes += ($pass.name + $(if ($pass.region.ContainsKey('column')) { ':' + $pass.region.column } else { '' }))
+        } catch {
+            $diagnostics.passesFailed++
+            $passException = $_.Exception
+            while ($passException.InnerException) { $passException = $passException.InnerException }
+            $diagnostics.lastPassErrorType = $passException.GetType().FullName
+        }
     }
-    $stage = 'stream-write'
-    $stream = New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
-    $writer = New-Object Windows.Storage.Streams.DataWriter($stream)
-    $writer.WriteBytes($bytes)
-    $null = Await-WinRT ($writer.StoreAsync()) ([uint32])
-    $stream.Seek(0)
-    $stage = 'decode'
-    $decoder = Await-WinRT ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-    $stage = 'software-bitmap'
-    $softwareBitmap = Await-WinRT ($decoder.GetSoftwareBitmapAsync([Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, [Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied)) ([Windows.Graphics.Imaging.SoftwareBitmap])
-    $stage = 'recognize'
-    $result = Await-WinRT ($engine.RecognizeAsync($softwareBitmap)) ([Windows.Media.Ocr.OcrResult])
+    # Do not publish observations if the player switched away during OCR.
+    if ([HexGuideGameWindow]::GetForegroundWindow() -ne $window) {
+        Write-Result 'waiting' '前台窗口已切换，本次扫描已取消。' @() '' 'foreground-changed'
+        exit 0
+    }
+    $diagnostics.elapsedMs = $scanClock.ElapsedMilliseconds
+    $diagnostics.lineCount = $lines.Count
     $stage = 'result'
-    $lines = @($result.Lines | ForEach-Object {
-        $words = @($_.Words)
-        if ($words.Count) {
-            $left = ($words | ForEach-Object {$_.BoundingRect.X} | Measure-Object -Minimum).Minimum
-            $top = ($words | ForEach-Object {$_.BoundingRect.Y} | Measure-Object -Minimum).Minimum
-            $right = ($words | ForEach-Object {$_.BoundingRect.X + $_.BoundingRect.Width} | Measure-Object -Maximum).Maximum
-            $bottom = ($words | ForEach-Object {$_.BoundingRect.Y + $_.BoundingRect.Height} | Measure-Object -Maximum).Maximum
-        } else { $left = 0; $top = 0; $right = 0; $bottom = 0 }
-        @{text=$_.Text; x=[Math]::Round($left / $scale, 1); y=[Math]::Round($top / $scale, 1); width=[Math]::Round(($right-$left) / $scale, 1); height=[Math]::Round(($bottom-$top) / $scale, 1); pass='full-window'; words=@($words | ForEach-Object {@{text=$_.Text; x=[Math]::Round($_.BoundingRect.X / $scale, 1); y=[Math]::Round($_.BoundingRect.Y / $scale, 1); width=[Math]::Round($_.BoundingRect.Width / $scale, 1); height=[Math]::Round($_.BoundingRect.Height / $scale, 1)}})}
-    })
-    if (-not $lines.Count) {
+    if (-not $lines.Count -and $diagnostics.passesFailed) {
+        Write-Result 'unavailable' '本机文字识别未完成，请在三选一画面保持稳定后重试。' @() '' 'ocr-passes-incomplete'
+    } elseif (-not $lines.Count) {
         Write-Result 'recognized' '未识别到文字。请在三选一界面重试；独占全屏时可尝试无边框窗口。'
     } else {
-        Write-Result 'recognized' '已在本机识别游戏窗口文字。匹配结果需要你确认，不能据此自动判断已选海克斯。' $lines $result.Text
+        Write-Result 'recognized' '已在本机识别游戏窗口文字。匹配结果需要你确认，不能据此自动判断已选海克斯。' $lines (($lines | ForEach-Object {$_.text}) -join "`n")
     }
 } catch {
     # Return stage/type only: exception messages can contain paths or OCR data and are deliberately omitted.
@@ -184,11 +288,6 @@ public static class HexGuideGameWindow {
     }
     Write-Result 'unavailable' $message @() '' ('ocr-' + $stage + '-failed')
 } finally {
-    if ($softwareBitmap) { $softwareBitmap.Dispose() }
-    if ($writer) { $writer.Dispose() }
-    if ($stream) { $stream.Dispose() }
-    if ($memory) { $memory.Dispose() }
-    if ($scaled -and -not [Object]::ReferenceEquals($scaled, $bitmap)) { $scaled.Dispose() }
     if ($bitmap) { $bitmap.Dispose() }
     # Images are held in memory only. DataDir is accepted for compatibility; no files are created.
 }

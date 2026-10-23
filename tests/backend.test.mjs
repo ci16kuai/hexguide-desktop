@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import {mkdtemp, writeFile, rm, mkdir} from 'node:fs/promises';
 import path from 'node:path';
-import {buildChampionIndex, findOwnPlayer, snapshotFromLive, parseLockfile, discoverLcu, LiveCollector} from '../server/collector.mjs';
+import {buildChampionIndex, detectGameMode, findOwnPlayer, snapshotFromLive, parseLockfile, discoverLcu, LiveCollector} from '../server/collector.mjs';
 import {createLocalServer} from '../server/http.mjs';
 import {requestLocalJson} from '../server/transport.mjs';
 import {matchOcrProposals, createOcrScanner} from '../server/ocr.mjs';
@@ -207,6 +207,49 @@ test('in-game snapshots retain LCU queue and game ID; ordinary ARAM never become
   // The page cannot mutate the collector's state through its returned copy.
   result.items[0].name = 'Changed';
   assert.equal(collector.getSnapshot().items[0].name, '法师之靴');
+});
+
+test('mode detection supports the observed custom 3270 queue and explicit future KIWI queues', () => {
+  const observedCustom = {isCustomGame:true, queue:{id:3270, name:'海克斯大乱斗 ', description:'海克斯大乱斗 ', gameMode:'KIWI', mapId:12, type:'KIWI', category:'Custom', isCustom:true}};
+  assert.deepEqual(detectGameMode(observedCustom), {queueId:3270,isMayhem:true,known:true});
+  assert.deepEqual(detectGameMode({queue:{id:3270}}), {queueId:3270,isMayhem:true,known:true});
+  assert.deepEqual(detectGameMode({queue:{id:98765,gameMode:'KIWI',category:'Custom',isCustom:true}}), {queueId:98765,isMayhem:true,known:true});
+  assert.deepEqual(detectGameMode({queue:{gameMode:'KIWI'}}), {queueId:null,isMayhem:true,known:true});
+  assert.deepEqual(detectGameMode({gameMode:'KIWI'}), {queueId:null,isMayhem:true,known:true});
+  assert.deepEqual(detectGameMode({queueId:2400}), {queueId:2400,isMayhem:true,known:true});
+});
+
+test('ordinary ARAM, map 12, localized names and missing queue metadata never imply Mayhem', () => {
+  assert.deepEqual(detectGameMode({queue:{id:450,gameMode:'ARAM',mapId:12}}), {queueId:450,isMayhem:false,known:true});
+  assert.deepEqual(detectGameMode({isCustomGame:true,queue:{id:98765,name:'海克斯大乱斗',description:'KIWI',gameMode:'ARAM',type:'KIWI',mapId:12,isCustom:true}}), {queueId:98765,isMayhem:false,known:true});
+  assert.deepEqual(detectGameMode({queue:{id:98765}}), {queueId:98765,isMayhem:false,known:true});
+  for (const gameData of [undefined, null, {}, {gameMode:'ARAM',mapNumber:12}, {queue:{name:'海克斯大乱斗',mapId:12}}, {queue:{id:'3270',gameMode:'kiwi'}}]) {
+    assert.deepEqual(detectGameMode(gameData), {queueId:null,isMayhem:false,known:false});
+  }
+});
+
+test('explicit live KIWI fills missing LCU mode metadata without overriding a known ordinary queue', () => {
+  const data = live();
+  data.gameData.gameMode = 'KIWI';
+  assert.deepEqual(snapshotFromLive(data, {index,now}).mode, {queueId:null,isMayhem:true,known:true});
+  assert.deepEqual(snapshotFromLive(data, {index,now,lcu:{mode:{queueId:null,isMayhem:false,known:false}}}).mode, {queueId:null,isMayhem:true,known:true});
+  assert.deepEqual(snapshotFromLive(data, {index,now,lcu:{mode:{queueId:450,isMayhem:false,known:true}}}).mode, {queueId:450,isMayhem:false,known:true});
+  assert.deepEqual(snapshotFromLive(live(), {index,now}).mode, {queueId:null,isMayhem:false,known:false});
+});
+
+test('the collector recognizes an observed custom KIWI session while exporting only sanitized mode fields', async () => {
+  const collector = new LiveCollector({champions, officialChampions, now:() => now, discover:async () => ({port:55555,authorization:'Basic local-test'}), request:async url => {
+    if (url.endsWith('gameflow-phase')) return 'InProgress';
+    if (url.endsWith('/lol-gameflow/v1/session')) return {gameData:{gameId:12345,isCustomGame:true,queue:{id:3270,name:'海克斯大乱斗 ',description:'海克斯大乱斗 ',gameMode:'KIWI',mapId:12,type:'KIWI',category:'Custom',isCustom:true}},fixturePrivate:'do-not-export'};
+    if (url.includes(':2999/')) return live();
+    throw new Error('Unexpected endpoint');
+  }});
+  const result = await collector.pollOnce();
+  assert.deepEqual(result.mode, {queueId:3270,isMayhem:true,known:true});
+  assert.equal(result.championId, 'Ahri');
+  assert.equal(result.gameId, '12345');
+  assert.ok(!JSON.stringify(result).includes('do-not-export'));
+  assert.deepEqual(Object.keys(result.mode).sort(), ['isMayhem','known','queueId']);
 });
 
 test('offline collection returns waiting and clears stale game/hero data', async () => {

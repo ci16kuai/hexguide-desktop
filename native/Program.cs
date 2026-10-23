@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Reflection;
@@ -19,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.8.1.0")]
-[assembly: AssemblyFileVersion("1.8.1.0")]
-[assembly: AssemblyInformationalVersion("1.8.1")]
+[assembly: AssemblyVersion("1.8.2.0")]
+[assembly: AssemblyFileVersion("1.8.2.0")]
+[assembly: AssemblyInformationalVersion("1.8.2")]
 
 namespace HexGuide.Desktop
 {
@@ -80,6 +81,7 @@ namespace HexGuide.Desktop
         private readonly bool startHidden;
         private bool sidebarEnabled = true, previewSidebar, explicitActivation, trayHintShown;
         private bool fetching, scanChanging, confirmChanging, hotKeyRegistered, appearanceRequested, appearanceOpening, layoutRequested, layoutOpening;
+        private long sidebarRequestGeneration;
         private string sessionToken;
         private IntPtr lastGame;
         private DateTime nextFetch = DateTime.MinValue;
@@ -90,7 +92,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             previewSidebar = preview;
-            Text = "海克斯指南 1.8.1 · 我的这一局";
+            Text = "海克斯指南 1.8.2 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -436,24 +438,26 @@ namespace HexGuide.Desktop
 
         private async Task FetchSidebarAsync()
         {
-            if (closing || localOrigin == null || fetching) return;
+            if (closing || localOrigin == null || fetching || confirmChanging || scanChanging) return;
             fetching = true;
+            long generation = sidebarRequestGeneration;
             try
             {
                 var model = await RequestModelAsync("api/sidebar", null);
-                if (closing || IsDisposed) return;
+                if (closing || IsDisposed || generation != sidebarRequestGeneration || confirmChanging || scanChanging) return;
                 sidebar.Model = model;
                 scanMenu.Checked = ModelValue.Boolean(ModelValue.Object(model, "ocr"), "enabled");
                 scanMenu.Enabled = !scanChanging;
                 sidebar.Invalidate();
             }
-            catch { if (!closing) { sidebar.Model = ModelValue.Failure("正在等待本地连接…"); sidebar.Invalidate(); } }
+            catch { if (!closing && generation == sidebarRequestGeneration && !confirmChanging && !scanChanging) { sidebar.Model = ModelValue.Failure("正在等待本地连接…"); sidebar.Invalidate(); } }
             finally { fetching = false; }
         }
 
         private async Task ToggleScanningAsync()
         {
             if (closing || localOrigin == null || scanChanging) return;
+            sidebarRequestGeneration++;
             scanChanging = true; scanMenu.Enabled = false;
             try
             {
@@ -470,32 +474,47 @@ namespace HexGuide.Desktop
         private async Task ConfirmOfferAsync(string id)
         {
             if (closing || localOrigin == null || confirmChanging || string.IsNullOrEmpty(id)) return;
-            confirmChanging = true;
-            Dictionary<string, object> current;
-            try { current = await RequestModelAsync("api/sidebar", null); }
-            catch { confirmChanging = false; sidebar.Notice = "正在等待本局连接，请稍后再确认"; sidebar.Invalidate(); return; }
-            bool offered = false;
-            foreach (object entry in ModelValue.Array(current, "offers"))
-                if (ModelValue.Text(entry as Dictionary<string, object>, "id") == id) offered = true;
-            if (!offered) { confirmChanging = false; sidebar.Notice = "这轮选项已更新，请核对当前卡片"; sidebar.Invalidate(); return; }
-            var owned = new List<string>();
-            foreach (object entry in ModelValue.Array(current, "owned"))
-            {
-                string value = ModelValue.Text(entry as Dictionary<string, object>, "id");
-                if (value.Length > 0 && !owned.Contains(value)) owned.Add(value);
-            }
-            if (!owned.Contains(id)) owned.Add(id);
-            string route = ModelValue.Text(current, "route");
-            if (route.Length == 0) route = "auto";
-            string body = new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "owned", owned.ToArray() }, { "route", route } });
+            sidebarRequestGeneration++;
             confirmChanging = true;
             try
             {
-                await RequestModelAsync("api/session", body);
+                var current = await RequestModelAsync("api/sidebar", null);
                 if (closing) return;
-                sidebar.Notice = "已记录本局选择，推荐正在更新";
-                sidebar.Model = await RequestModelAsync("api/sidebar", null);
+                bool offered = false;
+                foreach (object entry in ModelValue.Array(current, "offers"))
+                    if (ModelValue.Text(entry as Dictionary<string, object>, "id") == id) offered = true;
+                long revision;
+                object currentGameId;
+                if (!offered || !ModelValue.Integer(current, "sessionRevision", out revision) || !ModelValue.GameId(current, out currentGameId))
+                {
+                    sidebar.Model = current;
+                    sidebar.Notice = "这轮选项已更新，请核对当前卡片";
+                    return;
+                }
+                // The server checks the game, revision and current offer in one operation.
+                // Never fall back to replacing an entire session from an older GET.
+                string body = new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
+                    { "id", id }, { "gameId", currentGameId }, { "revision", revision }
+                });
+                var confirmed = await RequestModelAsync("api/session/confirm", body);
+                if (closing) return;
+                if (!ModelValue.ConfirmsOffer(confirmed, id, currentGameId))
+                {
+                    sidebar.Notice = "本局状态已变化，请核对当前选择";
+                    nextFetch = DateTime.MinValue;
+                    return;
+                }
+                sidebar.Model = confirmed;
                 sidebar.ExpandBuild();
+                sidebar.Notice = "已记录本局选择，推荐已更新";
+            }
+            catch (WebException error)
+            {
+                var response = error.Response as HttpWebResponse;
+                bool changed = response != null && response.StatusCode == HttpStatusCode.Conflict;
+                if (response != null) response.Close();
+                if (!closing) sidebar.Notice = changed ? "本轮选项已变化，请核对当前卡片" : "记录未成功，请稍后再点一次";
+                if (changed && !closing) nextFetch = DateTime.MinValue;
             }
             catch { if (!closing) sidebar.Notice = "记录未成功，请稍后再点一次"; }
             finally { confirmChanging = false; if (!closing) sidebar.Invalidate(); }
@@ -646,6 +665,7 @@ namespace HexGuide.Desktop
         private readonly HashSet<string> requestedIcons = new HashSet<string>();
         private Rectangle buildToggle;
         private bool buildExpanded, remoteIcons = true;
+        private long sessionRevision = -1;
         private Rectangle placementArea;
         private Point dragStartPointer, dragStartLocation;
         private bool dragging, consumeDragClick, customPosition, appearanceLoaded;
@@ -655,11 +675,19 @@ namespace HexGuide.Desktop
             get { return model; }
             set
             {
+                long revision;
+                if (ModelValue.Integer(value, "sessionRevision", out revision))
+                {
+                    if (revision < sessionRevision) return;
+                    sessionRevision = revision;
+                }
                 int previousOwned = ModelValue.Array(model, "owned").Count;
                 bool previousModel = ModelValue.Object(model, "champion") != null;
                 model = value;
                 int currentOwned = ModelValue.Array(value, "owned").Count;
-                if (currentOwned == 0) buildExpanded = false;
+                // A connection-only failure does not describe the current selection.
+                // Keep an expanded build open until a real session explicitly clears it.
+                if (value != null && value.ContainsKey("owned") && currentOwned == 0) buildExpanded = false;
                 else if (previousModel && currentOwned > previousOwned) ExpandBuild();
                 offerButtons.Clear();
                 // A transient connection error must not reset the user's last saved layout.
@@ -958,7 +986,8 @@ namespace HexGuide.Desktop
             Write(g, "核对选项，游戏选好后点「我选了这个」", smallFont, muted, new Rectangle(x, y, width, S(18))); y += S(22);
             if (offers.Count == 0)
             {
-                Write(g, "等待完整卡片出现。\r\n识别结果只作候选，使用前需核对名称。", normalFont, muted, new Rectangle(x, y, width, S(52)));
+                Write(g, RecognitionSummary(ModelValue.Object(Model, "ocr")), normalFont, muted, new Rectangle(x, y, width, S(30)));
+                Write(g, RecognitionTime(ModelValue.Object(Model, "ocr")), smallFont, muted, new Rectangle(x, y + S(33), width, S(19)));
             }
             else
             {
@@ -979,6 +1008,30 @@ namespace HexGuide.Desktop
                     y += S(74);
                 }
             }
+        }
+        private static string RecognitionSummary(Dictionary<string, object> ocr)
+        {
+            if (ocr == null) return "正在等待本局识别状态…";
+            if (!ModelValue.Boolean(ocr, "enabled")) return "自动识别已暂停，可从托盘恢复";
+            string code = ModelValue.Text(ocr, "code"), status = ModelValue.Text(ocr, "status");
+            string message = ModelValue.Text(ocr, "message");
+            // Only fixed product text is displayed. Native diagnostics, raw OCR,
+            // exception messages and local paths never become sidebar copy.
+            if (code == "game-not-foreground" || code == "foreground-changed" || message.StartsWith("请先将英雄联盟游戏窗口切到前台", StringComparison.Ordinal) || message.StartsWith("前台窗口已切换", StringComparison.Ordinal)) return "等待游戏回到前台后自动识别";
+            if (code == "ocr-language-missing" || code == "ocr-engine-unavailable" || message.StartsWith("Windows", StringComparison.Ordinal)) return "本机文字识别暂不可用，请检查中文识别";
+            if (code == "window-bounds-unavailable" || code == "window-size-unsupported" || code == "ocr-capture-failed" || message.StartsWith("无法读取", StringComparison.Ordinal) || message.StartsWith("游戏窗口尺寸", StringComparison.Ordinal)) return "暂未读到游戏画面，将自动重试";
+            if (status == "scanning") return "正在识别本轮三张卡片…";
+            if (status == "recognized") return "本轮候选已处理，等待下一轮卡片";
+            if (status == "unavailable")
+                return message.StartsWith("未确认到同一排", StringComparison.Ordinal) ? "未识别到完整的三张卡片，将自动重试" : "本次识别未完成，将自动重试";
+            return "等待游戏中的三选一卡片出现";
+        }
+        private static string RecognitionTime(Dictionary<string, object> ocr)
+        {
+            DateTimeOffset observed;
+            return DateTimeOffset.TryParse(ModelValue.Text(ocr, "observedAt"), CultureInfo.InvariantCulture, DateTimeStyles.None, out observed)
+                ? "最近检查 · " + observed.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)
+                : "出现卡片后会自动检查";
         }
         private static void Write(Graphics graphics, string text, Font font, Color color, Rectangle rectangle)
         {
@@ -1097,14 +1150,93 @@ namespace HexGuide.Desktop
                 Require(window.paintedSections[0] == "plan" && window.contentHeight > buildViewport.Height, "Selected build must expand first and remain scrollable.");
                 Require(!window.Visible && window.ShowWithoutActivation, "Expanded build unexpectedly activated a window.");
                 window.buildExpanded = false; window.scrollOffset = 0;
+                string statusPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-recognition-status.png");
+                int liveStateChecks = ValidateLiveStateFixtures(window, statusPreviewPath);
                 int defaultWidth = window.Width, defaultHeight = window.Height;
                 int appearanceChecks = ValidateAppearanceFixtures(window);
                 string placementPreviewPath;
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath } });
             }
+        }
+        private static int ValidateLiveStateFixtures(SidebarWindow window, string statusPreviewPath)
+        {
+            var original = window.Model;
+            var recognition = new Dictionary<string, object> { { "enabled", true }, { "status", "waiting" }, { "code", "game-not-foreground" }, { "observedAt", "2026-10-24T01:02:03Z" } };
+            Require(RecognitionSummary(recognition) == "等待游戏回到前台后自动识别", "Foreground waiting was hidden behind generic card copy.");
+            Require(RecognitionTime(recognition).StartsWith("最近检查 · ", StringComparison.Ordinal), "Last scan time was not displayed.");
+            recognition["status"] = "unavailable"; recognition["code"] = "titles-incomplete";
+            recognition["message"] = "未确认到同一排的三个海克斯卡片标题。";
+            Require(RecognitionSummary(recognition) == "未识别到完整的三张卡片，将自动重试", "Unmatched titles were shown as a never-scanned state.");
+            var statusModel = new Dictionary<string, object>(original);
+            statusModel["owned"] = new object[0]; statusModel["offers"] = new object[0]; statusModel["ocr"] = recognition;
+            window.Model = statusModel;
+            using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(statusPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
+            recognition["message"] = "sensitive-path C:\\private\\raw-text";
+            Require(!RecognitionSummary(recognition).Contains("private") && !RecognitionSummary(recognition).Contains("raw-text"), "Raw diagnostic text leaked into recognition copy.");
+            recognition["enabled"] = false;
+            Require(RecognitionSummary(recognition) == "自动识别已暂停，可从托盘恢复", "Paused recognition was not visible.");
+            recognition["observedAt"] = "not-a-date";
+            Require(RecognitionTime(recognition) == "出现卡片后会自动检查", "Malformed scan timestamp reached the product UI.");
+            object parsedGameId;
+            var nullGame = new Dictionary<string, object> { { "gameId", null } };
+            Require(ModelValue.GameId(nullGame, out parsedGameId) && parsedGameId == null && new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "gameId", parsedGameId } }) == "{\"gameId\":null}", "An explicit null game ID was rejected or serialized as an empty string.");
+            Require(!ModelValue.GameId(new Dictionary<string, object>(), out parsedGameId), "A missing game ID was accepted as an explicit null.");
+            Require(!ModelValue.GameId(new Dictionary<string, object> { { "gameId", "" } }, out parsedGameId), "An empty game ID was accepted.");
+            var confirmation = new Dictionary<string, object> { { "phase", "InProgress" }, { "gameId", null }, { "owned", new object[] { new Dictionary<string, object> { { "id", "demo-confirm" } } } } };
+            Require(ModelValue.ConfirmsOffer(confirmation, "demo-confirm", null), "A confirmed selection without LCU metadata was rejected.");
+            confirmation["gameId"] = "fixture-game";
+            Require(ModelValue.ConfirmsOffer(confirmation, "demo-confirm", null), "LCU metadata recovery incorrectly invalidated the current selection.");
+            Require(!ModelValue.ConfirmsOffer(confirmation, "demo-confirm", "other-game"), "A different non-null game was reported as a successful confirmation.");
+            confirmation["phase"] = "EndOfGame";
+            Require(!ModelValue.ConfirmsOffer(confirmation, "demo-confirm", "fixture-game"), "An ended game was reported as a successful confirmation.");
+            confirmation["phase"] = "InProgress";
+            Require(!ModelValue.ConfirmsOffer(confirmation, "demo-missing", "fixture-game"), "An absent selected augment was reported as confirmed.");
+            confirmation.Remove("gameId");
+            Require(!ModelValue.ConfirmsOffer(confirmation, "demo-confirm", null), "An incomplete confirmation response was accepted.");
+            var offered = new Dictionary<string, object>(original);
+            offered["sessionRevision"] = 20;
+            offered["owned"] = new object[0];
+            window.Model = offered;
+            using (var bitmap = new Bitmap(window.Width, window.Height)) window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+            string selected = "";
+            Action<string> capture = delegate(string value) { selected = value; };
+            window.OfferConfirmed += capture;
+            try
+            {
+                Require(window.offerButtons.Count > 0, "Visible offer did not expose a confirmation target.");
+                foreach (var button in window.offerButtons)
+                {
+                    window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, button.Key.Left + 2, button.Key.Top + 2, 0));
+                    Require(selected == button.Value, "Confirmation target did not preserve the displayed offer ID.");
+                    break;
+                }
+            }
+            finally { window.OfferConfirmed -= capture; }
+            var confirmed = new Dictionary<string, object>(original);
+            confirmed["sessionRevision"] = 21;
+            confirmed["offers"] = new object[0];
+            window.Model = confirmed;
+            Require(window.buildExpanded, "Confirmed selection did not expand its build.");
+            using (var bitmap = new Bitmap(window.Width, window.Height)) window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+            Require(window.paintedSections[0] == "plan", "Confirmed build was not the first expanded section.");
+            window.Model = ModelValue.Failure("测试中的短暂本地连接中断");
+            Require(window.buildExpanded, "A temporary connection failure collapsed the selected build.");
+            var refreshed = new Dictionary<string, object>(confirmed);
+            refreshed["plan"] = new Dictionary<string, object> { { "summary", "示例敌方装备更新后的构筑" } };
+            window.Model = refreshed;
+            Require(window.buildExpanded && ModelValue.Text(ModelValue.Object(window.Model, "plan"), "summary") == "示例敌方装备更新后的构筑", "An equal-revision observation failed to refresh the build after reconnecting.");
+            window.Model = offered;
+            Require(ModelValue.Array(window.Model, "owned").Count == 1 && window.buildExpanded, "A late old model reverted the confirmed choice.");
+            var nextGame = new Dictionary<string, object>(offered);
+            nextGame["sessionRevision"] = 22;
+            window.Model = nextGame;
+            Require(!window.buildExpanded, "A real session reset left the previous build expanded.");
+            Require(!window.Visible && window.ShowWithoutActivation, "Confirmation fixtures displayed or activated a window.");
+            window.Model = original; window.buildExpanded = false; window.scrollOffset = 0;
+            return 24;
         }
         private static int ValidateAppearanceFixtures(SidebarWindow window)
         {
@@ -1242,6 +1374,27 @@ namespace HexGuide.Desktop
             return model != null && model.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : "";
         }
         internal static bool Boolean(Dictionary<string, object> model, string key) { return string.Equals(Text(model, key), "true", StringComparison.OrdinalIgnoreCase); }
+        internal static bool Integer(Dictionary<string, object> model, string key, out long value)
+        {
+            return long.TryParse(Text(model, key), NumberStyles.Integer, CultureInfo.InvariantCulture, out value) && value >= 0;
+        }
+        internal static bool GameId(Dictionary<string, object> model, out object value)
+        {
+            value = null;
+            if (model == null || !model.TryGetValue("gameId", out value)) return false;
+            if (value == null) return true;
+            string id = value as string;
+            return id != null && id.Length > 0 && id.Length <= 40;
+        }
+        internal static bool ConfirmsOffer(Dictionary<string, object> model, string id, object requestedGameId)
+        {
+            object confirmedGameId;
+            if (Text(model, "phase") != "InProgress" || !GameId(model, out confirmedGameId)) return false;
+            if (requestedGameId != null && confirmedGameId != null && !string.Equals(requestedGameId as string, confirmedGameId as string, StringComparison.Ordinal)) return false;
+            foreach (object entry in Array(model, "owned"))
+                if (Text(entry as Dictionary<string, object>, "id") == id) return true;
+            return false;
+        }
         internal static ArrayList Array(Dictionary<string, object> model, string key)
         {
             object value;
