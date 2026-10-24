@@ -12,8 +12,8 @@ const championMap=new Map(catalog.champions.map(c=>[c.id,c]));
 const owned=catalog.augments.filter(a=>a.id==='firebrand');
 const settle=async()=>{await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));};
 
-async function controllerHarness(initial={}){
-  let expanded=true,previewOpens=0,resets=0,currentOwned=owned,snapshot={connection:{status:'connected',message:'fixture'},phase:'InProgress',gameId:'ui-fixture',championId:'Ahri',championSource:'live-client',level:11,gameTime:660,stats:{abilityPower:150},items:[],augments:{status:'unavailable',ids:[]},mode:{known:true,isMayhem:true},teams:{status:'detected',ownTeam:'ORDER',allies:[],enemies:[{championId:'Soraka',level:11,items:[{id:6617,count:1}]}],observedAt:new Date().toISOString()},...initial};
+async function controllerHarness(initial={},options={}){
+  let expanded=options.expanded??true,previewOpens=0,resets=0,currentOwned=options.owned??owned,snapshot={connection:{status:'connected',message:'fixture'},phase:'InProgress',gameId:'ui-fixture',championId:'Ahri',championSource:'live-client',level:11,gameTime:660,stats:{abilityPower:150},items:[],augments:{status:'unavailable',ids:[]},mode:{known:true,isMayhem:true},teams:{status:'detected',ownTeam:'ORDER',allies:[],enemies:[{championId:'Soraka',level:11,items:[{id:6617,count:1}]}],observedAt:new Date().toISOString()},...initial};
   const ticks=[],clicks=[],offers=[];
   const context=vm.createContext({buildLivePlan,shortItemEffect,location:{hash:'#live'},sessionStorage:{getItem:key=>key==='hexguide-local-session'?'fixture-token':null,setItem(){}},history:{replaceState(){}},Date,AbortSignal,console,
     setInterval:fn=>{ticks.push(fn);return ticks.length;},clearInterval(){},setTimeout,
@@ -116,4 +116,70 @@ test('old game clock followed by a new loading screen resets only once before th
   await h.update({stage:'live',phase:'InProgress',championSource:'live-client',gameTime:20});
   assert.equal(h.resets,1,'the previous game clock cannot clear the new game a second time');
   assert.match(h.html(),/已选择「火上浇油」/);
+});
+
+const earlyLiveSnapshot=(gameTime=0)=>({stage:'live',phase:'InProgress',championSource:'live-client',gameTime,level:3});
+
+test('missing the loading sample opens the first valid early live plan once without labelling it as loading',async()=>{
+  const h=await controllerHarness(earlyLiveSnapshot(),{expanded:false,owned:[]});
+  assert.equal(h.previewOpens,1);
+  assert.match(h.html(),/class="live-plan expanded"/);
+  assert.match(h.html(),/本局出装与后续海克斯/);
+  assert.doesNotMatch(h.html(),/loading-preview|开局前预览/);
+  await h.click('build-toggle');
+  await h.update(earlyLiveSnapshot(2));
+  await h.click('pause');await h.click('pause');
+  assert.equal(h.previewOpens,1,'polling and pause/resume cannot override an explicit collapse');
+  assert.match(h.html(),/class="live-plan collapsed"/);
+  await h.update({...earlyLiveSnapshot(0),gameId:'next-early-fixture'});
+  assert.equal(h.previewOpens,2,'a new game gets a separate initial recommendation');
+});
+
+test('loading expansion and early live fallback share the same per-game opportunity',async()=>{
+  const h=await controllerHarness(loadingSnapshot(),{expanded:false,owned:[]});
+  assert.equal(h.previewOpens,1);
+  await h.click('build-toggle');
+  await h.update(earlyLiveSnapshot(3));
+  assert.equal(h.previewOpens,1);
+  assert.match(h.html(),/class="live-plan collapsed"/);
+});
+
+test('early fallback waits for a valid fresh opponent plan and never opens for a late launch or selected augment',async()=>{
+  const unavailable={status:'unavailable',enemies:[],observedAt:new Date().toISOString()};
+  const h=await controllerHarness({...earlyLiveSnapshot(2),teams:unavailable},{expanded:false,owned:[]});
+  assert.equal(h.previewOpens,0);
+  await h.update({teams:{status:'detected',ownTeam:'ORDER',allies:[],enemies:[{championId:'Soraka',level:3,items:[]}],observedAt:new Date(Date.now()-31000).toISOString()}});
+  assert.equal(h.previewOpens,0,'stale enemies cannot qualify for early expansion');
+  await h.update({gameTime:4,teams:{status:'detected',ownTeam:'ORDER',allies:[],enemies:[{championId:'Soraka',level:3,items:[]}],observedAt:new Date().toISOString()}});
+  assert.equal(h.previewOpens,1);
+  const late=await controllerHarness(earlyLiveSnapshot(55),{expanded:false,owned:[]});
+  assert.equal(late.previewOpens,0);
+  await late.update(earlyLiveSnapshot(0));
+  assert.equal(late.previewOpens,0,'a retransmitted zero clock cannot reopen a late-launch plan');
+  assert.equal(late.resets,0,'zero alone is not a new-game clock reset');
+  const selected=await controllerHarness(earlyLiveSnapshot(1),{expanded:false});
+  assert.equal(selected.previewOpens,0,'an existing selected augment keeps the initial fallback from opening');
+});
+
+test('same-game zero clock retransmission preserves confirmed augments while positive clock restart still clears them',async()=>{
+  const h=await controllerHarness({gameTime:120});
+  await h.update({gameTime:0});
+  assert.equal(h.resets,0);
+  assert.match(h.html(),/已选择「火上浇油」/);
+  await h.update({gameTime:122});
+  assert.equal(h.resets,0,'120 -> 0 -> 122 must stay in the same game');
+  await h.update({gameTime:0});
+  await h.update({gameTime:40});
+  assert.equal(h.resets,1);
+  assert.match(h.html(),/已确认 0 个海克斯/);
+});
+
+test('early live fallback requires verified Mayhem mode instead of treating unknown or ordinary modes as eligible',async()=>{
+  for(const mode of [{known:false},{known:true,isMayhem:false,queueId:450}]){
+    const h=await controllerHarness({...earlyLiveSnapshot(1),mode},{expanded:false,owned:[]});
+    assert.equal(h.previewOpens,0);
+    assert.match(h.html(),/class="live-plan collapsed"/);
+    await h.update({mode:{known:true,isMayhem:true,queueId:2400},gameTime:2});
+    assert.equal(h.previewOpens,1,'verification arriving within the opening window can qualify the plan');
+  }
 });

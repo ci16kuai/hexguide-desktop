@@ -306,9 +306,13 @@ export class LiveCollector {
         const snapshot = snapshotFromLive(data, {index: this.index, augmentIndex: this.augmentIndex, lcu, now: this.now()});
         // The live endpoint can return HTTP 200 before activePlayer is ready.
         // That partial response must not displace a verified loading roster.
-        if (snapshot.connection.status === 'connected' || lcu?.stage !== 'loading' || lcu.teams?.status !== 'detected') {
+        // It can also be ready while the game still shows its loading screen.
+        // A strictly zero clock preserves only the verified roster, never the
+        // pre-start inventory, levels or stats, until this match begins ticking.
+        const loadingBeforeClockStart = !this.hasSeenLive && lcu?.stage === 'loading' && lcu.championSource === 'loading-screen' && lcu.championId && lcu.teams?.status === 'detected' && numeric(data?.gameData?.gameTime) && data.gameData.gameTime === 0;
+        if (!loadingBeforeClockStart && (snapshot.connection.status === 'connected' || lcu?.stage !== 'loading' || lcu.teams?.status !== 'detected')) {
           this.snapshot = snapshot;
-          if (snapshot.connection.status === 'connected') {
+          if (snapshot.connection.status === 'connected' && numeric(snapshot.gameTime) && snapshot.gameTime > 0) {
             this.hasSeenLive = true;
             if (snapshot.gameId) this.lastLiveGameId = snapshot.gameId;
           }

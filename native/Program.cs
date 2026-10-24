@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.9.1.0")]
-[assembly: AssemblyFileVersion("1.9.1.0")]
-[assembly: AssemblyInformationalVersion("1.9.1")]
+[assembly: AssemblyVersion("1.9.2.0")]
+[assembly: AssemblyFileVersion("1.9.2.0")]
+[assembly: AssemblyInformationalVersion("1.9.2")]
 
 namespace HexGuide.Desktop
 {
@@ -149,7 +149,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.9.1 · 我的这一局";
+            Text = "海克斯指南 1.9.2 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -720,8 +720,8 @@ namespace HexGuide.Desktop
         private readonly HashSet<string> requestedIcons = new HashSet<string>();
         private Rectangle buildToggle;
         private bool buildExpanded, remoteIcons = true;
-        private bool loadingPreviewOpened;
-        private string loadingPreviewGame = "";
+        private bool initialPlanHandled;
+        private string initialPlanGame = "";
         private long sessionRevision = -1;
         private Rectangle placementArea;
         private Point dragStartPointer, dragStartLocation;
@@ -745,17 +745,19 @@ namespace HexGuide.Desktop
                 int currentOwned = ModelValue.Array(value, "owned").Count;
                 string phase = ModelValue.Text(value, "phase"), game = ModelValue.Text(value, "gameId");
                 bool boundary = phase == "ChampSelect" || phase == "EndOfGame" || phase == "WaitingForStats";
-                if (boundary && phase != previousPhase) { loadingPreviewOpened = false; loadingPreviewGame = ""; }
+                bool newGame = game.Length > 0 && initialPlanGame.Length > 0 && game != initialPlanGame;
+                if (boundary && phase != previousPhase || newGame) { initialPlanHandled = false; initialPlanGame = ""; }
+                if (game.Length > 0) initialPlanGame = game;
                 // A connection-only failure does not describe the current selection.
                 // Keep an expanded build open until a real session explicitly clears it.
-                if (IsLoadingPreview)
+                if (IsLoadingPreview || HasEarlyLivePlan(value))
                 {
-                    bool newGame = game.Length > 0 && loadingPreviewGame.Length > 0 && game != loadingPreviewGame;
-                    if (!loadingPreviewOpened || newGame) { loadingPreviewOpened = true; ExpandBuild(); }
-                    if (game.Length > 0) loadingPreviewGame = game;
+                    if (!initialPlanHandled) { initialPlanHandled = true; ExpandBuild(); }
                 }
-                else if (value != null && value.ContainsKey("owned") && currentOwned == 0 && (previousOwned > 0 || boundary)) buildExpanded = false;
+                else if (value != null && value.ContainsKey("owned") && currentOwned == 0 && (previousOwned > 0 || boundary || newGame)) buildExpanded = false;
                 else if (previousModel && currentOwned > previousOwned) ExpandBuild();
+                double observedTime;
+                if (currentOwned > 0 || ModelValue.Text(value, "championSource") == "live-client" && TryGameTime(value, out observedTime) && observedTime > 30) initialPlanHandled = true;
                 offerButtons.Clear();
                 // A transient connection error must not reset the user's last saved layout.
                 if (ModelValue.Object(value, "appearance") != null) ApplyAppearance(SidebarAppearance.FromModel(value));
@@ -764,6 +766,26 @@ namespace HexGuide.Desktop
         }
         internal string Notice = "";
         internal bool IsLoadingPreview { get { return ModelValue.Text(ModelValue.Object(model, "plan"), "stage") == "loading-preview"; } }
+        private static bool TryGameTime(Dictionary<string, object> value, out double time)
+        {
+            return double.TryParse(ModelValue.Text(value, "gameTime"), NumberStyles.Float, CultureInfo.InvariantCulture, out time)
+                && !double.IsNaN(time) && !double.IsInfinity(time) && time >= 0;
+        }
+        private static bool HasEarlyLivePlan(Dictionary<string, object> value)
+        {
+            double time;
+            var plan = ModelValue.Object(value, "plan");
+            var enemy = ModelValue.Object(plan, "enemyContext");
+            var mode = ModelValue.Object(value, "mode");
+            return ModelValue.Boolean(mode, "known") && ModelValue.Boolean(mode, "isMayhem")
+                && ModelValue.Text(ModelValue.Object(value, "connection"), "status") == "connected"
+                && ModelValue.Text(value, "phase") == "InProgress" && ModelValue.Text(value, "championSource") == "live-client"
+                && ModelValue.Text(ModelValue.Object(value, "champion"), "id").Length > 0 && TryGameTime(value, out time) && time <= 30
+                && ModelValue.Array(value, "owned").Count == 0 && ModelValue.Text(plan, "stage") == "live"
+                && ModelValue.Text(enemy, "status") == "detected" && ModelValue.Text(enemy, "source") == "live-client"
+                && ModelValue.Array(enemy, "champions").Count > 0 && ModelValue.Array(plan, "buildItems").Count > 0
+                && ModelValue.Array(plan, "nextAugments").Count > 0;
+        }
         internal event EventHandler HideRequested, DetailsRequested, GameRequested;
         internal event Action<string> OfferConfirmed;
 
@@ -1247,6 +1269,8 @@ namespace HexGuide.Desktop
                 int liveStateChecks = ValidateLiveStateFixtures(window, statusPreviewPath);
                 string loadingPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-loading.png");
                 int loadingPreviewChecks = ValidateLoadingPreviewFixtures(window, loadingPreviewPath);
+                string earlyLivePreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-early-live.png");
+                int initialPlanChecks = ValidateInitialPlanFixtures(window, earlyLivePreviewPath);
                 int visibilityChecks = SidebarVisibilityState.ValidateFixtures();
                 int defaultWidth = window.Width, defaultHeight = window.Height;
                 int appearanceChecks = ValidateAppearanceFixtures(window);
@@ -1254,8 +1278,73 @@ namespace HexGuide.Desktop
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks + initialPlanChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath } });
             }
+        }
+        private static int ValidateInitialPlanFixtures(SidebarWindow window, string earlyLivePreviewPath)
+        {
+            var original = window.Model;
+            var enemy = new Dictionary<string, object> { { "status", "detected" }, { "source", "live-client" }, { "champions", new object[] { new Dictionary<string, object> { { "id", "Soraka" }, { "name", "索拉卡" } } } } };
+            var plan = new Dictionary<string, object>(ModelValue.Object(original, "plan"));
+            plan["stage"] = "live"; plan["enemyContext"] = enemy;
+            var early = new Dictionary<string, object>(original);
+            early["connection"] = new Dictionary<string, object> { { "status", "connected" } };
+            early["mode"] = new Dictionary<string, object> { { "known", true }, { "isMayhem", true }, { "queueId", 2400 } };
+            early["phase"] = "InProgress"; early["stage"] = "live"; early["championSource"] = "live-client";
+            early["gameId"] = "early-fixture-one"; early["gameTime"] = 0; early["owned"] = new object[0]; early["offers"] = new object[0]; early["plan"] = plan;
+            window.initialPlanHandled = false; window.initialPlanGame = ""; window.buildExpanded = false;
+            window.Model = early;
+            Require(window.buildExpanded && !window.IsLoadingPreview, "A missed loading sample did not open the first valid live plan with its live identity.");
+            window.Notice = "离屏早期实战示例 · 未连接真实对局";
+            using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(earlyLivePreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
+            window.Notice = "";
+            window.buildExpanded = false;
+            var repeated = new Dictionary<string, object>(early); repeated["gameTime"] = 3;
+            window.Model = repeated;
+            Require(!window.buildExpanded, "An early live refresh overrode a user's collapsed recommendation.");
+            var transient = ModelValue.Failure("隔离测试中的临时连接中断");
+            window.Model = transient; window.Model = repeated;
+            Require(!window.buildExpanded, "An early live reconnect reopened an already handled initial plan.");
+            var next = new Dictionary<string, object>(early); next["gameId"] = "early-fixture-two";
+            window.Model = next;
+            Require(window.buildExpanded, "A new game did not receive its own early recommendation opportunity.");
+            var loadingPlan = new Dictionary<string, object>(plan); loadingPlan["stage"] = "loading-preview";
+            var loading = new Dictionary<string, object>(early); loading["gameId"] = "early-fixture-three"; loading["plan"] = loadingPlan; loading["stage"] = "loading";
+            window.Model = loading;
+            Require(window.buildExpanded && window.IsLoadingPreview, "A true loading preview did not open.");
+            window.buildExpanded = false;
+            var afterLoading = new Dictionary<string, object>(early); afterLoading["gameId"] = "early-fixture-three"; afterLoading["gameTime"] = 2;
+            window.Model = afterLoading;
+            Require(!window.buildExpanded && !window.IsLoadingPreview, "Loading and live did not share one initial expansion opportunity.");
+            var late = new Dictionary<string, object>(early); late["gameId"] = "late-fixture"; late["gameTime"] = 120;
+            window.Model = late;
+            Require(!window.buildExpanded, "A mid-game launch or reconnect automatically expanded recommendations.");
+            var zero = new Dictionary<string, object>(late); zero["gameTime"] = 0;
+            window.Model = zero;
+            Require(!window.buildExpanded, "A zero clock retransmission reopened a mid-game plan.");
+            var invalidEnemy = new Dictionary<string, object>(enemy); invalidEnemy["status"] = "stale";
+            var invalidPlan = new Dictionary<string, object>(plan); invalidPlan["enemyContext"] = invalidEnemy;
+            var invalid = new Dictionary<string, object>(early); invalid["gameId"] = "invalid-fixture"; invalid["plan"] = invalidPlan;
+            window.Model = invalid;
+            Require(!window.buildExpanded, "A stale opponent plan opened early recommendations.");
+            var valid = new Dictionary<string, object>(invalid); valid["plan"] = plan;
+            window.Model = valid;
+            Require(window.buildExpanded, "A valid plan arriving later in the opening window did not expand.");
+            var selected = new Dictionary<string, object>(early); selected["gameId"] = "selected-fixture"; selected["owned"] = ModelValue.Array(original, "owned");
+            Require(!HasEarlyLivePlan(selected), "A selected augment was accepted as an empty opening plan.");
+            var incomplete = new Dictionary<string, object>(plan); incomplete["nextAugments"] = new object[0];
+            var noDirections = new Dictionary<string, object>(early); noDirections["plan"] = incomplete;
+            Require(!HasEarlyLivePlan(noDirections), "A plan without future augment directions was treated as ready.");
+            var untrusted = new Dictionary<string, object>(early); untrusted["championSource"] = "champ-select";
+            Require(!HasEarlyLivePlan(untrusted), "A non-live champion source qualified for live fallback.");
+            var unknownMode = new Dictionary<string, object>(early); unknownMode["mode"] = new Dictionary<string, object> { { "known", false }, { "isMayhem", false } };
+            Require(!HasEarlyLivePlan(unknownMode), "An unverified game mode qualified for early live fallback.");
+            var ordinaryMode = new Dictionary<string, object>(early); ordinaryMode["mode"] = new Dictionary<string, object> { { "known", true }, { "isMayhem", false }, { "queueId", 450 } };
+            Require(!HasEarlyLivePlan(ordinaryMode), "An ordinary game mode qualified for early live fallback.");
+            Require(!window.Visible && window.ShowWithoutActivation, "Initial-plan fixtures displayed or activated a real window.");
+            window.Model = original; window.buildExpanded = false; window.scrollOffset = 0;
+            window.initialPlanHandled = false; window.initialPlanGame = "";
+            return 16;
         }
         private static int ValidateLoadingPreviewFixtures(SidebarWindow window, string previewPath)
         {
@@ -1291,6 +1380,8 @@ namespace HexGuide.Desktop
             loading["level"] = null;
             loading["gameTime"] = null;
             loading["owned"] = new object[0]; loading["offers"] = new object[0]; loading["plan"] = plan;
+            var select = new Dictionary<string, object>(original); select["phase"] = "ChampSelect"; select["owned"] = new object[0];
+            window.Model = select;
             window.buildExpanded = false; window.Model = loading;
             Require(window.IsLoadingPreview && window.buildExpanded, "Loading preview did not expand before any augment selection.");
             window.Notice = "离屏示例 · 未连接真实对局";
@@ -1315,7 +1406,7 @@ namespace HexGuide.Desktop
             window.Model = ended;
             Require(!window.buildExpanded, "The ended game kept its previous preview expanded.");
             window.Model = original; window.buildExpanded = false; window.scrollOffset = 0;
-            window.loadingPreviewOpened = false; window.loadingPreviewGame = "";
+            window.initialPlanHandled = false; window.initialPlanGame = "";
             return 8;
         }
         private static int ValidateLiveStateFixtures(SidebarWindow window, string statusPreviewPath)

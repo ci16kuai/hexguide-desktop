@@ -100,6 +100,78 @@ test('a partial HTTP 200 live response does not displace a verified loading rost
   }
 });
 
+test('a ready Live API with a strictly zero clock preserves the verified loading preview until time starts', async () => {
+  // The real client exposed a ready API while its loading screen remained
+  // visible. The controlled zero-clock values below are regression inputs,
+  // not claimed captures of that real screen's unavailable historical clock.
+  let clock = now.getTime();
+  const game = live();
+  game.gameData.gameTime = 0;
+  game.activePlayer.level = 1;
+  const h = harness({game,now:() => new Date(clock)});
+  for (const elapsed of [0,2000,44000]) {
+    clock = now.getTime() + elapsed;
+    h.state.phase = elapsed ? 'InProgress' : 'GameStart';
+    const loading = await h.collector.pollOnce();
+    assert.equal(loading.stage,'loading');
+    assert.equal(loading.championSource,'loading-screen');
+    assert.equal(loading.championId,'Ahri');
+    assert.equal(loading.teams.source,'loading-roster');
+    assert.deepEqual(loading.teams.enemies.map(player => player.championId),['Annie']);
+    assert.equal(loading.teams.observedAt,new Date(clock).toISOString());
+    for (const key of ['gameTime','level','currentGold']) assert.equal(loading[key],null,key);
+    assert.deepEqual(loading.items,[]);
+    assert.deepEqual(loading.stats,{});
+    assert.deepEqual(loading.augments,{status:'unavailable',ids:[]});
+  }
+  game.gameData.gameTime = 0.01;
+  game.activePlayer.level = 3;
+  const started = await h.collector.pollOnce();
+  assert.equal(started.stage,'live');
+  assert.equal(started.gameTime,0.01);
+  assert.equal(started.level,3);
+  assert.equal(started.items[0].id,3020);
+  game.gameData.gameTime = 0;
+  const retransmitted = await h.collector.pollOnce();
+  assert.equal(retransmitted.stage,'live');
+  assert.equal(retransmitted.championSource,'live-client');
+  assert.equal(retransmitted.teams.source,undefined);
+  h.state.game = null;
+  const disconnected = await h.collector.pollOnce();
+  assert.equal(disconnected.stage,'waiting');
+  assert.equal(disconnected.teams.status,'unavailable');
+  h.state.session.gameData.gameId = 87654;
+  h.state.game = game;
+  const nextGame = await h.collector.pollOnce();
+  assert.equal(nextGame.stage,'loading');
+  assert.equal(nextGame.gameId,'87654');
+});
+
+test('zero clocks alone never invent loading rosters without verified new-game identity and sides', async () => {
+  for (const change of [
+    h => {h.state.lcuAvailable = false;},
+    h => {h.state.currentSummoner = null;},
+    h => {h.state.currentSummoner = {summonerId:999,puuid:'not-local'};},
+    h => {h.state.phase = 'Reconnect';},
+    h => {delete h.state.session.gameData.teamTwo;},
+  ]) {
+    const game = live();
+    game.gameData.gameTime = 0;
+    const h = harness({phase:'InProgress',game});
+    change(h);
+    const snapshot = await h.collector.pollOnce();
+    assert.notEqual(snapshot.stage,'loading');
+    assert.notEqual(snapshot.championSource,'loading-screen');
+    assert.notEqual(snapshot.teams.source,'loading-roster');
+  }
+  for (const gameTime of [undefined,null,'0',NaN,Infinity,-1]) {
+    const game = live();
+    game.gameData.gameTime = gameTime;
+    const h = harness({phase:'InProgress',game});
+    assert.notEqual((await h.collector.pollOnce()).stage,'loading');
+  }
+});
+
 test('observed custom KIWI 3v3 schema locates Teemo in teamTwo and survives GameStart to live handoff', async () => {
   // Shape observed in the real client on 2026-10-24. Every account, room and
   // authentication value below is synthetic; only public champion IDs remain.

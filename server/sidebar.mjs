@@ -123,7 +123,7 @@ export class BackgroundSidebar {
     const last = this.previous;
     const changedGame = currentId && this.session.gameId && currentId !== this.session.gameId;
     const leftGame = (last?.inGame || this.session.gameId) && END_PHASES.has(live.phase);
-    const timeReset = live.phase === 'InProgress' && last?.inGame && finite(live.gameTime) && finite(last.time) && live.gameTime + 30 < last.time;
+    const timeReset = live.phase === 'InProgress' && last?.inGame && finite(live.gameTime) && live.gameTime > 0 && finite(last.time) && live.gameTime + 30 < last.time;
     // Even an empty previous session may have an OCR capture still in flight.
     const loadingStarted = live.stage === 'loading' && last?.stage !== 'loading';
     let changed = false;
@@ -135,7 +135,7 @@ export class BackgroundSidebar {
       changed = true;
     }
     // A transient API disconnection must not look like a new game or erase clock history.
-    if (inGame || END_PHASES.has(live.phase)) this.previous = {inGame, stage:live.stage, time:finite(live.gameTime) ? live.gameTime : inGame && !boundary ? last?.time ?? null : null};
+    if (inGame || END_PHASES.has(live.phase)) this.previous = {inGame, stage:live.stage, time:finite(live.gameTime) && (live.gameTime > 0 || !finite(last?.time) || boundary) ? live.gameTime : inGame && !boundary ? last?.time ?? null : null};
     if (changed) void this.persist();
     if (this.offers.length && this.now() - this.offerTime >= this.offerLifetime) {
       this.offers = [];
@@ -248,7 +248,8 @@ export class BackgroundSidebar {
     });
     const plan = buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], champions:[...this.champions.values()], itemsCatalog:this.itemsCatalog, now:this.now()});
     return {
-      version:'1.9.1', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      version:'1.9.2', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      mode:live.mode || {queueId:null, isMayhem:false, known:false},
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
       level:live.level ?? null, gameTime:live.gameTime ?? null, currentGold:live.currentGold ?? null, items:live.items || [],
       teams:live.teams || {status:'unavailable', ownTeam:null, allies:[], enemies:[], observedAt:live.observedAt || null},

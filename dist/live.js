@@ -30,7 +30,9 @@ if(location.hash.startsWith('#session=')){
 export function createLiveController(context){
   let live=emptyLive,follow=true,paused=false,lastGame='',timer=null,busy=false,catalog={};
   let sample=false,ocrAuto=false,ocrBusy=false,ocrResult=null,lastOcr=0,lastProposalAt=0,ocrNotice='',epoch=0,lastPhase='',lastTime=null,publishedOfferKey='';
-  let previewOpenedEpoch=-1;
+  // One opportunity per game, shared by loading and the first valid live plan.
+  // Request cancellation (pause/demo) must not reopen a user's collapsed plan.
+  let initialPlanHandled=false;
   try{const boundary=JSON.parse(sessionStorage.getItem('hexguide-game-boundary')||'{}');lastGame=context.getGameId?.()||boundary.gameId||'';lastPhase=boundary.phase||'';lastTime=boundary.gameTime??null;}catch{}
   const phaseNames={None:'客户端未连接',Lobby:'游戏大厅',Matchmaking:'匹配中',ReadyCheck:'确认对局',ChampSelect:'英雄选择',InProgress:'对局进行中',GameStart:'正在载入',WaitingForStats:'等待结算',EndOfGame:'对局已结束'};
   fetch('./items.json').then(r=>r.ok?r.json():{}).then(x=>{catalog=x;refresh();}).catch(()=>{});
@@ -65,19 +67,25 @@ export function createLiveController(context){
   function apply(next){
     const newId=next.gameId&&lastGame&&next.gameId!==lastGame;
     const newSelect=next.phase==='ChampSelect'&&lastPhase&&lastPhase!=='ChampSelect';
-    const timeReset=next.phase==='InProgress'&&Number.isFinite(next.gameTime)&&Number.isFinite(lastTime)&&next.gameTime<lastTime-40;
+    const timeReset=next.phase==='InProgress'&&Number.isFinite(next.gameTime)&&next.gameTime>0&&Number.isFinite(lastTime)&&next.gameTime<lastTime-40;
     const enteredLoading=next.stage==='loading'&&live.stage!=='loading';
     live=next;
-    if(newId||newSelect||timeReset){epoch++;lastTime=null;ocrResult=null;lastProposalAt=0;ocrNotice='';publishedOfferKey='';context.onNewGame();}
+    if(newId||newSelect||timeReset){epoch++;initialPlanHandled=false;lastTime=null;ocrResult=null;lastProposalAt=0;ocrNotice='';publishedOfferKey='';context.onNewGame();}
     if(next.phase&&next.phase!=='None')lastPhase=next.phase;
-    if(Number.isFinite(next.gameTime))lastTime=next.gameTime;
+    if(Number.isFinite(next.gameTime)&&(next.gameTime>0||!Number.isFinite(lastTime)))lastTime=next.gameTime;
     if(enteredLoading||(next.phase!=='InProgress'||next.stage==='loading')&&ocrResult?.proposals?.length){ocrResult=null;lastProposalAt=0;context.onOffersExpired?.();}
     if(next.gameId){lastGame=next.gameId;context.onGameId?.(next.gameId);}
     try{sessionStorage.setItem('hexguide-game-boundary',JSON.stringify({gameId:lastGame,phase:lastPhase,gameTime:lastTime}));}catch{}
     if(follow&&next.championId)context.onChampion(String(next.championId));
-    if(next.stage==='loading'&&previewOpenedEpoch!==epoch&&!paused&&!sample){
-      const previewPlan=buildLivePlan({champion:context.getChampion(),owned:[],route:'auto',live:next,augments:context.getAugments(),itemsCatalog:catalog,champions:context.getChampions?.()||[]});
-      if(previewPlan.stage==='loading-preview'){previewOpenedEpoch=epoch;context.onLoadingPreview?.();}
+    if(!initialPlanHandled&&!paused&&!sample){
+      const isLoading=next.stage==='loading',owned=isLoading?[]:context.getOwned();
+      const initialPlan=buildLivePlan({champion:context.getChampion(),owned,route:isLoading?'auto':context.getRoute(),live:next,augments:context.getAugments(),itemsCatalog:catalog,champions:context.getChampions?.()||[]});
+      const earlyLive=next.mode?.known===true&&next.mode.isMayhem===true&&next.connection?.status==='connected'&&next.phase==='InProgress'&&next.championSource==='live-client'&&next.championId===context.getChampion()?.id&&Number.isFinite(next.gameTime)&&next.gameTime>=0&&next.gameTime<=30&&!owned.length&&initialPlan.stage==='live'&&initialPlan.enemyContext?.status==='detected'&&initialPlan.enemyContext.source==='live-client'&&list(initialPlan.enemyContext.champions).length&&list(initialPlan.buildItems).length&&list(initialPlan.nextAugments).length;
+      if(initialPlan.stage==='loading-preview'||earlyLive){
+        initialPlanHandled=true;
+        // Existing callback only expands the plan; early live keeps its live title.
+        context.onLoadingPreview?.();
+      }else if(owned.length||next.championSource==='live-client'&&Number.isFinite(next.gameTime)&&next.gameTime>30)initialPlanHandled=true;
     }
     refresh();
   }
@@ -143,7 +151,7 @@ export function createLiveController(context){
       const stats=usable||sample?live.stats||{}:{};
       const status=sample?'演示模式':paused?'同步已暂停':connected?'已连接本机游戏':'等待连接';
       const mode=live.mode?.known?(live.mode.isMayhem?'海克斯大乱斗':'当前模式不是海克斯大乱斗'):'游戏模式待确认';
-      return `<div class="page-intro live-intro" data-ui-id="live-intro" data-ui-label="实战页开场区域" data-ui-container="live-intro"><div data-ui-id="live-intro-copy" data-ui-label="实战页标题文案" data-ui-container="live-intro-copy"><span class="live-kicker" data-ui-id="live-kicker" data-ui-label="桌面版版本提示">Windows 桌面版 1.9.1</span><h1 data-ui-id="live-title" data-ui-label="实战页大标题">我的这一局</h1><p data-ui-id="live-subtitle" data-ui-label="实战页说明文字">加载时先看对方阵容与开局预设，入场后识别海克斯并随选择更新推荐。</p></div><span class="local-badge" data-ui-id="live-local-badge" data-ui-label="仅在本机处理标签">仅在本机处理</span></div><div class="background-guide" data-ui-id="live-background-guide" data-ui-label="后台与快捷键提示" data-ui-container="live-background-guide"><strong data-ui-id="live-shortcut" data-ui-label="侧栏快捷键提示">全局侧栏快捷键：Alt + Shift + H</strong><span data-ui-id="live-tray-hint" data-ui-label="收进托盘说明">点击窗口右上角 × 或最小化，可收进托盘继续运行；托盘菜单可完全退出。</span><small data-ui-id="live-window-hint" data-ui-label="窗口模式说明">侧栏适用于无边框或窗口模式。主窗口工具栏提供“返回游戏”。</small></div>
+      return `<div class="page-intro live-intro" data-ui-id="live-intro" data-ui-label="实战页开场区域" data-ui-container="live-intro"><div data-ui-id="live-intro-copy" data-ui-label="实战页标题文案" data-ui-container="live-intro-copy"><span class="live-kicker" data-ui-id="live-kicker" data-ui-label="桌面版版本提示">Windows 桌面版 1.9.2</span><h1 data-ui-id="live-title" data-ui-label="实战页大标题">我的这一局</h1><p data-ui-id="live-subtitle" data-ui-label="实战页说明文字">加载时先看对方阵容与开局预设，入场后识别海克斯并随选择更新推荐。</p></div><span class="local-badge" data-ui-id="live-local-badge" data-ui-label="仅在本机处理标签">仅在本机处理</span></div><div class="background-guide" data-ui-id="live-background-guide" data-ui-label="后台与快捷键提示" data-ui-container="live-background-guide"><strong data-ui-id="live-shortcut" data-ui-label="侧栏快捷键提示">全局侧栏快捷键：Alt + Shift + H</strong><span data-ui-id="live-tray-hint" data-ui-label="收进托盘说明">点击窗口右上角 × 或最小化，可收进托盘继续运行；托盘菜单可完全退出。</span><small data-ui-id="live-window-hint" data-ui-label="窗口模式说明">侧栏适用于无边框或窗口模式。主窗口工具栏提供“返回游戏”。</small></div>
       <section class="live-connection ${connected?'connected':''}" aria-label="游戏连接状态" data-ui-id="live-connection" data-ui-label="游戏连接状态栏" data-ui-container="live-connection"><div class="connection-symbol" data-ui-id="live-connection-symbol" data-ui-label="连接状态图标">${connected?'◉':'◌'}</div><div data-ui-id="live-connection-copy" data-ui-label="连接状态文字" data-ui-container="live-connection-copy"><strong data-ui-id="live-connection-title" data-ui-label="连接状态标题">${esc(status)}</strong><p data-ui-id="live-connection-message" data-ui-label="连接状态详情">${esc(live.connection?.message||'等待英雄联盟游戏启动')} · ${esc(phaseNames[live.phase]||live.phase||'等待对局')}</p></div><button class="text-button" data-live-action="pause" data-ui-id="live-pause" data-ui-label="暂停恢复同步按钮">${paused?'恢复同步':'暂停同步'}</button><button class="secondary-button" data-live-action="refresh" data-ui-id="live-refresh" data-ui-label="重新检测按钮" ${sample?'disabled':''}>重新检测</button></section>
       ${sample?'<div class="live-notice" data-ui-id="live-sample-notice" data-ui-label="演示模式提示">这是一组虚构示例，用于预览实战布局，不代表正在读取你的对局。退出演示后恢复本机检测。</div>':''}
       ${connected&&!live.mode?.isMayhem?`<div class="live-notice" data-ui-id="live-mode-notice" data-ui-label="当前模式提示">${esc(mode)}。仍可查看自身数据；下方海克斯建议仅作为模式资料参考。</div>`:''}
