@@ -27,6 +27,7 @@ let gateBusy = false;
 let lastMatchId = null;
 let lastMatchStarted = null;
 let lastQueue = null;
+let observationRevision = 0;
 
 function setStatus(message) { ui.status.textContent = message; }
 
@@ -179,8 +180,13 @@ function observeAugments(event) {
 
 function onInfo(event) {
   if (!observing || !subscribed || !record(event)) return;
-  if (event.feature === 'matchState') readMatchContext(event.info);
-  else if (event.feature === 'augments') observeAugments(event);
+  if (event.feature === 'matchState') {
+    observationRevision += 1;
+    readMatchContext(event.info);
+  } else if (event.feature === 'augments') {
+    observationRevision += 1;
+    observeAugments(event);
+  }
 }
 
 function onError() {
@@ -188,9 +194,12 @@ function onError() {
 }
 
 function readSnapshot(run) {
+  const requestedRevision = observationRevision;
   try {
     sdk.games.events.getInfo(result => {
-      if (!current(run) || !subscribed) return;
+      // A live update (or a user clearing the display) takes precedence over a
+      // snapshot requested earlier, including that snapshot's match context.
+      if (!current(run) || !subscribed || observationRevision !== requestedRevision) return;
       if (!record(result) || result.success !== true || !record(result.res)) {
         setStatus('当前快照暂不可用；继续等待真实更新');
         return;
@@ -251,6 +260,7 @@ function startObserver() {
 ui.start.addEventListener('click', startObserver);
 ui.stop.addEventListener('click', () => stopObserver());
 ui.clear.addEventListener('click', () => {
+  observationRevision += 1;
   resetMatch();
   if (observing) setStatus('已清除显示；继续等待下一次真实更新');
 });
