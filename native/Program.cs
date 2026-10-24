@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.10.0.0")]
-[assembly: AssemblyFileVersion("1.10.0.0")]
-[assembly: AssemblyInformationalVersion("1.10.0")]
+[assembly: AssemblyVersion("1.10.1.0")]
+[assembly: AssemblyFileVersion("1.10.1.0")]
+[assembly: AssemblyInformationalVersion("1.10.1")]
 
 namespace HexGuide.Desktop
 {
@@ -169,13 +169,15 @@ namespace HexGuide.Desktop
         private IntPtr lastGame;
         private DateTime nextFetch = DateTime.MinValue;
         private DateTime nextBackgroundGameLookup = DateTime.MinValue;
+        private DateTime nextSelectionDiagnostics = DateTime.MinValue;
+        private int selectionDiagnosticsWriting;
 
         internal MainWindow(string dataDirectory, bool background, bool preview)
         {
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.10.0 · 我的这一局";
+            Text = "海克斯指南 1.10.1 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -269,6 +271,7 @@ namespace HexGuide.Desktop
             {
                 UpdateSidebarVisibility();
                 shortcut.Pulse(dataDirectory, sidebarVisibility.Enabled, sidebarVisibility.Pinned, desiredSidebarVisible, sidebar.Visible);
+                PulseSelectionDiagnostics();
                 if (DateTime.UtcNow >= nextFetch) { nextFetch = DateTime.UtcNow.AddSeconds(2); await FetchSidebarAsync(); }
                 if (appearanceRequested) await OpenRequestedAppearanceAsync();
                 if (layoutRequested) await OpenRequestedLayoutAsync();
@@ -542,6 +545,50 @@ namespace HexGuide.Desktop
             }
             catch { if (!closing && generation == sidebarRequestGeneration && !confirmChanging && !scanChanging) { selectionWatcher.CancelForLocalAction(); sidebar.Model = ModelValue.Failure("正在等待本地连接…"); sidebar.Invalidate(); } }
             finally { fetching = false; }
+        }
+
+        private void PulseSelectionDiagnostics()
+        {
+            DateTime now = DateTime.UtcNow;
+            if (closing || now < nextSelectionDiagnostics || System.Threading.Interlocked.CompareExchange(ref selectionDiagnosticsWriting, 1, 0) != 0) return;
+            nextSelectionDiagnostics = now.AddSeconds(2);
+            string json;
+            try
+            {
+                json = SelectionDiagnosticsJson(selectionWatcher, sidebar.Model, now);
+            }
+            catch { System.Threading.Interlocked.Exchange(ref selectionDiagnosticsWriting, 0); return; }
+            string path = Path.Combine(dataDirectory, "diagnostics", "screen-selection-status.json");
+            Task.Run(delegate
+            {
+                string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(path));
+                    File.WriteAllText(temporary, json, new UTF8Encoding(false));
+                    if (File.Exists(path)) File.Replace(temporary, path, null);
+                    else File.Move(temporary, path);
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                finally
+                {
+                    try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
+                    System.Threading.Interlocked.Exchange(ref selectionDiagnosticsWriting, 0);
+                }
+            });
+        }
+
+        internal static string SelectionDiagnosticsJson(ScreenSelectionWatcher watcher, Dictionary<string, object> model, DateTime now)
+        {
+            var snapshot = new Dictionary<string, object> {
+                { "version", "1.10.1" }, { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
+                { "native", watcher.Diagnostics() },
+                { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
+            };
+            string json = new JavaScriptSerializer().Serialize(snapshot);
+            if (Encoding.UTF8.GetByteCount(json) > 4096) throw new InvalidOperationException("Selection diagnostic snapshot exceeds its fixed bound.");
+            return json;
         }
 
         private async Task ToggleScanningAsync()
@@ -1522,6 +1569,27 @@ namespace HexGuide.Desktop
                 int visibilityChecks = SidebarVisibilityState.ValidateFixtures();
                 int shortcutChecks = SidebarShortcut.ValidateFixtures();
                 int selectionChecks = ScreenSelectionWatcher.ValidateFixtures();
+                using (var diagnosticWatcher = new ScreenSelectionWatcher())
+                {
+                    diagnosticWatcher.RecordCaptureResult(false, "card-occluded", 1);
+                    var privateBackend = new Dictionary<string, object> {
+                        { "selectionDiagnostics", new Dictionary<string, object> {
+                            { "metadataStatus", "PRIVATE-MARKER" }, { "captureAgeMs", long.MaxValue },
+                            { "lastScanAgeMs", 1 }, { "backendArmed", true }, { "ids", new[] { "PRIVATE-MARKER" } },
+                            { "capture", new Dictionary<string, object> { { "windowHandle", "PRIVATE-MARKER" } } }
+                        } }, { "name", "PRIVATE-MARKER" }
+                    };
+                    string diagnosticJson = MainWindow.SelectionDiagnosticsJson(diagnosticWatcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+                    var diagnosticSnapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(diagnosticJson);
+                    Require(diagnosticSnapshot.Count == 4 && Encoding.UTF8.GetByteCount(diagnosticJson) <= 4096
+                        && ModelValue.Text(diagnosticSnapshot, "version") == "1.10.1",
+                        "The persisted selection diagnostic snapshot exceeded its fixed schema or byte bound.");
+                    selectionChecks++;
+                    Require(!diagnosticJson.Contains("PRIVATE-MARKER") && !diagnosticJson.Contains("\"ids\"")
+                        && !diagnosticJson.Contains("windowHandle") && !diagnosticJson.Contains("signature") && !diagnosticJson.Contains("\"delta\""),
+                        "The persisted selection diagnostic snapshot contained candidate, window, pixel, or untrusted backend fields.");
+                    selectionChecks++;
+                }
                 string iconPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-augment-icons.png");
                 int augmentIconChecks = ValidateAugmentIconFixtures(iconPreviewPath);
                 int defaultWidth = window.Width, defaultHeight = window.Height;

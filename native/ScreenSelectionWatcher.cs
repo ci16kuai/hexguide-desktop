@@ -22,6 +22,10 @@ namespace HexGuide.Desktop
         private IntPtr identityWindow;
         private bool identityVerified;
         private Dictionary<string, object> lastAttempt;
+        private string lastCaptureCode = "not-attempted", lastFailureCode = "none";
+        private string lastCancelCode = "none";
+        private long lastCaptureAt, lastFailureAt, lastCancelAt;
+        private int captureAttempts, captureSuccesses, captureFailures;
         internal event Action<Dictionary<string, object>> SelectionObserved;
         internal event Action<string> StatusChanged;
         internal string StatusCode { get; private set; }
@@ -106,6 +110,13 @@ namespace HexGuide.Desktop
 
         private void Suspend(string code, bool invalidate)
         {
+            // Routine waiting models must not erase the reason the last active
+            // observation was cancelled, including a first-frame mismatch.
+            if (code != "waiting" || observation != null)
+            {
+                lastCancelCode = CancellationCode(code);
+                lastCancelAt = Now();
+            }
             if (decision.BaselineFrames > 0 || decision.Pending || decision.FeedbackFrames > 0)
                 lastAttempt = DecisionDiagnostics(code);
             if (observation != null && invalidate) decision.Invalidate(Now());
@@ -113,6 +124,18 @@ namespace HexGuide.Desktop
             decision.Reset();
             if (!eligible) timer.Stop();
             SetStatus(code);
+        }
+
+        private static string CancellationCode(string code)
+        {
+            switch (code)
+            {
+                case "paused": case "offers-changed": case "held-before-arm": case "local-action":
+                case "focus-changed": case "expired": case "outside-click": case "geometry-or-occlusion":
+                case "visual-evidence-incomplete": case "capture-unavailable": return code;
+                case "waiting": return "metadata-unavailable";
+                default: return "other-cancel";
+            }
         }
 
         private static long Now() { return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); }
@@ -159,7 +182,7 @@ namespace HexGuide.Desktop
                     int column = onGame ? observation.ColumnAt(point.X, point.Y) : -1;
                     if (!onGame || column < 0) { Suspend("outside-click", true); return; }
                     int[][] edgeFrame;
-                    if (!TryCapture(observation, out edgeFrame)) { Suspend("geometry-or-occlusion", true); return; }
+                    if (!Capture(observation, out edgeFrame)) { Suspend("geometry-or-occlusion", true); return; }
                     // Capture on both edges. A highlight already visible by
                     // release must not be mistaken for a NEW selection effect.
                     decision.Pointer(down, column, onGame, now, edgeFrame, observation.Signatures);
@@ -171,7 +194,7 @@ namespace HexGuide.Desktop
                 if (now < nextFrameAt) return;
                 nextFrameAt = now + 65;
                 int[][] signatures;
-                if (!TryCapture(observation, out signatures)) { Suspend("geometry-or-occlusion", true); return; }
+                if (!Capture(observation, out signatures)) { Suspend("geometry-or-occlusion", true); return; }
                 decision.Frame(signatures, observation.Signatures, now);
                 if (decision.Invalid) { Suspend("visual-evidence-incomplete", true); return; }
                 if (decision.Ready) SetStatus("ready");
@@ -191,11 +214,25 @@ namespace HexGuide.Desktop
             catch { Suspend("capture-unavailable", true); }
         }
 
-        // This stays in memory and is bounded to counters and three RGB deltas.
-        // It deliberately contains no window handles, identities, text or images.
+        // A bounded technical snapshot. No pixel deltas, handles, identities,
+        // coordinates, candidate text, or arbitrary backend values are exposed.
         internal Dictionary<string, object> Diagnostics()
         {
+            long now = Now();
             var current = DecisionDiagnostics(StatusCode);
+            current["eligible"] = eligible;
+            current["gameForeground"] = hadGameFocus;
+            current["captureAttempts"] = captureAttempts;
+            current["captureSuccesses"] = captureSuccesses;
+            current["captureFailures"] = captureFailures;
+            current["lastCaptureCode"] = lastCaptureCode;
+            current["lastCaptureAgeMs"] = Age(now, lastCaptureAt);
+            current["lastFailureCode"] = lastFailureCode;
+            current["lastFailureAgeMs"] = Age(now, lastFailureAt);
+            current["lastCancelCode"] = lastCancelCode;
+            current["lastCancelAgeMs"] = Age(now, lastCancelAt);
+            current["activeCaptureAgeMs"] = Age(now, observation == null ? 0 : observation.CapturedAt);
+            foreach (var entry in decision.DiagnosticState(now)) current[entry.Key] = entry.Value;
             if (lastAttempt != null) current["lastAttempt"] = new Dictionary<string, object>(lastAttempt);
             return current;
         }
@@ -205,29 +242,96 @@ namespace HexGuide.Desktop
             return new Dictionary<string, object> {
                 { "status", status }, { "baselineFrames", decision.BaselineFrames },
                 { "feedbackFrames", decision.FeedbackFrames }, { "dismissedFrames", decision.DismissedFrames },
-                { "pending", decision.Pending }, { "delta", (double[])decision.LastDelta.Clone() }
+                { "pending", decision.Pending }
             };
+        }
+
+        internal static object Age(long now, long stamp)
+        {
+            return stamp <= 0 ? null : (object)Math.Max(0, Math.Min(60000, now - stamp));
+        }
+
+        internal static Dictionary<string, object> BackendDiagnostics(Dictionary<string, object> value)
+        {
+            string status = ModelValue.Text(value, "metadataStatus");
+            switch (status)
+            {
+                case "accepted": case "missing": case "shape-invalid": case "title-outside-region":
+                case "title-incomplete": case "not-scanned": case "stale": case "context-ineligible": break;
+                default: status = "not-scanned"; break;
+            }
+            object armed;
+            return new Dictionary<string, object> {
+                { "metadataStatus", status }, { "captureAgeMs", BackendAge(value, "captureAgeMs") },
+                { "backendArmed", value != null && value.TryGetValue("backendArmed", out armed) && armed is bool && (bool)armed },
+                { "lastScanAgeMs", BackendAge(value, "lastScanAgeMs") }
+            };
+        }
+
+        private static object BackendAge(Dictionary<string, object> value, string key)
+        {
+            object raw; long age;
+            if (value == null || !value.TryGetValue(key, out raw) || raw == null || raw is bool
+                || !(raw is byte || raw is short || raw is int || raw is long || raw is uint || raw is ulong)
+                || !long.TryParse(Convert.ToString(raw, CultureInfo.InvariantCulture), out age) || age < 0) return null;
+            return Math.Min(60000, age);
+        }
+
+        private bool Capture(ScreenSelectionObservation value, out int[][] signatures)
+        {
+            string code;
+            bool success = TryCapture(value, out signatures, out code);
+            RecordCaptureResult(success, code, Now());
+            return success;
+        }
+
+        internal void RecordCaptureResult(bool success, string code, long stamp)
+        {
+            if (success) code = "captured";
+            else switch (code)
+            {
+                case "dpi-unavailable": case "game-unverified": case "game-not-foreground": case "game-not-visible":
+                case "client-unavailable": case "client-changed": case "region-too-large":
+                case "occlusion-enumeration-incomplete": case "occlusion-bounds-unavailable":
+                case "occlusion-state-unavailable": case "card-occluded": case "capture-exception": break;
+                default: code = "capture-exception"; break;
+            }
+            captureAttempts = Math.Min(1000000, captureAttempts + 1);
+            lastCaptureAt = stamp > 0 ? stamp : Now();
+            lastCaptureCode = code;
+            if (success) captureSuccesses = Math.Min(1000000, captureSuccesses + 1);
+            else
+            {
+                captureFailures = Math.Min(1000000, captureFailures + 1);
+                lastFailureCode = lastCaptureCode;
+                lastFailureAt = lastCaptureAt;
+            }
         }
 
         private static IntPtr RootWindow(IntPtr window) { return window == IntPtr.Zero ? IntPtr.Zero : GetAncestor(window, 2); }
 
-        private static bool TryCapture(ScreenSelectionObservation value, out int[][] signatures)
+        private static bool TryCapture(ScreenSelectionObservation value, out int[][] signatures, out string failure)
         {
             signatures = null;
+            failure = "capture-exception";
             IntPtr previous = IntPtr.Zero;
             try
             {
                 previous = SetThreadDpiAwarenessContext(new IntPtr(-4));
                 if (previous == IntPtr.Zero) previous = SetThreadDpiAwarenessContext(new IntPtr(-3));
-                if (previous == IntPtr.Zero || !GameWindow.IsVerifiedGame(value.Window) || GetForegroundWindow() != value.Window
-                    || !IsWindowVisible(value.Window) || IsIconic(value.Window)) return false;
+                if (previous == IntPtr.Zero) { failure = "dpi-unavailable"; return false; }
+                if (!GameWindow.IsVerifiedGame(value.Window)) { failure = "game-unverified"; return false; }
+                if (GetForegroundWindow() != value.Window) { failure = "game-not-foreground"; return false; }
+                if (!IsWindowVisible(value.Window) || IsIconic(value.Window)) { failure = "game-not-visible"; return false; }
                 Rectangle client;
-                if (!ClientBounds(value.Window, out client) || client != value.ClientBounds || !Unoccluded(value)) return false;
+                if (!ClientBounds(value.Window, out client)) { failure = "client-unavailable"; return false; }
+                if (client != value.ClientBounds) { failure = "client-changed"; return false; }
+                if (!Unoccluded(value, out failure)) return false;
                 var frames = new int[3][];
                 for (int index = 0; index < 3; index++)
                 {
                     Rectangle region = value.Regions[index];
-                    if ((long)region.Width * region.Height > 2000000) return false;
+                    if ((long)region.Width * region.Height > 2000000) { failure = "region-too-large"; return false; }
                     using (var bitmap = new Bitmap(region.Width, region.Height, PixelFormat.Format32bppArgb))
                     {
                         using (var graphics = Graphics.FromImage(bitmap))
@@ -237,11 +341,15 @@ namespace HexGuide.Desktop
                     }
                 }
                 Rectangle final;
-                if (GetForegroundWindow() != value.Window || !ClientBounds(value.Window, out final)
-                    || final != client || !Unoccluded(value)) return false;
+                if (GetForegroundWindow() != value.Window) { failure = "game-not-foreground"; return false; }
+                if (!ClientBounds(value.Window, out final)) { failure = "client-unavailable"; return false; }
+                if (final != client) { failure = "client-changed"; return false; }
+                if (!Unoccluded(value, out failure)) return false;
                 signatures = frames;
+                failure = "captured";
                 return true;
             }
+            catch { failure = "capture-exception"; return false; }
             finally { if (previous != IntPtr.Zero) SetThreadDpiAwarenessContext(previous); }
         }
 
@@ -278,31 +386,50 @@ namespace HexGuide.Desktop
             return true;
         }
 
-        private static bool Unoccluded(ScreenSelectionObservation value)
+        private static bool Unoccluded(ScreenSelectionObservation value, out string failure)
         {
+            failure = "captured";
             // Reject any visible top-level window overlapping a sampled card.
             // Do not ignore our NOACTIVATE sidebar: it can cover game pixels.
             var visited = new HashSet<IntPtr>();
             IntPtr above = GetWindow(value.Window, 3);
             while (above != IntPtr.Zero)
             {
-                if (visited.Count >= 256 || !visited.Add(above)) return false;
+                if (visited.Count >= 256 || !visited.Add(above)) { failure = "occlusion-enumeration-incomplete"; return false; }
                 IntPtr current = above;
                 above = GetWindow(current, 3);
                 if (!IsWindowVisible(current) || IsIconic(current)) continue;
-                int cloaked;
-                if (DwmGetWindowAttribute(current, 14, out cloaked, sizeof(int)) != 0) return false;
-                if (cloaked != 0) continue;
                 NativeRect frame;
                 if (DwmGetWindowAttribute(current, 9, out frame, Marshal.SizeOf(typeof(NativeRect))) != 0
-                    && !GetWindowRect(current, out frame)) return false;
+                    && !GetWindowRect(current, out frame)) { failure = "occlusion-bounds-unavailable"; return false; }
                 Rectangle bounds = Rectangle.FromLTRB(frame.Left, frame.Top, frame.Right, frame.Bottom);
-                foreach (Rectangle region in value.Regions)
-                {
-                    Rectangle physical = region; physical.Offset(value.ClientBounds.Location);
-                    if (bounds.IntersectsWith(physical)) return false;
-                }
+                // Metadata for a window that cannot cover any sampled pixels
+                // must not block observation (e.g. an off-card input helper).
+                if (!IntersectsCard(value, bounds)) continue;
+                int cloaked;
+                bool cloakKnown = DwmGetWindowAttribute(current, 14, out cloaked, sizeof(int)) == 0;
+                if (BlocksRelevantWindow(true, cloakKnown, cloaked != 0, out failure)) return false;
             }
+            return true;
+        }
+
+        private static bool IntersectsCard(ScreenSelectionObservation value, Rectangle bounds)
+        {
+            foreach (Rectangle region in value.Regions)
+            {
+                Rectangle physical = region; physical.Offset(value.ClientBounds.Location);
+                if (bounds.IntersectsWith(physical)) return true;
+            }
+            return false;
+        }
+
+        internal static bool BlocksRelevantWindow(bool intersects, bool cloakKnown, bool cloaked, out string failure)
+        {
+            failure = "captured";
+            if (!intersects) return false;
+            if (!cloakKnown) { failure = "occlusion-state-unavailable"; return true; }
+            if (cloaked) return false;
+            failure = "card-occluded";
             return true;
         }
 
@@ -317,7 +444,23 @@ namespace HexGuide.Desktop
             SelectionObserved = null; StatusChanged = null;
         }
 
-        internal static int ValidateFixtures() { return ScreenSelectionDecision.ValidateFixtures(); }
+        internal static int ValidateFixtures()
+        {
+            int checks = ScreenSelectionDecision.ValidateFixtures();
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                watcher.RecordCaptureResult(true, "captured", Now());
+                watcher.Suspend("visual-evidence-incomplete", true);
+                watcher.Suspend("waiting", false);
+                var snapshot = watcher.Diagnostics();
+                if (Convert.ToInt32(snapshot["baselineFrames"]) != 0 || (string)snapshot["status"] != "waiting"
+                    || (string)snapshot["lastCancelCode"] != "visual-evidence-incomplete"
+                    || Convert.ToInt32(snapshot["captureFailures"]) != 0 || snapshot["lastCancelAgeMs"] == null)
+                    throw new InvalidOperationException("A first-frame visual mismatch was lost after returning to waiting.");
+                checks++;
+            }
+            return checks;
+        }
         [StructLayout(LayoutKind.Sequential)] private struct NativeRect { internal int Left, Top, Right, Bottom; }
         [StructLayout(LayoutKind.Sequential)] private struct PhysicalPoint { internal int X, Y; }
         [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
@@ -454,6 +597,8 @@ namespace HexGuide.Desktop
         private long invalidatedAt, pressedAt, lastFrameAt;
         private long witnessCapture, acceptedCapture;
         private string witnessIdentity;
+        private string witnessState = "not-started";
+        private int invalidations;
         private int pressedColumn = -1;
         internal bool Invalid, Ready, Pending, Complete;
         internal int BaselineFrames, FeedbackFrames, DismissedFrames, SelectedIndex = -1;
@@ -465,15 +610,18 @@ namespace HexGuide.Desktop
         }
         internal bool ConsiderCapture(long capturedAt, string identity)
         {
-            if (invalidatedAt == 0) return capturedAt > 0;
-            if (capturedAt < invalidatedAt + 2000 || capturedAt <= witnessCapture) return false;
+            if (invalidatedAt == 0) { witnessState = "unfenced"; return capturedAt > 0; }
+            if (capturedAt < invalidatedAt + 2000) { witnessState = "before-settle-fence"; return false; }
+            if (capturedAt <= witnessCapture) { witnessState = "capture-not-newer"; return false; }
             if (witnessIdentity != identity)
             {
                 witnessIdentity = identity; witnessCapture = capturedAt;
+                witnessState = "first-witness";
                 return false;
             }
-            if (capturedAt - witnessCapture < 300) return false;
+            if (capturedAt - witnessCapture < 300) { witnessState = "witness-too-close"; return false; }
             acceptedCapture = capturedAt;
+            witnessState = "accepted";
             return true;
         }
         internal void Invalidate(long now)
@@ -481,8 +629,21 @@ namespace HexGuide.Desktop
             if (now > invalidatedAt)
             {
                 invalidatedAt = now; witnessCapture = acceptedCapture = 0; witnessIdentity = null;
+                invalidations = Math.Min(1000000, invalidations + 1);
+                witnessState = "invalidated";
             }
             Invalid = true;
+        }
+        internal Dictionary<string, object> DiagnosticState(long now)
+        {
+            return new Dictionary<string, object> {
+                { "invalid", Invalid }, { "invalidations", invalidations },
+                { "invalidationAgeMs", ScreenSelectionWatcher.Age(now, invalidatedAt) },
+                { "fenceRemainingMs", invalidatedAt <= 0 ? 0 : Math.Max(0, Math.Min(2000, invalidatedAt + 2000 - now)) },
+                { "witnessCount", acceptedCapture > 0 ? 2 : witnessCapture > 0 ? 1 : 0 },
+                { "witnessCaptureAgeMs", ScreenSelectionWatcher.Age(now, witnessCapture) },
+                { "witnessState", witnessState }
+            };
         }
         internal void Reset()
         {
@@ -680,6 +841,46 @@ namespace HexGuide.Desktop
             var expired = armed(); expired.Pointer(true, 1, true, 1200, baseline, baseline); expired.Pointer(false, 1, true, 1250, baseline, baseline); expired.Frame(feedback, baseline, 3800);
             check(expired.Invalid && !expired.Complete, "Expired feedback confirmed a synthetic choice.");
             var beforeClick = armed(); beforeClick.Frame(feedback, baseline, 1180); check(beforeClick.FeedbackFrames == 0, "Pre-click changes counted as post-click feedback.");
+            string occlusionCode;
+            check(!ScreenSelectionWatcher.BlocksRelevantWindow(false, false, false, out occlusionCode) && occlusionCode == "captured",
+                "DWM metadata failure for a nonoverlapping window blocked the cards.");
+            check(ScreenSelectionWatcher.BlocksRelevantWindow(true, false, false, out occlusionCode) && occlusionCode == "occlusion-state-unavailable",
+                "Unknown visibility for an overlapping window was treated as unoccluded.");
+            check(ScreenSelectionWatcher.BlocksRelevantWindow(true, true, false, out occlusionCode) && occlusionCode == "card-occluded"
+                && !ScreenSelectionWatcher.BlocksRelevantWindow(true, true, true, out occlusionCode),
+                "Visible or cloaked overlapping windows were classified incorrectly.");
+            var diagnosticDecision = new ScreenSelectionDecision(); diagnosticDecision.Invalidate(5000);
+            diagnosticDecision.ConsiderCapture(7200, "sensitive-identity-must-not-be-exported"); diagnosticDecision.Reset();
+            var fenceDiagnostics = diagnosticDecision.DiagnosticState(7300);
+            check(Convert.ToInt32(fenceDiagnostics["witnessCount"]) == 1 && (string)fenceDiagnostics["witnessState"] == "first-witness"
+                && Convert.ToInt64(fenceDiagnostics["witnessCaptureAgeMs"]) == 100,
+                "Reset erased the first OCR witness or exported an incorrect witness age.");
+            diagnosticDecision.ConsiderCapture(7600, "sensitive-identity-must-not-be-exported");
+            check(Convert.ToInt32(diagnosticDecision.DiagnosticState(7700)["witnessCount"]) == 2
+                && Convert.ToInt64(diagnosticDecision.DiagnosticState(1000000)["invalidationAgeMs"]) == 60000,
+                "Two-capture readiness or bounded diagnostic age was reported incorrectly.");
+            var safeBackend = ScreenSelectionWatcher.BackendDiagnostics(new Dictionary<string, object> {
+                { "metadataStatus", "untrusted-sensitive-text" }, { "captureAgeMs", long.MaxValue },
+                { "lastScanAgeMs", -2L }, { "backendArmed", "true" }, { "ids", new[] { "secret-id" } }
+            });
+            check(safeBackend.Count == 4 && (string)safeBackend["metadataStatus"] == "not-scanned"
+                && Convert.ToInt64(safeBackend["captureAgeMs"]) == 60000 && safeBackend["lastScanAgeMs"] == null
+                && !(bool)safeBackend["backendArmed"] && !safeBackend.ContainsKey("ids"),
+                "Backend diagnostics copied unknown text, identity, unbounded ages, or nonboolean values.");
+            using (var diagnosticWatcher = new ScreenSelectionWatcher())
+            {
+                diagnosticWatcher.RecordCaptureResult(false, "card-occluded", 1000);
+                diagnosticWatcher.CancelForLocalAction();
+                diagnosticWatcher.RecordCaptureResult(true, "ignored-private-text", 2000);
+                var retained = diagnosticWatcher.Diagnostics();
+                check((string)retained["lastFailureCode"] == "card-occluded" && (string)retained["lastCaptureCode"] == "captured"
+                    && Convert.ToInt32(retained["captureFailures"]) == 1 && !retained.ContainsKey("delta")
+                    && !retained.ContainsKey("ids") && !retained.ContainsKey("windowHandle") && !retained.ContainsKey("capture"),
+                    "Reset or a later successful capture erased the last failure or exposed visual/identity metadata.");
+                diagnosticWatcher.RecordCaptureResult(false, "untrusted-private-failure", 3000);
+                check((string)diagnosticWatcher.Diagnostics()["lastFailureCode"] == "capture-exception",
+                    "Unbounded failure text entered the diagnostic snapshot.");
+            }
             var stale = armed(); stale.Pointer(true, 1, true, 1400, baseline, baseline); check(stale.Invalid, "Stale pre-click frame permitted a synthetic choice.");
             var bad = armed(); bad.Frame(new[] { new int[1], new int[192], new int[192] }, baseline, 1200); check(bad.Invalid, "Malformed signature was accepted.");
             var tooEarly = new ScreenSelectionDecision(); tooEarly.Arm(1000); tooEarly.Pointer(true, 1, true, 1100, baseline, baseline);

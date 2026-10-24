@@ -29,12 +29,19 @@ test('synthetic capture identity is exposed only after a complete title match an
   input.selectionCapture = {capturedAt:1792800000000,width:2560,height:1440,originX:0,originY:0,windowHandle:'1234',privateText:'do not retain',
     regions:[0,1,2].map(column=>({column,x:400+column*600,y:300,width:400,height:700,signature:Array(192).fill(80),privateName:'do not retain'}))};
   const result = matchOcrProposals(input,augments);
+  assert.equal(result.selectionMetadataStatus,'accepted');
   assert.equal(result.selectionCapture.regions.length,3);
   assert.doesNotMatch(JSON.stringify(result),/do not retain/);
   input.lines.pop();
-  assert.equal('selectionCapture' in matchOcrProposals(input,augments),false);
+  const incomplete = matchOcrProposals(input,augments);
+  assert.equal('selectionCapture' in incomplete,false);
+  assert.equal(incomplete.selectionMetadataStatus,'title-incomplete');
   input.lines.push(title('渴血',2)); input.selectionCapture.width = 1920;
-  assert.equal('selectionCapture' in matchOcrProposals(input,augments),false);
+  const invalid = matchOcrProposals(input,augments);
+  assert.equal('selectionCapture' in invalid,false);
+  assert.equal(invalid.selectionMetadataStatus,'shape-invalid');
+  delete input.selectionCapture;
+  assert.equal(matchOcrProposals(input,augments).selectionMetadataStatus,'missing');
 });
 
 test('synthetic shifted titles or reversed regions preserve candidates without automatic selection eligibility', () => {
@@ -54,6 +61,7 @@ test('synthetic shifted titles or reversed regions preserve candidates without a
     assert.equal(result.status,'recognized');
     assert.deepEqual(result.proposals.map(item=>item.name),names);
     assert.equal('selectionCapture' in result,false);
+    assert.equal(result.selectionMetadataStatus,raw.lines[0].x === 200 || raw.lines[0].y === 1002 ? 'title-outside-region' : 'shape-invalid');
   }
 });
 

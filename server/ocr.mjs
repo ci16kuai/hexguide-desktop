@@ -5,7 +5,7 @@ import {sanitizeSelectionCapture} from './selection.mjs';
 
 const execute = promisify(execFile);
 const normalize = value => String(value || '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
-const result = (status, message, proposals = [], details = {}) => ({status, message, proposals, ...details});
+const result = (status, message, proposals = [], details = {}) => ({status, message, proposals, selectionMetadataStatus:'title-incomplete', ...details});
 const nativeStages = new Set(['initializing','native-window','foreground-check','winrt-runtime','ocr-language','ocr-engine','window-bounds','capture','resize','encode','stream-write','decode','software-bitmap','recognize','result']);
 const nativeCodes = new Set(['ok','game-not-foreground','foreground-changed','ocr-language-missing','ocr-engine-unavailable','window-bounds-unavailable','window-size-unsupported','ocr-passes-incomplete',...[...nativeStages].map(stage => `ocr-${stage}-failed`)]);
 function nativeDetails(raw) {
@@ -210,8 +210,10 @@ export function matchOcrProposals(raw, augments) {
     return centerX >= region.x && centerX < region.x + region.width
       && centerY >= region.y && centerY < region.y + region.height;
   });
+  const selectionMetadataStatus = raw.selectionCapture == null ? 'missing'
+    : !selectionCapture ? 'shape-invalid' : !captureAligned ? 'title-outside-region' : 'accepted';
   return result('recognized', '识别到同排的三个候选标题，请逐一核对后再带入推荐；这不会自动记录为已选海克斯。', proposals,
-    {...details('title-layout-confirmed'), ...(captureAligned ? {selectionCapture} : {})});
+    {...details('title-layout-confirmed'), selectionMetadataStatus, ...(captureAligned ? {selectionCapture} : {})});
 }
 
 export function createOcrScanner({applicationDirectory, dataDirectory, augments = [], executeScript = execute, platform = process.platform} = {}) {

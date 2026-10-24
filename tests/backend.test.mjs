@@ -371,7 +371,7 @@ test('OCR cannot guess fuzzy, ambiguous or more-than-three candidate names', () 
   assert.equal(matchOcrProposals({status:'recognized',lines:['烈焰之魂','冰霜之魂','黄金之心','第四种选项'].map((text,x) => ({text,x}))},many).status,'unavailable');
   const duplicate = [...augments,{id:'alias-collision',name:'其他选项',aliases:['Fire Soul'],availability:'current',recommendable:true}];
   assert.equal(matchOcrProposals({status:'recognized',lines:[{text:'Fire Soul'}]},duplicate).status,'unavailable');
-  assert.deepEqual(matchOcrProposals({status:'waiting',message:'游戏窗口未在前台'},augments),{status:'waiting',message:'游戏窗口未在前台',proposals:[]});
+  assert.deepEqual(matchOcrProposals({status:'waiting',message:'游戏窗口未在前台'},augments),{status:'waiting',message:'游戏窗口未在前台',proposals:[],selectionMetadataStatus:'title-incomplete'});
 });
 
 test('OCR is single-flight, launches the fixed local script with explicit arguments and fails safely', async () => {

@@ -2,7 +2,7 @@ import {readFile, mkdir, rename, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {enrichData, recommend} from '../dist/engine.js';
 import {buildLivePlan} from '../dist/adaptive.js';
-import {SelectionObserver, SelectionValidationError, SelectionConflictError, createOfferToken} from './selection.mjs';
+import {SelectionObserver, SelectionValidationError, SelectionConflictError, createOfferToken, sanitizeSelectionCapture} from './selection.mjs';
 
 const ROUTES = new Set(['auto', 'attack', 'spell', 'tank', 'support', 'crit']);
 const END_PHASES = new Set(['ChampSelect', 'Lobby', 'Matchmaking', 'ReadyCheck', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
@@ -10,6 +10,8 @@ const eligible = augment => augment.availability === 'current' && augment.recomm
 const text = (value, limit = 220) => typeof value === 'string' ? value.slice(0, limit) : '';
 const gameId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(value) ? value : null;
 const finite = value => typeof value === 'number' && Number.isFinite(value);
+const METADATA_STATUSES = new Set(['accepted','missing','shape-invalid','title-outside-region','title-incomplete']);
+const diagnosticAge = (time, now) => Number.isSafeInteger(time) && time >= 0 ? Math.min(60000, Math.max(0, Math.floor(now - time))) : null;
 
 export class SessionValidationError extends Error {}
 export class SessionConflictError extends Error {}
@@ -43,6 +45,7 @@ export class BackgroundSidebar {
     this.offerToken = null;
     this.consumedOfferKey = null;
     this.selectionObserver = new SelectionObserver({now});
+    this.selectionAttempt = {metadataStatus:'not-scanned', capturedAt:null, completedAt:null};
     this.offerTime = 0;
     this.lastScan = -Infinity;
     this.generation = 0;
@@ -163,6 +166,27 @@ export class BackgroundSidebar {
   selectionEligible(live) { return this.ocr.enabled && live.phase === 'InProgress' && live.stage !== 'loading' && !(live.mode?.known && !live.mode.isMayhem); }
   getSelectionObservation() { const live = this.observe(); return this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live)); }
 
+  recordSelectionAttempt(raw, complete, live, contextCurrent = true) {
+    const capture = sanitizeSelectionCapture(raw?.selectionCapture);
+    let metadataStatus = METADATA_STATUSES.has(raw?.selectionMetadataStatus) ? raw.selectionMetadataStatus
+      : !complete ? 'title-incomplete' : raw?.selectionCapture == null ? 'missing' : capture ? 'accepted' : 'shape-invalid';
+    if (!contextCurrent) metadataStatus = 'context-ineligible';
+    else if (metadataStatus === 'accepted') {
+      if (!complete || !this.selectionEligible(live)) metadataStatus = 'context-ineligible';
+      else if (!capture) metadataStatus = 'shape-invalid';
+      else if (capture.capturedAt <= this.selectionObserver.invalidatedAt || capture.capturedAt > this.now() + 1000
+        || this.now() - capture.capturedAt > this.selectionObserver.maxAge) metadataStatus = 'stale';
+    }
+    this.selectionAttempt = {metadataStatus, capturedAt:capture?.capturedAt ?? null, completedAt:this.now()};
+  }
+
+  selectionDiagnostics(selection) {
+    return {metadataStatus:this.selectionAttempt.metadataStatus,
+      captureAgeMs:diagnosticAge(this.selectionAttempt.capturedAt, this.now()),
+      backendArmed:selection.status === 'armed',
+      lastScanAgeMs:diagnosticAge(this.selectionAttempt.completedAt, this.now())};
+  }
+
   async setSession(value) {
     const selected = this.validateSession(value);
     const live = this.observe();
@@ -247,7 +271,10 @@ export class BackgroundSidebar {
     // Both manual requests and the background timer await the same capture.
     if (this.pending) return this.pending;
     const live = this.observe();
-    if (live.phase !== 'InProgress' || live.stage === 'loading' || live.mode?.known && !live.mode.isMayhem) return {status:'waiting', message:'等待进入海克斯大乱斗对局后识别。', proposals:[]};
+    if (live.phase !== 'InProgress' || live.stage === 'loading' || live.mode?.known && !live.mode.isMayhem) {
+      this.recordSelectionAttempt(null, false, live, false);
+      return {status:'waiting', message:'等待进入海克斯大乱斗对局后识别。', proposals:[]};
+    }
     const generation = this.generation;
     this.lastScan = this.now();
     this.pending = (async () => {
@@ -255,11 +282,15 @@ export class BackgroundSidebar {
       try { raw = this.scanner ? await this.scanner() : null; }
       catch { /* Local capture failure contains no public diagnostic details. */ }
       const current = this.observe();
-      if (generation !== this.generation || current.phase !== 'InProgress' || current.stage === 'loading') { this.selectionObserver.invalidate(); return {status:'waiting', message:'本局已变化，请等待新一轮三选一卡片。', proposals:[]}; }
+      if (generation !== this.generation || current.phase !== 'InProgress' || current.stage === 'loading') {
+        this.recordSelectionAttempt(raw, false, current, false);
+        this.selectionObserver.invalidate(); return {status:'waiting', message:'本局已变化，请等待新一轮三选一卡片。', proposals:[]};
+      }
       const status = ['recognized', 'waiting', 'unavailable'].includes(raw?.status) ? raw.status : 'unavailable';
       const proposals = (Array.isArray(raw?.proposals) ? raw.proposals : []).filter(proposal => this.augments.has(proposal?.id)).map(proposal => ({id:proposal.id, name:this.augments.get(proposal.id).name, confidence:'exact'}));
       const complete = status === 'recognized' && proposals.length === 3 && new Set(proposals.map(proposal => proposal.id)).size === 3 && proposals.every(proposal => !this.session.owned.includes(proposal.id)) && JSON.stringify(proposals.map(proposal => proposal.id)) !== this.consumedOfferKey;
       const scannedAt = new Date(this.now()).toISOString();
+      this.recordSelectionAttempt(raw, complete, current);
       if (complete) {
         const changedOffers = JSON.stringify(this.offers.map(offer => offer.id)) !== JSON.stringify(proposals.map(offer => offer.id));
         if (changedOffers || !this.offerToken) this.offerToken = createOfferToken();
@@ -296,9 +327,10 @@ export class BackgroundSidebar {
       return {id:offer.id, name:offer.name, icon:text(definition.icon, 400), rarity:text(definition.rarity, 40), rank:rank.get(offer.id), reason:result.reasons[0] || '结合英雄机制与已确认海克斯比较；以游戏内实际效果为准。', cautions:result.cautions.slice(0, 2)};
     });
     const plan = buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], champions:[...this.champions.values()], itemsCatalog:this.itemsCatalog, now:this.now()});
+    const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live));
     return {
-      version:'1.10.0', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
-      gameEpoch:this.gameEpoch, selection:this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live)),
+      version:'1.10.1', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      gameEpoch:this.gameEpoch, selection, selectionDiagnostics:this.selectionDiagnostics(selection),
       mode:live.mode || {queueId:null, isMayhem:false, known:false},
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
       level:live.level ?? null, gameTime:live.gameTime ?? null, currentGold:live.currentGold ?? null, items:live.items || [],

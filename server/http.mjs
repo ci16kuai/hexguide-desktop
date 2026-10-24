@@ -89,7 +89,7 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
           return send(response, conflict ? 409 : error instanceof SessionValidationError ? 400 : 500, {error:conflict ? 'The current assistant session has changed.' : error instanceof SessionValidationError ? 'Invalid assistant state.' : 'Assistant state could not be saved.', ...(conflict ? {session:sidebar.getSession()} : {})});
         }
       }
-      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.10.0', localOnly:true});
+      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.10.1', localOnly:true});
       if (pathname === '/api/live') return send(response, 200, collector.getSnapshot());
       if (pathname === '/api/sidebar') return sidebar ? send(response, 200, sidebar.getModel()) : send(response, 503, {error:'Sidebar is unavailable.'});
       if (pathname === '/api/session') return sidebar ? send(response, 200, sidebar.getSession()) : send(response, 503, {error:'Shared session is unavailable.'});

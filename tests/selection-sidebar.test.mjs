@@ -136,3 +136,42 @@ test('synthetic same-offer scan refresh cannot interrupt already observed select
   assert.deepEqual(model.owned.map(augment=>augment.id),[ids[2]]);
   assert.match(model.plan.summary,/1 个已确认海克斯/);
 });
+
+test('synthetic diagnostic snapshots distinguish new failed attempts from retained old offers without exposing identity', async () => {
+  const {sidebar,setResponse,advance} = setup();
+  assert.deepEqual(sidebar.getModel().selectionDiagnostics,{metadataStatus:'not-scanned',captureAgeMs:null,backendArmed:false,lastScanAgeMs:null});
+  await sidebar.scan();
+  assert.deepEqual(sidebar.getModel().selectionDiagnostics,{metadataStatus:'accepted',captureAgeMs:0,backendArmed:true,lastScanAgeMs:0});
+  advance(1200);
+  setResponse({status:'unavailable',selectionMetadataStatus:'title-incomplete',privateName:'do not expose',message:'failed latest frame'});
+  await sidebar.scan();
+  const model=sidebar.getModel();
+  assert.equal(model.offers.length,3);
+  assert.equal(model.ocr.status,'recognized','candidate display is preserved independently of the last diagnostic attempt');
+  assert.deepEqual(model.selectionDiagnostics,{metadataStatus:'title-incomplete',captureAgeMs:null,backendArmed:false,lastScanAgeMs:0});
+  advance(90000);
+  const diagnostic=sidebar.getModel().selectionDiagnostics;
+  assert.equal(diagnostic.lastScanAgeMs,60000);
+  assert.deepEqual(Object.keys(diagnostic).sort(),['backendArmed','captureAgeMs','lastScanAgeMs','metadataStatus']);
+  assert.doesNotMatch(JSON.stringify(diagnostic),/do not expose|privateName|12345|offerToken|regions/);
+});
+
+test('synthetic diagnostics distinguish missing, malformed, out-of-region, stale and ineligible metadata', async () => {
+  for(const [expected,response] of [
+    ['missing',{status:'recognized',proposals:ids.slice(0,3).map(id=>({id}))}],
+    ['shape-invalid',{status:'recognized',proposals:ids.slice(0,3).map(id=>({id})),selectionCapture:{...capture(initial),windowHandle:'private-path'}}],
+    ['title-outside-region',{status:'recognized',proposals:ids.slice(0,3).map(id=>({id})),selectionMetadataStatus:'title-outside-region'}],
+    ['stale',{status:'recognized',proposals:ids.slice(0,3).map(id=>({id})),selectionCapture:capture(initial-30001)}],
+  ]) {
+    const {sidebar,setResponse}=setup(); setResponse(response); await sidebar.scan();
+    assert.equal(sidebar.getModel().selectionDiagnostics.metadataStatus,expected);
+    assert.equal(sidebar.getModel().selectionDiagnostics.backendArmed,false);
+    assert.equal(sidebar.getModel().offers.length,3);
+  }
+  const {sidebar,update,setResponse}=setup();
+  setResponse({status:'waiting',selectionMetadataStatus:'private arbitrary text'});
+  await sidebar.scan();
+  assert.equal(sidebar.getModel().selectionDiagnostics.metadataStatus,'title-incomplete');
+  update({stage:'loading'}); await sidebar.scan();
+  assert.equal(sidebar.getModel().selectionDiagnostics.metadataStatus,'context-ineligible');
+});
