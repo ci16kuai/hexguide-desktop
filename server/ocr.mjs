@@ -1,6 +1,7 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
+import {sanitizeSelectionCapture} from './selection.mjs';
 
 const execute = promisify(execFile);
 const normalize = value => String(value || '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
@@ -198,8 +199,19 @@ export function matchOcrProposals(raw, augments) {
   }
   diagnostics.layoutCount = layouts.size;
   if (layouts.size !== 1) return incomplete(layouts.size > 1 ? 'title-layout-ambiguous' : !lines.length ? 'ocr-no-text' : !diagnostics.exactTitleCount ? 'title-name-unmatched' : 'title-layout-incomplete');
-  const proposals = [...layouts.values()][0].map(({augment}) => ({id:augment.id, name:augment.name, confidence:'exact'}));
-  return result('recognized', '识别到同排的三个候选标题，请逐一核对后再带入推荐；这不会自动记录为已选海克斯。', proposals, details('title-layout-confirmed'));
+  const matched = [...layouts.values()][0];
+  const proposals = matched.map(({augment}) => ({id:augment.id, name:augment.name, confidence:'exact'}));
+  const selectionCapture = sanitizeSelectionCapture(raw.selectionCapture, {width, height});
+  // A recognized name must belong to the same physical card the click watcher
+  // samples. Different layouts still display candidates but require confirmation.
+  const captureAligned = selectionCapture && matched.every((title, column) => {
+    const region = selectionCapture.regions[column];
+    const centerX = title.x + title.width / 2, centerY = title.y + title.height / 2;
+    return centerX >= region.x && centerX < region.x + region.width
+      && centerY >= region.y && centerY < region.y + region.height;
+  });
+  return result('recognized', '识别到同排的三个候选标题，请逐一核对后再带入推荐；这不会自动记录为已选海克斯。', proposals,
+    {...details('title-layout-confirmed'), ...(captureAligned ? {selectionCapture} : {})});
 }
 
 export function createOcrScanner({applicationDirectory, dataDirectory, augments = [], executeScript = execute, platform = process.platform} = {}) {

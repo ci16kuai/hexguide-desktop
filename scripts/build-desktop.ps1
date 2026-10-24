@@ -78,6 +78,7 @@ $compilerArguments = @('/nologo', '/target:winexe', '/platform:x64', '/optimize+
 foreach ($reference in $references) { $compilerArguments += '/reference:' + $reference }
 $compilerArguments += Join-Path $projectRoot 'native\Program.cs'
 $compilerArguments += Join-Path $projectRoot 'native\SidebarShortcut.cs'
+$compilerArguments += Join-Path $projectRoot 'native\ScreenSelectionWatcher.cs'
 & $compiler @compilerArguments
 if ($LASTEXITCODE -ne 0) { throw 'Desktop launcher compilation failed.' }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\HexGuide.exe.config') -Destination (Join-Path $stage 'HexGuide.exe.config') -Force
@@ -121,7 +122,7 @@ Alt+Shift+H 显示或收起游戏侧栏，支持无边框或窗口模式。
 本地配置和浏览器缓存保存在软件旁 appdata 文件夹。
 可使用 HexGuide.exe --data-dir ""H:\Chatgpt\hexguide-appdata"" 自定义保存位置。
 关闭主窗口默认收进托盘，托盘菜单“完全退出”才停止助手。
-游戏海克斯仍需你确认；软件不会替你点击选择。
+屏幕自动确认处于实验测试阶段，未记录时可在侧栏手动确认；软件不会替你点击游戏。
 
 缺少 WebView2 时从微软官网安装 Evergreen Runtime：
 https://developer.microsoft.com/microsoft-edge/webview2/

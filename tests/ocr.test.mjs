@@ -24,6 +24,39 @@ test('three exact titles in the real Windows OCR geometry become a confirmation 
   assert.ok(!('text' in result) && !('lines' in result),'safe matching diagnostics never echo raw OCR text');
 });
 
+test('synthetic capture identity is exposed only after a complete title match and strips unrelated data', () => {
+  const input = frame(['钢化你心','歌利亚巨人','渴血'].map((name,index)=>title(name,index)));
+  input.selectionCapture = {capturedAt:1792800000000,width:2560,height:1440,originX:0,originY:0,windowHandle:'1234',privateText:'do not retain',
+    regions:[0,1,2].map(column=>({column,x:400+column*600,y:300,width:400,height:700,signature:Array(192).fill(80),privateName:'do not retain'}))};
+  const result = matchOcrProposals(input,augments);
+  assert.equal(result.selectionCapture.regions.length,3);
+  assert.doesNotMatch(JSON.stringify(result),/do not retain/);
+  input.lines.pop();
+  assert.equal('selectionCapture' in matchOcrProposals(input,augments),false);
+  input.lines.push(title('渴血',2)); input.selectionCapture.width = 1920;
+  assert.equal('selectionCapture' in matchOcrProposals(input,augments),false);
+});
+
+test('synthetic shifted titles or reversed regions preserve candidates without automatic selection eligibility', () => {
+  const names = ['钢化你心','歌利亚巨人','渴血'];
+  const input = frame(names.map((name,column)=>title(name,column)));
+  const metadata = {capturedAt:1792800000000,width:2560,height:1440,originX:0,originY:0,windowHandle:'1234',
+    regions:[0,1,2].map(column=>({column,x:400+column*600,y:300,width:400,height:700,signature:Array(192).fill(80)}))};
+  for (const mutate of [
+    raw => { raw.lines[0].x = 200; },
+    raw => { raw.lines.forEach(line => { line.y = 1002; }); },
+    raw => { raw.selectionCapture.regions.reverse(); },
+    raw => { raw.selectionCapture.regions.reverse().forEach((region,column)=>{region.column=column;}); },
+  ]) {
+    const raw = {...structuredClone(input),selectionCapture:structuredClone(metadata)};
+    mutate(raw);
+    const result = matchOcrProposals(raw,augments);
+    assert.equal(result.status,'recognized');
+    assert.deepEqual(result.proposals.map(item=>item.name),names);
+    assert.equal('selectionCapture' in result,false);
+  }
+});
+
 test('a battle player name containing Goliath and descriptions cannot become card offers', () => {
   const result = matchOcrProposals(frame([
     title('Goliath Astie',0),

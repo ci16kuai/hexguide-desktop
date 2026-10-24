@@ -2,6 +2,7 @@ import {readFile, mkdir, rename, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {enrichData, recommend} from '../dist/engine.js';
 import {buildLivePlan} from '../dist/adaptive.js';
+import {SelectionObserver, SelectionValidationError, SelectionConflictError, createOfferToken} from './selection.mjs';
 
 const ROUTES = new Set(['auto', 'attack', 'spell', 'tank', 'support', 'crit']);
 const END_PHASES = new Set(['ChampSelect', 'Lobby', 'Matchmaking', 'ReadyCheck', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
@@ -39,6 +40,9 @@ export class BackgroundSidebar {
     this.session = {owned:[], route:'auto', gameId:null, revision:0};
     this.ocr = {enabled:true, status:'waiting', message:'自动识别已开启；游戏在前台并出现三选一卡片时检查。', observedAt:null};
     this.offers = [];
+    this.offerToken = null;
+    this.consumedOfferKey = null;
+    this.selectionObserver = new SelectionObserver({now});
     this.offerTime = 0;
     this.lastScan = -Infinity;
     this.generation = 0;
@@ -68,8 +72,10 @@ export class BackgroundSidebar {
   }
 
   validateSession(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['owned', 'route'].includes(key)) || !Array.isArray(value.owned) || value.owned.length > 12 || !ROUTES.has(value.route)) throw new SessionValidationError('Invalid session.');
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['owned', 'route', 'expectedRevision', 'expectedGameEpoch', 'expectedGameId'].includes(key)) || !Array.isArray(value.owned) || value.owned.length > 12 || !ROUTES.has(value.route)) throw new SessionValidationError('Invalid session.');
     if (value.owned.some(id => typeof id !== 'string' || !this.augments.has(id)) || new Set(value.owned).size !== value.owned.length) throw new SessionValidationError('Unknown or duplicate augment.');
+    for (const key of ['expectedRevision', 'expectedGameEpoch']) if (key in value && (!Number.isSafeInteger(value[key]) || value[key] < 0)) throw new SessionValidationError('Invalid session guard.');
+    if ('expectedGameId' in value && value.expectedGameId !== null && gameId(value.expectedGameId) !== value.expectedGameId) throw new SessionValidationError('Invalid game guard.');
     return {owned:[...value.owned], route:value.route};
   }
 
@@ -106,6 +112,9 @@ export class BackgroundSidebar {
   clearGame() {
     this.session = {owned:[], route:'auto', gameId:null, revision:this.session.revision + 1};
     this.offers = [];
+    this.offerToken = null;
+    this.consumedOfferKey = null;
+    this.selectionObserver.invalidate();
     this.offerTime = 0;
     this.generation++;
     this.gameEpoch++;
@@ -137,28 +146,41 @@ export class BackgroundSidebar {
     // A transient API disconnection must not look like a new game or erase clock history.
     if (inGame || END_PHASES.has(live.phase)) this.previous = {inGame, stage:live.stage, time:finite(live.gameTime) && (live.gameTime > 0 || !finite(last?.time) || boundary) ? live.gameTime : inGame && !boundary ? last?.time ?? null : null};
     if (changed) void this.persist();
+    if (live.phase !== 'InProgress' || live.stage === 'loading' || live.mode?.known && !live.mode.isMayhem) this.selectionObserver.invalidate();
     if (this.offers.length && this.now() - this.offerTime >= this.offerLifetime) {
       this.offers = [];
+      this.offerToken = null;
+      this.selectionObserver.invalidate();
       this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
       this.ocr.message = '上一轮识别已过期，等待当前三选一卡片；已确认海克斯仍保留。';
     }
     return live;
   }
 
-  getSession() { this.observe(); return structuredClone(this.session); }
+  getSession() { this.observe(); return {...structuredClone(this.session), gameEpoch:this.gameEpoch}; }
+
+  selectionContext() { return {gameId:this.session.gameId, gameEpoch:this.gameEpoch, revision:this.session.revision}; }
+  selectionEligible(live) { return this.ocr.enabled && live.phase === 'InProgress' && live.stage !== 'loading' && !(live.mode?.known && !live.mode.isMayhem); }
+  getSelectionObservation() { const live = this.observe(); return this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live)); }
 
   async setSession(value) {
     const selected = this.validateSession(value);
     const live = this.observe();
+    if ('expectedRevision' in value && value.expectedRevision !== this.session.revision
+      || 'expectedGameEpoch' in value && value.expectedGameEpoch !== this.gameEpoch
+      || 'expectedGameId' in value && value.expectedGameId !== this.session.gameId) throw new SessionConflictError('The assistant state has changed.');
     // A late main-window write must not carry a previous game's choices into
     // the opening preset. Return authoritative state so clients can reconcile.
-    if (live.stage === 'loading') return structuredClone(this.session);
+    if (live.stage === 'loading') return this.getSession();
     if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) || selected.route !== this.session.route) {
-      if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned)) this.generation++;
+      if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) && this.offers.length === 3) this.consumedOfferKey = JSON.stringify(this.offers.map(offer => offer.id));
+      this.generation++;
+      this.selectionObserver.invalidate();
       this.session = {...this.session, ...selected, revision:this.session.revision + 1};
       // Once the player confirms a card, that previous round is no longer offered.
       if (this.offers.some(offer => selected.owned.includes(offer.id))) {
         this.offers = []; this.offerTime = 0;
+        this.offerToken = null;
         this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
         this.ocr.message = '已确认选择；等待下一轮三选一卡片。';
         delete this.ocr.code;
@@ -170,23 +192,43 @@ export class BackgroundSidebar {
   }
 
   async confirmOffer(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 3 || Object.keys(value).some(key => !['id', 'gameId', 'revision'].includes(key)) || typeof value.id !== 'string' || !this.augments.has(value.id) || !(value.gameId === null || gameId(value.gameId) === value.gameId) || !Number.isSafeInteger(value.revision) || value.revision < 0) throw new SessionValidationError('Invalid confirmation.');
+    if (!value || typeof value !== 'object' || Array.isArray(value) || ![3,4].includes(Object.keys(value).length) || Object.keys(value).some(key => !['id', 'gameId', 'revision', 'offerToken'].includes(key)) || typeof value.id !== 'string' || !this.augments.has(value.id) || !(value.gameId === null || gameId(value.gameId) === value.gameId) || !Number.isSafeInteger(value.revision) || value.revision < 0 || 'offerToken' in value && (typeof value.offerToken !== 'string' || !/^[a-f0-9]{32}$/.test(value.offerToken))) throw new SessionValidationError('Invalid confirmation.');
     const live = this.observe();
     // Check and mutate synchronously: a roll, another confirmation or a game
     // boundary cannot slip between a UI GET and this authoritative update.
-    if (live.phase !== 'InProgress' || live.stage === 'loading' || value.gameId !== this.session.gameId || value.revision !== this.session.revision || !this.offers.some(offer => offer.id === value.id) || this.session.owned.includes(value.id) || this.session.owned.length >= 12) throw new SessionConflictError('The current offered choices have changed.');
+    if (live.phase !== 'InProgress' || live.stage === 'loading' || value.gameId !== this.session.gameId || value.revision !== this.session.revision || 'offerToken' in value && value.offerToken !== this.offerToken || !this.offers.some(offer => offer.id === value.id) || this.session.owned.includes(value.id) || this.session.owned.length >= 12) throw new SessionConflictError('The current offered choices have changed.');
+    return this.commitChoice(value.id, 'manual');
+  }
+
+  async observeSelectionEvidence(value) {
+    const live = this.observe();
+    let observation;
+    try { observation = this.selectionObserver.consume(value, this.selectionContext(), this.selectionEligible(live)); }
+    catch (error) {
+      if (error instanceof SelectionValidationError) throw new SessionValidationError(error.message);
+      if (error instanceof SelectionConflictError) throw new SessionConflictError(error.message);
+      throw error;
+    }
+    if (!this.offers.some(offer => offer.id === observation.id) || this.session.owned.includes(observation.id) || this.session.owned.length >= 12) throw new SessionConflictError('The current offered choices have changed.');
+    return this.commitChoice(observation.id, observation.provider);
+  }
+
+  async commitChoice(id, provider) {
     const epoch = this.gameEpoch;
     this.generation++;
-    this.session = {...this.session, owned:[...this.session.owned, value.id], revision:this.session.revision + 1};
+    this.selectionObserver.invalidate();
+    this.consumedOfferKey = JSON.stringify(this.offers.map(offer => offer.id));
+    this.session = {...this.session, owned:[...this.session.owned, id], revision:this.session.revision + 1};
     this.offers = [];
+    this.offerToken = null;
     this.offerTime = 0;
     this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
-    this.ocr.message = '已确认选择；等待下一轮三选一卡片。';
+    this.ocr.message = provider === 'screen' ? '实验性屏幕确认已记录；可手动纠正，等待下一轮三选一卡片。' : '已确认选择；等待下一轮三选一卡片。';
     delete this.ocr.code;
     delete this.ocr.diagnostics;
     await this.persist();
     const model = this.getModel();
-    if (epoch !== this.gameEpoch || model.phase !== 'InProgress' || !model.owned.some(augment => augment.id === value.id)) throw new SessionConflictError('The game changed while saving the choice.');
+    if (epoch !== this.gameEpoch || model.phase !== 'InProgress' || !model.owned.some(augment => augment.id === id)) throw new SessionConflictError('The game changed while saving the choice.');
     return model;
   }
 
@@ -195,7 +237,7 @@ export class BackgroundSidebar {
     this.ocr.enabled = value.enabled;
     delete this.ocr.code;
     delete this.ocr.diagnostics;
-    if (!value.enabled) { this.generation++; this.ocr.status = 'disabled'; this.ocr.message = '自动识别已暂停；已确认海克斯仍保留。'; }
+    if (!value.enabled) { this.generation++; this.selectionObserver.invalidate(); this.ocr.status = 'disabled'; this.ocr.message = '自动识别已暂停；已确认海克斯仍保留。'; }
     else if (!this.offers.length) { this.ocr.status = 'waiting'; this.ocr.message = '后台识别已开启；游戏在前台并出现三选一卡片时检查。'; }
     void this.persistRecognition();
     return this.getModel();
@@ -213,21 +255,28 @@ export class BackgroundSidebar {
       try { raw = this.scanner ? await this.scanner() : null; }
       catch { /* Local capture failure contains no public diagnostic details. */ }
       const current = this.observe();
-      if (generation !== this.generation || current.phase !== 'InProgress' || current.stage === 'loading') return {status:'waiting', message:'本局已变化，请等待新一轮三选一卡片。', proposals:[]};
+      if (generation !== this.generation || current.phase !== 'InProgress' || current.stage === 'loading') { this.selectionObserver.invalidate(); return {status:'waiting', message:'本局已变化，请等待新一轮三选一卡片。', proposals:[]}; }
       const status = ['recognized', 'waiting', 'unavailable'].includes(raw?.status) ? raw.status : 'unavailable';
       const proposals = (Array.isArray(raw?.proposals) ? raw.proposals : []).filter(proposal => this.augments.has(proposal?.id)).map(proposal => ({id:proposal.id, name:this.augments.get(proposal.id).name, confidence:'exact'}));
-      const complete = status === 'recognized' && proposals.length === 3 && new Set(proposals.map(proposal => proposal.id)).size === 3 && proposals.every(proposal => !this.session.owned.includes(proposal.id));
+      const complete = status === 'recognized' && proposals.length === 3 && new Set(proposals.map(proposal => proposal.id)).size === 3 && proposals.every(proposal => !this.session.owned.includes(proposal.id)) && JSON.stringify(proposals.map(proposal => proposal.id)) !== this.consumedOfferKey;
       const scannedAt = new Date(this.now()).toISOString();
       if (complete) {
+        const changedOffers = JSON.stringify(this.offers.map(offer => offer.id)) !== JSON.stringify(proposals.map(offer => offer.id));
+        if (changedOffers || !this.offerToken) this.offerToken = createOfferToken();
         this.offers = proposals;
+        if (this.selectionEligible(current)) this.selectionObserver.arm({...this.selectionContext(), offerToken:this.offerToken, ids:proposals.map(offer => offer.id), capture:raw.selectionCapture});
+        else this.selectionObserver.invalidate();
         this.offerTime = this.now();
         delete this.ocr.code;
         delete this.ocr.diagnostics;
         Object.assign(this.ocr, {status:'recognized', message:'已识别三个候选；请核对后自行选择，确认已选海克斯后推荐会更新。', observedAt:scannedAt}, publicOcrDetails(raw));
-      } else if (!this.offers.length) {
+      } else {
+        this.selectionObserver.invalidate();
+        if (!this.offers.length) {
         delete this.ocr.code;
         delete this.ocr.diagnostics;
         Object.assign(this.ocr, {status, message:text(raw?.message) || '尚未确认到三个海克斯标题，可在主窗口手动选择。', observedAt:scannedAt}, publicOcrDetails(raw));
+        }
       }
       // Empty battle frames do not replace the most recent valid three-card frame.
       return {status:complete ? 'recognized' : status === 'recognized' ? 'unavailable' : status, message:text(raw?.message) || this.ocr.message, proposals:complete ? proposals : [], observedAt:scannedAt};
@@ -248,7 +297,8 @@ export class BackgroundSidebar {
     });
     const plan = buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], champions:[...this.champions.values()], itemsCatalog:this.itemsCatalog, now:this.now()});
     return {
-      version:'1.9.8', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      version:'1.10.0', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      gameEpoch:this.gameEpoch, selection:this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live)),
       mode:live.mode || {queueId:null, isMayhem:false, known:false},
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
       level:live.level ?? null, gameTime:live.gameTime ?? null, currentGold:live.currentGold ?? null, items:live.items || [],
@@ -271,6 +321,7 @@ export class BackgroundSidebar {
     const tick = async () => {
       try { await this.pollOnce(); }
       catch {
+        this.selectionObserver.invalidate();
         if (!this.offers.length) Object.assign(this.ocr, {status:'unavailable', code:'scan-loop-failed', message:'本次自动识别暂未完成，稍后会自动重试。', observedAt:new Date(this.now()).toISOString()});
       } finally {
         if (!this.stopped) { this.timer = setTimeout(tick, 1000); this.timer.unref?.(); }

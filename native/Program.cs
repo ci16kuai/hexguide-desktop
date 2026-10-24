@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.9.9.0")]
-[assembly: AssemblyFileVersion("1.9.9.0")]
-[assembly: AssemblyInformationalVersion("1.9.9")]
+[assembly: AssemblyVersion("1.10.0.0")]
+[assembly: AssemblyFileVersion("1.10.0.0")]
+[assembly: AssemblyInformationalVersion("1.10.0")]
 
 namespace HexGuide.Desktop
 {
@@ -160,6 +160,7 @@ namespace HexGuide.Desktop
         private readonly bool startHidden;
         private readonly SidebarVisibilityState sidebarVisibility;
         private readonly SidebarShortcut shortcut;
+        private readonly ScreenSelectionWatcher selectionWatcher;
         private bool desiredSidebarVisible;
         private bool explicitActivation, trayHintShown;
         private bool fetching, scanChanging, confirmChanging, appearanceRequested, appearanceOpening, layoutRequested, layoutOpening;
@@ -174,7 +175,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.9.9 · 我的这一局";
+            Text = "海克斯指南 1.10.0 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -238,6 +239,12 @@ namespace HexGuide.Desktop
             sidebar.DetailsRequested += delegate { ShowMain(); };
             sidebar.GameRequested += delegate { ReturnToGame(); };
             sidebar.OfferConfirmed += async delegate(string id) { await ConfirmOfferAsync(id); };
+            selectionWatcher = new ScreenSelectionWatcher();
+            selectionWatcher.StatusChanged += delegate(string message)
+            {
+                if (!closing && !confirmChanging) { sidebar.Notice = message; sidebar.Invalidate(); }
+            };
+            selectionWatcher.SelectionObserved += async delegate(Dictionary<string, object> evidence) { await ConfirmScreenSelectionAsync(evidence); };
             var menu = new ContextMenuStrip();
             menu.Items.Add("打开海克斯指南", null, delegate { ShowMain(); });
             menu.Items.Add("界面设置", null, async delegate { await OpenAppearanceAsync(); });
@@ -246,7 +253,7 @@ namespace HexGuide.Desktop
             menu.Items.Add("预览侧栏（不切换窗口）", null, delegate { sidebarVisibility.OpenPinned(); UpdateSidebarVisibility(); });
             scanMenu = new ToolStripMenuItem("后台识别海克斯");
             scanMenu.Enabled = false;
-            scanMenu.ToolTipText = "只在游戏位于前台时识别；结果仍需人工核对。";
+            scanMenu.ToolTipText = "只识别前台游戏；屏幕自动确认属于实验功能，证据不足时仍可手动确认。";
             scanMenu.Click += async delegate { await ToggleScanningAsync(); };
             menu.Items.Add(scanMenu);
             menu.Items.Add("返回游戏", null, delegate { ReturnToGame(); });
@@ -279,6 +286,7 @@ namespace HexGuide.Desktop
                 if (!closing && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; HideMain(); return; }
                 closing = true;
                 refreshTimer.Stop(); refreshTimer.Dispose();
+                selectionWatcher.Dispose();
                 shortcut.Dispose();
                 sidebar.Close();
                 tray.Visible = false; tray.Dispose();
@@ -527,17 +535,19 @@ namespace HexGuide.Desktop
                 var model = await RequestModelAsync("api/sidebar", null);
                 if (closing || IsDisposed || generation != sidebarRequestGeneration || confirmChanging || scanChanging) return;
                 sidebar.Model = model;
+                selectionWatcher.UpdateModel(model);
                 scanMenu.Checked = ModelValue.Boolean(ModelValue.Object(model, "ocr"), "enabled");
                 scanMenu.Enabled = !scanChanging;
                 sidebar.Invalidate();
             }
-            catch { if (!closing && generation == sidebarRequestGeneration && !confirmChanging && !scanChanging) { sidebar.Model = ModelValue.Failure("正在等待本地连接…"); sidebar.Invalidate(); } }
+            catch { if (!closing && generation == sidebarRequestGeneration && !confirmChanging && !scanChanging) { selectionWatcher.CancelForLocalAction(); sidebar.Model = ModelValue.Failure("正在等待本地连接…"); sidebar.Invalidate(); } }
             finally { fetching = false; }
         }
 
         private async Task ToggleScanningAsync()
         {
             if (closing || localOrigin == null || scanChanging) return;
+            selectionWatcher.CancelForLocalAction();
             sidebarRequestGeneration++;
             scanChanging = true; scanMenu.Enabled = false;
             try
@@ -545,6 +555,7 @@ namespace HexGuide.Desktop
                 var model = await RequestModelAsync("api/sidebar/ocr", "{\"enabled\":" + (scanMenu.Checked ? "false" : "true") + "}");
                 if (closing) return;
                 sidebar.Model = model;
+                selectionWatcher.UpdateModel(model);
                 scanMenu.Checked = ModelValue.Boolean(ModelValue.Object(model, "ocr"), "enabled");
                 sidebar.Invalidate();
             }
@@ -555,6 +566,7 @@ namespace HexGuide.Desktop
         private async Task ConfirmOfferAsync(string id)
         {
             if (closing || localOrigin == null || confirmChanging || string.IsNullOrEmpty(id)) return;
+            selectionWatcher.CancelForLocalAction();
             sidebarRequestGeneration++;
             confirmChanging = true;
             shortcut.ConfirmRequests++;
@@ -587,6 +599,7 @@ namespace HexGuide.Desktop
                     return;
                 }
                 sidebar.Model = confirmed;
+                selectionWatcher.UpdateModel(confirmed);
                 sidebar.ExpandBuild();
                 shortcut.ConfirmSuccesses++;
                 sidebar.Notice = "已记录本局选择，推荐已更新";
@@ -600,6 +613,47 @@ namespace HexGuide.Desktop
                 if (changed && !closing) nextFetch = DateTime.MinValue;
             }
             catch { if (!closing) sidebar.Notice = "记录未成功，请稍后再点一次"; }
+            finally { confirmChanging = false; if (!closing) sidebar.Invalidate(); }
+        }
+
+        private async Task ConfirmScreenSelectionAsync(Dictionary<string, object> evidence)
+        {
+            if (closing || localOrigin == null || confirmChanging || scanChanging) return;
+            long selectedIndex;
+            var ids = ModelValue.Array(evidence, "ids");
+            if (!ModelValue.Integer(evidence, "selectedIndex", out selectedIndex) || selectedIndex > 2 || ids.Count != 3) return;
+            string selectedId = ids[(int)selectedIndex] as string;
+            object requestedGameId;
+            if (string.IsNullOrEmpty(selectedId) || !ModelValue.GameId(evidence, out requestedGameId)) return;
+            sidebarRequestGeneration++;
+            confirmChanging = true;
+            try
+            {
+                // The authoritative server checks the exact offer token, ordered
+                // IDs, capture time, game epoch and revision before mutation.
+                string body = new JavaScriptSerializer().Serialize(evidence);
+                var confirmed = await RequestModelAsync("api/sidebar/selection", body);
+                if (closing) return;
+                if (!ModelValue.ConfirmsOffer(confirmed, selectedId, requestedGameId))
+                {
+                    sidebar.Notice = "屏幕自动确认（实验）：状态已变化，请手动核对";
+                    nextFetch = DateTime.MinValue;
+                    return;
+                }
+                sidebar.Model = confirmed;
+                selectionWatcher.UpdateModel(confirmed);
+                sidebar.ExpandBuild();
+                sidebar.Notice = "屏幕自动确认（实验）：已记录选择，推荐已更新";
+                nextFetch = DateTime.MinValue;
+            }
+            catch (WebException error)
+            {
+                var response = error.Response as HttpWebResponse;
+                if (response != null) response.Close();
+                if (!closing) sidebar.Notice = "屏幕自动确认（实验）：未记录本次选择，可手动确认";
+                nextFetch = DateTime.MinValue;
+            }
+            catch { if (!closing) sidebar.Notice = "屏幕自动确认（实验）：记录未完成，可手动确认"; }
             finally { confirmChanging = false; if (!closing) sidebar.Invalidate(); }
         }
 
@@ -1245,7 +1299,7 @@ namespace HexGuide.Desktop
         {
             ArrayList owned = ModelValue.Array(Model, "owned");
             Write(g, "本局已选  " + owned.Count, normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(25);
-            if (owned.Count == 0) { Write(g, "尚未记录；识别后点击图标确认", smallFont, muted, new Rectangle(x, y, width, S(38))); return; }
+            if (owned.Count == 0) { Write(g, "尚未记录；自动未确认时可点击图标确认", smallFont, muted, new Rectangle(x, y, width, S(38))); return; }
             int columns = OwnedIconColumns(width), index = 0, cell = S(39) + S(7);
             foreach (object item in owned)
             {
@@ -1258,7 +1312,7 @@ namespace HexGuide.Desktop
         {
             ArrayList offers = ModelValue.Array(Model, "offers");
             Write(g, "三选一参考", normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(27);
-            Write(g, "先在游戏选好，再点确认\n金框为优先推荐，角标为推荐顺序", smallFont, muted, new Rectangle(x, y, width, S(32))); y += S(34);
+            Write(g, "先在游戏内选择，未记录时再确认\n金框为优先推荐，角标为推荐顺序", smallFont, muted, new Rectangle(x, y, width, S(32))); y += S(34);
             if (offers.Count == 0)
             {
                 Write(g, RecognitionSummary(ModelValue.Object(Model, "ocr")), normalFont, muted, new Rectangle(x, y, width, S(30)));
@@ -1467,6 +1521,7 @@ namespace HexGuide.Desktop
                 int initialPlanChecks = ValidateInitialPlanFixtures(window, earlyLivePreviewPath);
                 int visibilityChecks = SidebarVisibilityState.ValidateFixtures();
                 int shortcutChecks = SidebarShortcut.ValidateFixtures();
+                int selectionChecks = ScreenSelectionWatcher.ValidateFixtures();
                 string iconPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-augment-icons.png");
                 int augmentIconChecks = ValidateAugmentIconFixtures(iconPreviewPath);
                 int defaultWidth = window.Width, defaultHeight = window.Height;
@@ -1475,7 +1530,7 @@ namespace HexGuide.Desktop
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks + selectionChecks }, { "selectionChecks", selectionChecks }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
             }
         }
         private static int ValidatePassiveActivationFixtures(SidebarWindow window)

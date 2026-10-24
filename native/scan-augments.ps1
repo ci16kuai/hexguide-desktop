@@ -12,9 +12,45 @@ $diagnostics = @{}
 $frameId = [Guid]::NewGuid().ToString('N')
 $scanClock = [Diagnostics.Stopwatch]::StartNew()
 $scanDeadlineMs = 10000
+$selectionCapture = $null
+$previousDpiContext = [IntPtr]::Zero
 
 function Write-Result([string]$Status, [string]$Message, [object[]]$Lines = @(), [string]$Text = '', [string]$Code = 'ok') {
-    [Console]::WriteLine((@{status=$Status; code=$Code; stage=$script:stage; diagnostics=$script:diagnostics; frameId=$script:frameId; message=$Message; text=$Text; lines=@($Lines)} | ConvertTo-Json -Compress -Depth 7))
+    $payload = @{status=$Status; code=$Code; stage=$script:stage; diagnostics=$script:diagnostics; frameId=$script:frameId; message=$Message; text=$Text; lines=@($Lines)}
+    if ($script:selectionCapture -and $Status -eq 'recognized') { $payload.selectionCapture = $script:selectionCapture }
+    [Console]::WriteLine(($payload | ConvertTo-Json -Compress -Depth 7))
+}
+
+# A small RGB thumbnail is a temporary visual baseline, not a screenshot file.
+# Keep this identical to ScreenSelectionWatcher.ReadSignature (8x8, row-major).
+function Get-SelectionRegions($Image, [int]$Width, [int]$Height) {
+    $viewportWidth = [Math]::Min($Width, $Height * 16.0 / 9.0)
+    $viewportLeft = ($Width - $viewportWidth) / 2.0
+    for ($column = 0; $column -lt 3; $column++) {
+        $left = [int][Math]::Floor($viewportLeft + (.21 + .20 * $column) * $viewportWidth)
+        $right = [int][Math]::Ceiling($viewportLeft + (.39 + .20 * $column) * $viewportWidth)
+        $top = [int][Math]::Floor($Height * .20)
+        $bottom = [int][Math]::Ceiling($Height * .70)
+        $sourceRectangle = New-Object System.Drawing.Rectangle($left, $top, ($right-$left), ($bottom-$top))
+        $regionBitmap = $Image.Clone($sourceRectangle, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $thumbnail = New-Object System.Drawing.Bitmap(8, 8, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb))
+        $resize = [System.Drawing.Graphics]::FromImage($thumbnail)
+        try {
+            $resize.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBilinear
+            $resize.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $resize.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+            $destination = New-Object System.Drawing.Rectangle(0, 0, 8, 8)
+            $resize.DrawImage($regionBitmap, $destination, [single]0, [single]0, [single]$regionBitmap.Width, [single]$regionBitmap.Height, [System.Drawing.GraphicsUnit]::Pixel)
+            $signature = New-Object 'System.Collections.Generic.List[int]'
+            for ($row = 0; $row -lt 8; $row++) {
+                for ($cell = 0; $cell -lt 8; $cell++) {
+                    $pixel = $thumbnail.GetPixel($cell, $row)
+                    $signature.Add([int]$pixel.R); $signature.Add([int]$pixel.G); $signature.Add([int]$pixel.B)
+                }
+            }
+            @{column=$column; x=$left; y=$top; width=$right-$left; height=$bottom-$top; signature=@($signature.ToArray())}
+        } finally { $resize.Dispose(); $thumbnail.Dispose(); $regionBitmap.Dispose() }
+    }
 }
 
 # OCR_REGION_HELPERS_BEGIN
@@ -146,6 +182,7 @@ public static class HexGuideGameWindow {
     [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
     [DllImport("user32.dll")] public static extern IntPtr GetThreadDpiAwarenessContext();
     [DllImport("user32.dll")] public static extern int GetAwarenessFromDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
 }
 '@
     $stage = 'foreground-check'
@@ -193,6 +230,9 @@ public static class HexGuideGameWindow {
     }
 
     $stage = 'window-bounds'
+    # Capture metadata and native mouse observations share physical pixels.
+    $previousDpiContext = [HexGuideGameWindow]::SetThreadDpiAwarenessContext([IntPtr](-4))
+    if ($previousDpiContext -eq [IntPtr]::Zero) { $previousDpiContext = [HexGuideGameWindow]::SetThreadDpiAwarenessContext([IntPtr](-3)) }
     $rect = New-Object HexGuideGameWindow+Rect
     $point = New-Object HexGuideGameWindow+Point
     if (-not [HexGuideGameWindow]::GetClientRect($window, [ref]$rect) -or -not [HexGuideGameWindow]::ClientToScreen($window, [ref]$point)) {
@@ -214,6 +254,7 @@ public static class HexGuideGameWindow {
         exit 0
     }
     $stage = 'capture'
+    $capturedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $bitmap = New-Object System.Drawing.Bitmap($width, $height)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     try {
@@ -223,6 +264,11 @@ public static class HexGuideGameWindow {
     if ([HexGuideGameWindow]::GetForegroundWindow() -ne $window) {
         Write-Result 'waiting' '前台窗口已切换，本次扫描已取消。' @() '' 'foreground-changed'
         exit 0
+    }
+    if ($previousDpiContext -ne [IntPtr]::Zero) {
+        $selectionCapture = @{capturedAt=$capturedAt; width=$width; height=$height; originX=$point.X; originY=$point.Y; windowHandle=$window.ToInt64().ToString([Globalization.CultureInfo]::InvariantCulture); regions=@(Get-SelectionRegions $bitmap $width $height)}
+        [void][HexGuideGameWindow]::SetThreadDpiAwarenessContext($previousDpiContext)
+        $previousDpiContext = [IntPtr]::Zero
     }
     $maxDimension = [Windows.Media.Ocr.OcrEngine]::MaxImageDimension
     $asTaskMethod = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
@@ -270,7 +316,7 @@ public static class HexGuideGameWindow {
     } elseif (-not $lines.Count) {
         Write-Result 'recognized' '未识别到文字。请在三选一界面重试；独占全屏时可尝试无边框窗口。'
     } else {
-        Write-Result 'recognized' '已在本机识别游戏窗口文字。匹配结果需要你确认，不能据此自动判断已选海克斯。' $lines (($lines | ForEach-Object {$_.text}) -join "`n")
+        Write-Result 'recognized' '文字匹配仅识别候选，实际选择另由屏幕证据核对。' $lines (($lines | ForEach-Object {$_.text}) -join "`n")
     }
 } catch {
     # Return stage/type only: exception messages can contain paths or OCR data and are deliberately omitted.
@@ -288,6 +334,7 @@ public static class HexGuideGameWindow {
     }
     Write-Result 'unavailable' $message @() '' ('ocr-' + $stage + '-failed')
 } finally {
+    if ($previousDpiContext -ne [IntPtr]::Zero) { try { [void][HexGuideGameWindow]::SetThreadDpiAwarenessContext($previousDpiContext) } catch {} }
     if ($bitmap) { $bitmap.Dispose() }
     # Images are held in memory only. DataDir is accepted for compatibility; no files are created.
 }

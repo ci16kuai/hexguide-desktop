@@ -258,13 +258,14 @@ test('sidebar and shared session endpoints retain Host, Origin, token, body limi
   const local = await createLocalServer({collector,sidebar,staticDirectory:directory,token:'b'.repeat(64)});
   t.after(() => local.close());
   const headers = {'X-Hexguide-Session':local.token,'Content-Type':'application/json'};
+  const guarded = value => { const current = sidebar.getSession(); return {...value,expectedRevision:current.revision,expectedGameEpoch:current.gameEpoch,expectedGameId:current.gameId}; };
   for (const endpoint of ['/api/session','/api/sidebar']) {
     assert.equal((await request(local.port,endpoint)).status,401);
     assert.equal((await request(local.port,endpoint,{headers:{...headers,Origin:'https://attacker.example'}})).status,403);
     assert.equal((await request(local.port,endpoint,{headers:{...headers,Host:'attacker.example'}})).status,403);
     assert.equal((await request(local.port,endpoint,{headers})).status,200);
   }
-  let response = await request(local.port,'/api/session',{headers,method:'POST',body:JSON.stringify({owned:[ids[0]],route:'tank'})});
+  let response = await request(local.port,'/api/session',{headers,method:'POST',body:JSON.stringify(guarded({owned:[ids[0]],route:'tank'}))});
   assert.equal(response.status,200);
   assert.deepEqual(JSON.parse(response.body).owned,[ids[0]]);
   assert.equal((await request(local.port,'/api/session',{headers,method:'POST',body:'{"owned":[],"route":"auto","secret":true}'})).status,400);
@@ -275,7 +276,7 @@ test('sidebar and shared session endpoints retain Host, Origin, token, body limi
   assert.equal(response.status,200);
   assert.equal(JSON.parse(response.body).ocr.enabled,true);
   assert.equal(captures,0,'enabling state alone does not execute capture in the HTTP handler');
-  await request(local.port,'/api/session',{headers,method:'POST',body:'{"owned":[],"route":"auto"}'});
+  await request(local.port,'/api/session',{headers,method:'POST',body:JSON.stringify(guarded({owned:[],route:'auto'}))});
   assert.equal((await request(local.port,'/api/ocr',{headers,method:'POST',body:'{}'})).status,200);
   assert.equal(captures,1);
   const model = JSON.parse((await request(local.port,'/api/sidebar',{headers})).body);
