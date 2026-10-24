@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.9.3.0")]
-[assembly: AssemblyFileVersion("1.9.3.0")]
-[assembly: AssemblyInformationalVersion("1.9.3")]
+[assembly: AssemblyVersion("1.9.4.0")]
+[assembly: AssemblyFileVersion("1.9.4.0")]
+[assembly: AssemblyInformationalVersion("1.9.4")]
 
 namespace HexGuide.Desktop
 {
@@ -150,7 +150,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.9.3 · 我的这一局";
+            Text = "海克斯指南 1.9.4 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -230,7 +230,8 @@ namespace HexGuide.Desktop
             menu.Items.Add("完全退出", null, delegate { closing = true; Close(); });
             tray = new NotifyIcon { Icon = Icon, Text = "海克斯指南 · 后台运行中", ContextMenuStrip = menu, Visible = true };
             tray.DoubleClick += delegate { ShowMain(); };
-            shortcut = new SidebarShortcut(delegate { if (!closing) ToggleSidebar(); });
+            shortcut = new SidebarShortcut(delegate { if (!closing) ToggleSidebar(); },
+                delegate { return !closing && GameWindow.IsShortcutForeground(IsHandleCreated ? Handle : IntPtr.Zero); });
             refreshTimer = new Timer { Interval = 400 };
             refreshTimer.Tick += async delegate
             {
@@ -353,7 +354,8 @@ namespace HexGuide.Desktop
         private void UpdateSidebarHint(bool visible)
         {
             string hint = "Alt + Shift + H：侧栏" + (visible ? "已显示" : "已收起");
-            if (!shortcut.Registered) hint += " · 备用检测（" + shortcut.RegistrationError + "）";
+            if (!shortcut.ContextAllowed) hint += " · 仅游戏 / 助手前台";
+            else if (!shortcut.Registered) hint += " · 备用检测（" + shortcut.RegistrationError + "）";
             if (shortcutStatus.Text != hint) shortcutStatus.Text = hint;
         }
 
@@ -703,6 +705,9 @@ namespace HexGuide.Desktop
         private int scrollOffset, contentHeight;
         private readonly List<string> paintedSections = new List<string>();
         private readonly Dictionary<Rectangle, string> offerButtons = new Dictionary<Rectangle, string>();
+        private readonly Dictionary<Rectangle, Dictionary<string, object>> augmentTargets = new Dictionary<Rectangle, Dictionary<string, object>>();
+        private readonly ToolTip augmentHint = new ToolTip { ShowAlways = true, InitialDelay = 450, ReshowDelay = 100, AutoPopDelay = 5000 };
+        private string activeAugmentHint = "";
         private readonly Dictionary<string, Image> buildIcons = new Dictionary<string, Image>();
         private readonly HashSet<string> requestedIcons = new HashSet<string>();
         private Rectangle buildToggle;
@@ -746,6 +751,7 @@ namespace HexGuide.Desktop
                 double observedTime;
                 if (currentOwned > 0 || ModelValue.Text(value, "championSource") == "live-client" && TryGameTime(value, out observedTime) && observedTime > 30) initialPlanHandled = true;
                 offerButtons.Clear();
+                ClearAugmentHint();
                 // A transient connection error must not reset the user's last saved layout.
                 if (ModelValue.Object(value, "appearance") != null) ApplyAppearance(SidebarAppearance.FromModel(value));
                 else Invalidate();
@@ -901,7 +907,7 @@ namespace HexGuide.Desktop
             contentHeight = 0;
             foreach (string section in DisplaySections()) contentHeight += SectionHeight(section);
             scrollOffset = Math.Max(0, Math.Min(scrollOffset, Math.Max(0, contentHeight - viewport.Height)));
-            offerButtons.Clear(); paintedSections.Clear();
+            offerButtons.Clear(); augmentTargets.Clear(); paintedSections.Clear();
             var previousClip = g.Save();
             g.SetClip(viewport);
             y -= scrollOffset;
@@ -934,18 +940,23 @@ namespace HexGuide.Desktop
         private int SectionHeight(string section)
         {
             if (section == "hero") return S(29) + S(39) + S(28);
-            if (section == "owned") return S(25) + S(46);
+            if (section == "owned")
+            {
+                int count = Math.Min(12, ModelValue.Array(Model, "owned").Count);
+                int columns = OwnedIconColumns(Math.Max(1, Width - 34));
+                return S(25) + (count == 0 ? S(38) : ((count + columns - 1) / columns) * (S(39) + S(7)) + S(5));
+            }
             if (section == "offers")
             {
                 int count = Math.Min(3, ModelValue.Array(Model, "offers").Count);
-                return S(27) + S(22) + (count == 0 ? S(59) : S(74) * count);
+                return S(27) + S(30) + (count == 0 ? S(59) : S(84) + count * S(35) + S(8));
             }
             if (!buildExpanded) return S(126);
             var plan = ModelValue.Object(Model, "plan");
             if (IsLoadingPreview) return S(197) + ((Math.Min(6, ModelValue.Array(plan, "buildItems").Count) + 1) / 2) * S(77)
-                + S(46) + Math.Min(6, ModelValue.Array(plan, "nextAugments").Count) * S(76) + S(22);
-            return S(151) + Math.Min(6, ModelValue.Array(plan, "buildItems").Count) * S(96)
-                + S(46) + Math.Min(6, ModelValue.Array(plan, "nextAugments").Count) * S(76) + S(22);
+                + S(46) + Math.Min(6, ModelValue.Array(plan, "nextAugments").Count) * S(56) + S(22);
+            return S(ModelValue.Array(Model, "owned").Count > 0 ? 163 : 151) + Math.Min(6, ModelValue.Array(plan, "buildItems").Count) * S(96)
+                + S(46) + Math.Min(6, ModelValue.Array(plan, "nextAugments").Count) * S(56) + S(22);
         }
         private void DrawSection(Graphics g, string section, int x, int y, int width)
         {
@@ -970,7 +981,13 @@ namespace HexGuide.Desktop
             }
             ArrayList owned = ModelValue.Array(Model, "owned");
             var selected = owned.Count > 0 ? owned[owned.Count - 1] as Dictionary<string, object> : null;
-            Write(g, loading ? "对方阵容 · 加载中" : selected == null ? "等待确认本局海克斯" : "最近确认 · " + ModelValue.Text(selected, "name"), normalFont, ForeColor, new Rectangle(x, y, width, S(23))); y += S(27);
+            if (!loading && selected != null)
+            {
+                DrawAugmentIcon(g, selected, new Rectangle(x, y + S(2), S(30), S(30)));
+                Write(g, "最近确认", normalFont, ForeColor, new Rectangle(x + S(40), y + S(5), Math.Max(1, width - S(40)), S(23)));
+                y += S(39);
+            }
+            else { Write(g, loading ? "对方阵容 · 加载中" : "等待确认本局海克斯", normalFont, ForeColor, new Rectangle(x, y, width, S(23))); y += S(27); }
             var enemy = ModelValue.Object(plan, "enemyContext");
             if (loading)
             {
@@ -987,7 +1004,7 @@ namespace HexGuide.Desktop
             }
             string enemySummary = ModelValue.Text(enemy, "summary");
             Write(g, loading ? "根据英雄与对方阵容准备，入场后自动更新。" : enemySummary.Length > 0 ? enemySummary : "等待读取敌方阵容与装备，暂按自身构筑提供选项。", smallFont, muted, new Rectangle(x, y, width, S(loading ? 30 : 57))); y += S(loading ? 35 : 62);
-            Write(g, loading ? "开局出装预设" : "装备选项 · 随可见阵容与装备更新", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(33);
+            Write(g, loading ? "开局出装预设" : "本局装备选择", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(33);
             ArrayList equipment = ModelValue.Array(plan, "buildItems");
             int index = 0;
             foreach (object entry in equipment)
@@ -1010,17 +1027,29 @@ namespace HexGuide.Desktop
                 y += S(96);
             }
             Write(g, loading ? "开局关注的海克斯" : "后续遇到可考虑", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(25);
-            Write(g, "机制适配参考，不代表下一轮一定出现", smallFont, muted, new Rectangle(x, y, width, S(18))); y += S(21);
+            Write(g, "机制方向，以游戏实际选项为准", smallFont, muted, new Rectangle(x, y, width, S(18))); y += S(21);
             index = 0;
             foreach (object entry in ModelValue.Array(plan, "nextAugments"))
             {
                 if (index++ >= 6) break;
                 var augment = entry as Dictionary<string, object>;
-                DrawBuildIcon(g, ModelValue.Text(augment, "icon"), new Rectangle(x, y + S(2), S(26), S(26)));
-                Write(g, ModelValue.Text(augment, "name"), normalFont, ForeColor, new Rectangle(x + S(35), y, Math.Max(1, width - S(35)), S(23)));
-                Write(g, ModelValue.Text(augment, "reason"), smallFont, muted, new Rectangle(x + S(35), y + S(26), Math.Max(1, width - S(35)), S(41)));
-                y += S(76);
+                DrawAugmentIcon(g, augment, new Rectangle(x, y + S(2), S(32), S(32)));
+                Write(g, ModelValue.Text(augment, "reason"), smallFont, muted, new Rectangle(x + S(43), y + S(2), Math.Max(1, width - S(43)), S(43)));
+                y += S(56);
             }
+        }
+        private int OwnedIconColumns(int width) { return Math.Max(1, (width + S(7)) / (S(39) + S(7))); }
+        private void DrawAugmentIcon(Graphics g, Dictionary<string, object> augment, Rectangle rectangle)
+        {
+            DrawBuildIcon(g, ModelValue.Text(augment, "icon"), rectangle);
+            Rectangle visible = Rectangle.Intersect(viewport, rectangle);
+            if (visible.Width > 0 && visible.Height > 0) augmentTargets[visible] = augment;
+        }
+        private void ClearAugmentHint()
+        {
+            augmentTargets.Clear();
+            if (activeAugmentHint.Length == 0) return;
+            activeAugmentHint = ""; augmentHint.Hide(this); augmentHint.SetToolTip(this, "");
         }
         private void DrawBuildIcon(Graphics g, string url, Rectangle rectangle)
         {
@@ -1077,15 +1106,20 @@ namespace HexGuide.Desktop
         {
             ArrayList owned = ModelValue.Array(Model, "owned");
             Write(g, "本局已选  " + owned.Count, normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(25);
-            var names = new List<string>();
-            foreach (object item in owned) { string name = ModelValue.Text(item as Dictionary<string, object>, "name"); if (name.Length > 0) names.Add(name); }
-            Write(g, names.Count > 0 ? string.Join(" · ", names.ToArray()) : "尚未记录；识别后可直接在这里点选确认", smallFont, muted, new Rectangle(x, y, width, S(38)));
+            if (owned.Count == 0) { Write(g, "尚未记录；识别后点击图标确认", smallFont, muted, new Rectangle(x, y, width, S(38))); return; }
+            int columns = OwnedIconColumns(width), index = 0, cell = S(39) + S(7);
+            foreach (object item in owned)
+            {
+                if (index >= 12) break;
+                DrawAugmentIcon(g, item as Dictionary<string, object>, new Rectangle(x + (index % columns) * cell, y + (index / columns) * cell, S(39), S(39)));
+                index++;
+            }
         }
         private void DrawOffers(Graphics g, int x, int y, int width)
         {
             ArrayList offers = ModelValue.Array(Model, "offers");
             Write(g, "三选一参考", normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(27);
-            Write(g, "核对选项，游戏选好后点「我选了这个」", smallFont, muted, new Rectangle(x, y, width, S(18))); y += S(22);
+            Write(g, "游戏选好后点图标确认，角标为优先级", smallFont, muted, new Rectangle(x, y, width, S(28))); y += S(30);
             if (offers.Count == 0)
             {
                 Write(g, RecognitionSummary(ModelValue.Object(Model, "ocr")), normalFont, muted, new Rectangle(x, y, width, S(30)));
@@ -1093,21 +1127,35 @@ namespace HexGuide.Desktop
             }
             else
             {
-                int index = 0;
+                int index = 0, gap = S(6), cellWidth = Math.Max(1, (width - gap * 2) / 3), cardHeight = S(78);
                 foreach (object item in offers)
                 {
-                    if (index++ >= 3) break;
+                    if (index >= 3) break;
                     var offer = item as Dictionary<string, object>;
-                    using (var brush = new SolidBrush(Color.FromArgb(23, 36, 48))) g.FillRectangle(brush, new Rectangle(x, y, width, S(65)));
+                    int cardX = x + index * (cellWidth + gap);
+                    Rectangle card = new Rectangle(cardX, y, cellWidth, cardHeight);
+                    using (var brush = new SolidBrush(Color.FromArgb(23, 36, 48))) g.FillRectangle(brush, card);
                     string rank = ModelValue.Text(offer, "rank");
-                    int confirmWidth = S(80);
-                    Write(g, (rank.Length > 0 ? rank + ". " : "") + ModelValue.Text(offer, "name"), normalFont, ForeColor, new Rectangle(x + 9, y + S(6), Math.Max(1, width - confirmWidth - 26), S(23)));
-                    Rectangle confirm = new Rectangle(x + width - confirmWidth - 8, y + S(5), confirmWidth, S(23));
+                    using (var pen = new Pen(rank == "1" ? Color.FromArgb(216, 181, 101) : Color.FromArgb(55, 77, 97))) g.DrawRectangle(pen, card.Left, card.Top, Math.Max(1, card.Width - 1), Math.Max(1, card.Height - 1));
+                    int iconSize = Math.Min(S(44), Math.Max(1, cellWidth - S(12)));
+                    Rectangle icon = new Rectangle(cardX + (cellWidth - iconSize) / 2, y + S(6), iconSize, iconSize);
+                    DrawAugmentIcon(g, offer, icon);
+                    Write(g, rank, smallFont, accent, new Rectangle(cardX + S(3), y + S(2), S(16), S(18)));
+                    PaintButton(g, new Rectangle(cardX + S(3), y + S(54), Math.Max(1, cellWidth - S(6)), S(21)), "确认");
                     string offerId = ModelValue.Text(offer, "id");
-                    if (viewport.Contains(confirm)) { PaintButton(g, confirm, "我选了这个"); if (offerId.Length > 0) offerButtons[confirm] = offerId; }
-                    string reason = ModelValue.Text(offer, "reason");
-                    Write(g, reason.Length > 0 ? reason : "请核对识别名称", smallFont, muted, new Rectangle(x + 9, y + S(30), width - 18, S(29)));
-                    y += S(74);
+                    Rectangle visibleCard = Rectangle.Intersect(viewport, card);
+                    if (visibleCard.Width > 0 && visibleCard.Height > 0 && offerId.Length > 0) offerButtons[visibleCard] = offerId;
+                    index++;
+                }
+                y += S(84); index = 0;
+                string[] slots = { "左", "中", "右" };
+                foreach (object item in offers)
+                {
+                    if (index >= 3) break;
+                    string reason = ModelValue.Text(item as Dictionary<string, object>, "reason");
+                    Write(g, slots[index], smallFont, accent, new Rectangle(x, y, S(22), S(30)));
+                    Write(g, reason.Length > 0 ? reason : "核对游戏内图标后确认", smallFont, muted, new Rectangle(x + S(23), y, Math.Max(1, width - S(23)), S(31)));
+                    y += S(35); index++;
                 }
             }
         }
@@ -1163,8 +1211,23 @@ namespace HexGuide.Desktop
                 else MoveManually(Cursor.Position);
                 return;
             }
+            string hint = "";
+            foreach (var target in augmentTargets)
+            {
+                if (!target.Key.Contains(e.Location)) continue;
+                string name = ModelValue.Text(target.Value, "name"), reason = ModelValue.Text(target.Value, "reason");
+                if (reason.Length == 0) reason = ModelValue.Text(target.Value, "summary");
+                hint = name + (reason.Length > 0 ? "\n" + reason : "");
+                break;
+            }
+            if (hint != activeAugmentHint) { activeAugmentHint = hint; augmentHint.SetToolTip(this, hint); }
             Cursor = (GetAsyncKeyState(0x11) & 0x8000) != 0 ? Cursors.SizeAll : Cursors.Default;
             base.OnMouseMove(e);
+        }
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            activeAugmentHint = ""; augmentHint.Hide(this); augmentHint.SetToolTip(this, "");
+            base.OnMouseLeave(e);
         }
         protected override void OnMouseCaptureChanged(EventArgs e)
         {
@@ -1202,11 +1265,12 @@ namespace HexGuide.Desktop
         {
             scrollOffset = Math.Max(0, Math.Min(value, Math.Max(0, contentHeight - viewport.Height)));
             offerButtons.Clear();
+            ClearAugmentHint();
             Invalidate();
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); foreach (Image image in buildIcons.Values) image.Dispose(); }
+            if (disposing) { augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); foreach (Image image in buildIcons.Values) image.Dispose(); }
             base.Dispose(disposing);
         }
         internal static string RunSelfTest(string previewPath)
@@ -1260,13 +1324,125 @@ namespace HexGuide.Desktop
                 int initialPlanChecks = ValidateInitialPlanFixtures(window, earlyLivePreviewPath);
                 int visibilityChecks = SidebarVisibilityState.ValidateFixtures();
                 int shortcutChecks = SidebarShortcut.ValidateFixtures();
+                string iconPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-augment-icons.png");
+                int augmentIconChecks = ValidateAugmentIconFixtures(iconPreviewPath);
                 int defaultWidth = window.Width, defaultHeight = window.Height;
                 int appearanceChecks = ValidateAppearanceFixtures(window);
                 string placementPreviewPath;
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks + initialPlanChecks + shortcutChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
+            }
+        }
+        private static int ValidateAugmentIconFixtures(string previewPath)
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool condition, string message) { Require(condition, message); checks++; };
+            using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false;
+                var owned = new ArrayList(); var offers = new ArrayList(); var next = new ArrayList();
+                var colors = new Dictionary<string, Color>();
+                for (int index = 0; index < 21; index++)
+                {
+                    string id = "icon-fixture-" + index, icon = "fixture://" + id;
+                    Color color = Color.FromArgb(45 + index * 7, 200 - index * 5, 92 + index * 6);
+                    var bitmap = new Bitmap(48, 48);
+                    using (var graphics = Graphics.FromImage(bitmap)) graphics.Clear(color);
+                    window.buildIcons[icon] = bitmap; colors[id] = color;
+                    var augment = new Dictionary<string, object> { { "id", id }, { "icon", icon }, { "name", "示例海克斯名称 " + index }, { "reason", "保留该海克斯的机制与推荐解释。" } };
+                    if (index < 12) owned.Add(augment);
+                    else if (index < 15) { augment["rank"] = index == 12 ? 2 : index == 13 ? 1 : 3; offers.Add(augment); }
+                    else next.Add(augment);
+                }
+                var fixture = new Dictionary<string, object> {
+                    { "champion", new Dictionary<string, object> { { "id", "Ahri" }, { "name", "隔离示例英雄" } } },
+                    { "owned", owned }, { "offers", offers }, { "plan", new Dictionary<string, object> {
+                        { "title", "隔离图标布局示例" }, { "summary", "以下为示例图标，没有连接真实对局。" },
+                        { "buildItems", new object[0] }, { "nextAugments", next }
+                    } }
+                };
+                window.ApplyAppearance(new SidebarAppearance { Scale = 130, Width = 280, Sections = new string[] { "offers", "owned", "plan", "hero" } });
+                window.Place(new Rectangle(0, 0, 1000, 900));
+                window.Model = fixture; window.Notice = "离屏示例图标 · 未连接真实对局";
+                using (var before = RenderFixture(window))
+                {
+                    before.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png);
+                    check(window.Width == 280 && window.appearance.Scale == 130, "Icon fixture did not exercise narrow width with enlarged text.");
+                    check(window.offerButtons.Count == 3, "Three icon cards did not expose three confirmation targets.");
+                    var targets = new List<KeyValuePair<Rectangle, string>>(window.offerButtons);
+                    targets.Sort(delegate(KeyValuePair<Rectangle, string> first, KeyValuePair<Rectangle, string> second) { return first.Key.Left.CompareTo(second.Key.Left); });
+                    string selected = "";
+                    Action<string> confirm = delegate(string id) { selected = id; };
+                    window.OfferConfirmed += confirm;
+                    try
+                    {
+                        for (int index = 0; index < targets.Count; index++)
+                        {
+                            check(targets[index].Value == "icon-fixture-" + (12 + index), "Recommendation rank reordered the game's icon positions.");
+                            Rectangle target = targets[index].Key;
+                            window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, target.Left + target.Width / 2, target.Top + target.Height / 2, 0));
+                            check(selected == targets[index].Value, "An icon confirmation selected a different augment ID.");
+                        }
+                    }
+                    finally { window.OfferConfirmed -= confirm; }
+                    Rectangle fixtureViewport = window.viewport;
+                    foreach (var target in window.augmentTargets)
+                    {
+                        Rectangle area = target.Key;
+                        check(area.Left >= fixtureViewport.Left && area.Right <= fixtureViewport.Right, "An augment icon overflowed the narrow viewport.");
+                        string id = ModelValue.Text(target.Value, "id");
+                        check(before.GetPixel(area.Left + area.Width / 2, area.Top + area.Height / 2).ToArgb() == colors[id].ToArgb(), "Augment icon art did not match its identity.");
+                    }
+                    RenameFixtureAugments(owned, offers, next);
+                    window.Model = fixture;
+                    using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Owned or offered augment names were still drawn by default.");
+                }
+                window.ExpandBuild();
+                using (var before = RenderFixture(window))
+                {
+                    string expanded = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-expanded.png");
+                    before.Save(expanded, System.Drawing.Imaging.ImageFormat.Png);
+                    RenameFixtureAugments(owned, offers, next); window.Model = fixture;
+                    using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Recently selected or future augment names were still drawn by default.");
+                }
+                window.ScrollTo(window.contentHeight);
+                check(window.offerButtons.Count == 0 && window.augmentTargets.Count == 0, "Scrolling kept stale icon hit targets before repaint.");
+                using (var before = RenderFixture(window))
+                {
+                    RenameFixtureAugments(owned, offers, next); window.Model = fixture;
+                    using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Scrolled augment labels became visible.");
+                    Rectangle scrolledViewport = window.viewport;
+                    foreach (var target in window.offerButtons) check(scrolledViewport.Contains(target.Key), "Scrolled confirmation targets escaped the visible viewport.");
+                }
+                check(!window.Visible && window.ShowWithoutActivation && window.activeAugmentHint.Length == 0, "Icon fixtures displayed or activated a real window or tooltip.");
+            }
+            return checks;
+        }
+        private static Bitmap RenderFixture(SidebarWindow window)
+        {
+            var bitmap = new Bitmap(window.Width, window.Height);
+            window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+            return bitmap;
+        }
+        private static bool EqualFixturePixels(Bitmap first, Bitmap second)
+        {
+            using (var left = new MemoryStream()) using (var right = new MemoryStream())
+            {
+                first.Save(left, System.Drawing.Imaging.ImageFormat.Png); second.Save(right, System.Drawing.Imaging.ImageFormat.Png);
+                byte[] a = left.ToArray(), b = right.ToArray();
+                if (a.Length != b.Length) return false;
+                for (int index = 0; index < a.Length; index++) if (a[index] != b[index]) return false;
+                return true;
+            }
+        }
+        private static void RenameFixtureAugments(params ArrayList[] groups)
+        {
+            foreach (ArrayList group in groups) foreach (object entry in group)
+            {
+                var augment = entry as Dictionary<string, object>;
+                augment["name"] = ModelValue.Text(augment, "name") + " 名称变更不应改变默认图像";
             }
         }
         private static int ValidateInitialPlanFixtures(SidebarWindow window, string earlyLivePreviewPath)
@@ -1663,6 +1839,15 @@ namespace HexGuide.Desktop
         }
         internal static IntPtr ForegroundGame() { IntPtr window = GetForegroundWindow(); return IsVerifiedGame(window) ? window : IntPtr.Zero; }
         internal static bool IsGameForeground() { return ForegroundGame() != IntPtr.Zero; }
+        internal static bool IsShortcutForeground(IntPtr mainWindow)
+        {
+            IntPtr foreground = GetForegroundWindow();
+            return IsShortcutWindow(foreground, mainWindow, IsVerifiedGame(foreground));
+        }
+        internal static bool IsShortcutWindow(IntPtr foreground, IntPtr mainWindow, bool verifiedGame)
+        {
+            return foreground != IntPtr.Zero && (verifiedGame || (mainWindow != IntPtr.Zero && foreground == mainWindow));
+        }
         internal static bool IsVerifiedGame(IntPtr window)
         {
             if (window == IntPtr.Zero || !IsWindow(window)) return false;
@@ -1718,7 +1903,15 @@ namespace HexGuide.Desktop
                 && !IsTrustedGameIdentity("League of Legends", null, "League of Legends")
                 && !IsTrustedGameIdentity("Other", null, "League of Legends (TM) Client");
             if (!passed) throw new InvalidOperationException("Game-window identity fixtures failed.");
-            return 7;
+            IntPtr main = new IntPtr(10), game = new IntPtr(20), other = new IntPtr(30);
+            bool scopePassed = IsShortcutWindow(main, main, false)
+                && IsShortcutWindow(game, main, true)
+                && !IsShortcutWindow(other, main, false)
+                && !IsShortcutWindow(IntPtr.Zero, main, false)
+                && !IsShortcutWindow(IntPtr.Zero, IntPtr.Zero, true)
+                && !IsShortcutWindow(other, IntPtr.Zero, false);
+            if (!scopePassed) throw new InvalidOperationException("Shortcut foreground scope self-test failed.");
+            return 13;
         }
         internal static IntPtr FindGame(IntPtr previous)
         {

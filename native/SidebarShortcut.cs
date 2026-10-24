@@ -17,6 +17,9 @@ namespace HexGuide.Desktop
     {
         private bool held, accepted;
         private int acceptedAt;
+        private bool hasScopeWatermark;
+        private int scopeSince;
+        internal void BlockUntilRelease(int now) { held = true; hasScopeWatermark = true; scopeSince = now; }
         internal bool Poll(bool alt, bool shift, bool h, int now)
         {
             if (!h) held = false;
@@ -25,7 +28,8 @@ namespace HexGuide.Desktop
         }
         internal bool Message(int messageTime, int now)
         {
-            if (held || (accepted && (unchecked(messageTime - acceptedAt) <= 0 || CoolingDown(now)))) return false;
+            if (held || (hasScopeWatermark && unchecked(messageTime - scopeSince) <= 0)
+                || (accepted && (unchecked(messageTime - acceptedAt) <= 0 || CoolingDown(now)))) return false;
             Accept(now); return true;
         }
         private bool CoolingDown(int now) { return accepted && unchecked(now - acceptedAt) < 120; }
@@ -63,28 +67,31 @@ namespace HexGuide.Desktop
         internal const int Id = 0x4847;
         private readonly IShortcutPlatform platform;
         private readonly Action toggle;
+        private readonly Func<bool> allowedContext;
         private readonly ShortcutPressGate gate = new ShortcutPressGate();
         private readonly System.Windows.Forms.Timer timer;
-        private bool disposed;
+        private bool disposed, contextKnown;
         private int writing;
         private DateTime nextWrite = DateTime.MinValue;
         internal bool Registered { get; private set; }
+        internal bool ContextAllowed { get; private set; }
         internal int RegistrationError { get; private set; }
+        internal long RegistrationAttempts, BlockedMessageCount;
         internal long ReceivedCount, MessageToggleCount, FallbackToggleCount, UiPulseCount, ConfirmRequests, ConfirmSuccesses;
         internal DateTime LastReceivedAt, LastToggleAt, LastUiPulseAt;
 
-        internal SidebarShortcut(Action toggle) : this(toggle, new WindowsShortcutPlatform(), true) { }
+        internal SidebarShortcut(Action toggle, Func<bool> allowedContext) : this(toggle, allowedContext, new WindowsShortcutPlatform(), true) { }
         internal SidebarShortcut(Action toggle, IShortcutPlatform platform, bool startPolling)
+            : this(toggle, delegate { return true; }, platform, startPolling) { }
+        internal SidebarShortcut(Action toggle, Func<bool> allowedContext, IShortcutPlatform platform, bool startPolling)
         {
-            this.toggle = toggle; this.platform = platform;
+            this.toggle = toggle; this.allowedContext = allowedContext; this.platform = platform;
             try
             {
                 CreateHandle(new CreateParams { Parent = new IntPtr(-3), Caption = "HexGuide.SidebarShortcut" });
-                Registered = platform.Register(Handle);
-                // Capture this before any other platform call can replace it.
-                RegistrationError = Registered ? 0 : platform.LastError;
             }
             catch (Win32Exception error) { RegistrationError = error.NativeErrorCode; }
+            RefreshContext();
             timer = new System.Windows.Forms.Timer { Interval = 40 };
             timer.Tick += delegate { Poll(); };
             if (startPolling) timer.Start();
@@ -92,7 +99,7 @@ namespace HexGuide.Desktop
 
         internal void Poll()
         {
-            if (disposed) return;
+            if (disposed || !RefreshContext()) return;
             // Only the three keys in the advertised shortcut are sampled. The
             // low "pressed since last call" bit is intentionally never used.
             bool h = platform.IsDown(0x48);
@@ -100,28 +107,55 @@ namespace HexGuide.Desktop
             bool shift = h && platform.IsDown(0x10);
             if (gate.Poll(alt, shift, h, platform.TickCount))
             {
-                FallbackToggleCount++; Dispatch();
+                if (Dispatch()) FallbackToggleCount++;
             }
         }
         internal bool Receive(int message, int id, int messageTime)
         {
             if (disposed || message != 0x0312 || id != Id) return false;
             ReceivedCount++; LastReceivedAt = DateTime.UtcNow;
-            if (gate.Message(messageTime, platform.TickCount)) { MessageToggleCount++; Dispatch(); }
+            if (!RefreshContext()) { BlockedMessageCount++; return true; }
+            if (gate.Message(messageTime, platform.TickCount) && Dispatch()) MessageToggleCount++;
             return true;
         }
-        private void Dispatch() { LastToggleAt = DateTime.UtcNow; toggle(); }
+        internal bool RefreshContext()
+        {
+            if (disposed) return false;
+            bool allowed = allowedContext();
+            if (contextKnown && allowed == ContextAllowed) return allowed;
+            contextKnown = true; ContextAllowed = allowed;
+            // Do not interpret keys held in another app as a new press when
+            // returning. A queued message from an earlier context is stale too.
+            gate.BlockUntilRelease(platform.TickCount);
+            if (!allowed)
+            {
+                if (Registered) { platform.Unregister(Handle); Registered = false; }
+            }
+            else if (Handle != IntPtr.Zero)
+            {
+                RegistrationAttempts++;
+                Registered = platform.Register(Handle);
+                RegistrationError = Registered ? 0 : platform.LastError;
+            }
+            return allowed;
+        }
+        private bool Dispatch()
+        {
+            if (!RefreshContext()) return false;
+            LastToggleAt = DateTime.UtcNow; toggle(); return true;
+        }
         protected override void WndProc(ref Message message)
         {
-            if (message.Msg == 0x0312 && Receive(message.Msg, message.WParam.ToInt32(), platform.MessageTime)) return;
+            if (message.Msg == 0x0312 && message.WParam == new IntPtr(Id) && Receive(message.Msg, Id, platform.MessageTime)) return;
             base.WndProc(ref message);
         }
 
         internal Dictionary<string, object> Snapshot(bool enabled, bool pinned, bool desired, bool actual)
         {
             return new Dictionary<string, object> {
-                { "schemaVersion", 1 }, { "appVersion", Application.ProductVersion }, { "updatedAtUtc", Stamp(DateTime.UtcNow) },
+                { "schemaVersion", 2 }, { "appVersion", Application.ProductVersion }, { "updatedAtUtc", Stamp(DateTime.UtcNow) },
                 { "registered", Registered }, { "registrationErrorCode", RegistrationError },
+                { "scopeAllowed", ContextAllowed }, { "registrationAttempts", RegistrationAttempts }, { "blockedMessageCount", BlockedMessageCount },
                 { "receivedCount", ReceivedCount }, { "lastReceivedAtUtc", Stamp(LastReceivedAt) },
                 { "messageToggleCount", MessageToggleCount }, { "fallbackToggleCount", FallbackToggleCount },
                 { "lastToggleAtUtc", Stamp(LastToggleAt) }, { "uiPulseCount", UiPulseCount }, { "lastUiPulseAtUtc", Stamp(LastUiPulseAt) },
@@ -169,11 +203,12 @@ namespace HexGuide.Desktop
         private sealed class FixturePlatform : IShortcutPlatform
         {
             internal bool RegisterResult = true, Alt, Shift, H;
-            internal int Now = 1000, Registers, Unregisters;
+            internal int Now = 1000, Registers, Unregisters, KeyReads;
             public bool Register(IntPtr window) { Registers++; return RegisterResult; }
             public bool Unregister(IntPtr window) { Unregisters++; return true; }
             public bool IsDown(int key)
             {
+                KeyReads++;
                 if (key == 0x48) return H;
                 if (key == 0x12) return Alt;
                 if (key == 0x10) return Shift;
@@ -195,6 +230,7 @@ namespace HexGuide.Desktop
             var platform = new FixturePlatform(); int toggles = 0;
             using (var receiver = new SidebarShortcut(delegate { toggles++; }, platform, false))
             {
+                receiver.Poll(); // Observe the initially released H key.
                 IntPtr handle = receiver.Handle;
                 IntPtr found = IntPtr.Zero;
                 for (int i = 0; i < 1000; i++)
@@ -238,16 +274,17 @@ namespace HexGuide.Desktop
                 check(toggles == 4 && receiver.Handle == handle && receiver.Registered && platform.Registers == 1, "Confirmation state broke the independent shortcut.");
                 var snapshot = receiver.Snapshot(true, true, true, true);
                 string json = new JavaScriptSerializer().Serialize(snapshot);
-                check(snapshot.Count == 18 && json.Length < 2048 && !json.Contains("token") && !json.Contains("champion") && !json.Contains("gameId"), "Shortcut diagnostics exceeded their fixed schema.");
+                check(snapshot.Count == 21 && json.Length < 2048 && !json.Contains("token") && !json.Contains("champion") && !json.Contains("gameId"), "Shortcut diagnostics exceeded their fixed schema.");
                 receiver.Dispose(); receiver.Dispose();
                 check(platform.Unregisters == 1 && receiver.Handle == IntPtr.Zero && !receiver.Registered, "Shortcut disposal did not unregister exactly once.");
                 receiver.Poll(); receiver.Receive(0x0312, Id, platform.Now + 1000);
                 check(toggles == 4, "A disposed shortcut dispatched input.");
             }
-            var unavailable = new FixturePlatform { RegisterResult = false, Alt = true, Shift = true, H = true };
+            var unavailable = new FixturePlatform { RegisterResult = false, Alt = true, Shift = true };
             using (var receiver = new SidebarShortcut(delegate { toggles++; }, unavailable, false))
             {
                 check(!receiver.Registered && receiver.RegistrationError == 1409, "Registration failure lost its native error code.");
+                receiver.Poll(); unavailable.H = true; unavailable.Now += 200;
                 receiver.Poll(); check(toggles == 5, "Registration failure disabled the fixed-chord fallback.");
             }
             check(unavailable.Unregisters == 0, "Failed registration unregistered another owner.");
@@ -256,6 +293,35 @@ namespace HexGuide.Desktop
             wrap.Poll(false, false, false, int.MaxValue - 10);
             check(wrap.Message(int.MinValue + 150, int.MinValue + 150), "Clock wrap disabled the next shortcut.");
             check(!wrap.Message(int.MaxValue - 60, int.MinValue + 400), "Clock wrap accepted a stale message.");
+            bool allowed = false;
+            var scoped = new FixturePlatform { Alt = true, Shift = true, H = true };
+            int scopedToggles = 0;
+            using (var receiver = new SidebarShortcut(delegate { scopedToggles++; }, delegate { return allowed; }, scoped, false))
+            {
+                receiver.Poll();
+                check(!receiver.Registered && scoped.Registers == 0 && scoped.KeyReads == 0, "Other apps must not register or sample the shortcut.");
+                receiver.Receive(0x0312, Id, scoped.Now);
+                check(scopedToggles == 0 && receiver.BlockedMessageCount == 1, "Other-app messages must not toggle the sidebar.");
+                allowed = true; scoped.Now += 200; receiver.Poll();
+                check(receiver.Registered && scoped.Registers == 1 && scopedToggles == 0, "Entering an allowed window with held keys triggered the sidebar.");
+                scoped.H = false; receiver.Poll(); scoped.Now += 200;
+                receiver.Receive(0x0312, Id, 1000);
+                check(scopedToggles == 0, "A queued message from outside the allowed context was accepted.");
+                scoped.H = true; receiver.Poll();
+                check(scopedToggles == 1, "A fresh shortcut in an allowed window was ignored.");
+                allowed = false; scoped.Now += 200;
+                receiver.Receive(0x0312, Id, scoped.Now);
+                int reads = scoped.KeyReads; receiver.Poll();
+                check(scopedToggles == 1 && !receiver.Registered && scoped.Unregisters == 1 && scoped.KeyReads == reads,
+                    "Switching to another app did not immediately gate messages, release registration and stop key sampling.");
+                allowed = true; scoped.Now += 200; receiver.Poll();
+                check(scopedToggles == 1 && scoped.Registers == 2, "Returning with H held caused an accidental toggle.");
+                scoped.H = false; receiver.Poll(); scoped.Now += 200;
+                scoped.H = true; receiver.Receive(0x0312, Id, scoped.Now); receiver.Poll();
+                check(scopedToggles == 2, "A new message-first press after returning did not toggle exactly once.");
+                receiver.Dispose();
+                check(scoped.Unregisters == 2, "Disposal after a scope change unregistered an incorrect number of times.");
+            }
             return checks;
         }
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string caption);
