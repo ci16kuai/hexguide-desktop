@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {matchOcrProposals} from '../server/ocr.mjs';
+import {matchOcrProposals,createOcrScanner} from '../server/ocr.mjs';
 
 const data = JSON.parse(await readFile(new URL('../dist/data.json', import.meta.url), 'utf8'));
 const augments = data.augments;
@@ -224,5 +224,27 @@ test('native failures retain only fixed codes, stages and bounded numeric diagno
   assert.equal(arbitrary.code,'ocr-unavailable');
   assert.equal(arbitrary.stage,'native');
   assert.deepEqual(arbitrary.diagnostics,{});
+});
+
+test('offline scanner wrapper failures expose fixed causes without exception or output contents',async()=>{
+  const scan=executeScript=>createOcrScanner({applicationDirectory:'H:/fixture',platform:'win32',augments,executeScript});
+  for(const [expected,executeScript] of [
+    ['scan-execution-failed',async()=>{throw Error('Private Player Name C:/private credentials');}],
+    ['scan-output-invalid',async()=>({stdout:'Private Player Name C:/private credentials'})],
+    ['scan-output-invalid',async()=>({stdout:'[]'})],
+    ['scan-output-invalid',async()=>({stdout:undefined})],
+    ['scan-output-too-large',async()=>({stdout:'x'.repeat(1024*1024+1)})],
+  ]){
+    const result=await scan(executeScript)();
+    assert.equal(result.code,expected);assert.equal(result.selectionMetadataStatus,'title-incomplete');
+    assert.equal(result.status,'unavailable');assert.deepEqual(result.proposals,[]);
+    assert.doesNotMatch(JSON.stringify(result),/Private|credentials|C:\/private/);
+  }
+  assert.equal((await createOcrScanner({platform:'other'})()).code,'scan-platform-unsupported');
+  let release;
+  const busy=scan(()=>new Promise(resolve=>{release=resolve;}));
+  const first=busy();assert.equal((await busy()).code,'scan-busy');
+  release({stdout:JSON.stringify({status:'waiting',code:'game-not-foreground',stage:'foreground-check'})});
+  assert.equal((await first).code,'game-not-foreground');
 });
 

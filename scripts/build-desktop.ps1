@@ -24,7 +24,7 @@ if (-not $stage -or $stage -eq [IO.Path]::GetPathRoot($stage).TrimEnd([IO.Path]:
     $projectRoot.StartsWith($stagePrefix, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'The staging folder must not be a drive root, the project root, or an ancestor of the project.'
 }
-foreach ($sourceDirectory in @('dist', 'server', 'native', 'scripts', '.git')) {
+foreach ($sourceDirectory in @('dist', 'server', 'native', 'scripts', 'docs', '.git')) {
     $sourceRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot $sourceDirectory))
     if ($stage.Equals($sourceRoot, [StringComparison]::OrdinalIgnoreCase) -or $stage.StartsWith($sourceRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The staging folder must not be inside a source folder.'
@@ -93,7 +93,7 @@ if (-not (Test-Path -LiteralPath $nodeLicense)) {
 Copy-Item -LiteralPath $nodeLicense -Destination (Join-Path $stage 'licenses\Node-LICENSE.txt') -Force
 
 # Only copy app sources. Credentials, local browser data, logs and build caches are never packaged.
-foreach ($directory in @('dist', 'server')) {
+foreach ($directory in @('dist', 'server', 'docs')) {
     $source = Join-Path $projectRoot $directory
     if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Missing source directory: $directory" }
     $destination = Join-Path $stage $directory
@@ -134,7 +134,7 @@ if ($Package) {
     if (-not $ArchivePath) { $ArchivePath = Join-Path (Split-Path -Parent $projectRoot) ('海克斯指南桌面版-' + $AppVersion + '.zip') }
     $ArchivePath = [IO.Path]::GetFullPath($ArchivePath)
     New-Item -ItemType Directory -Path (Split-Path -Parent $ArchivePath) -Force | Out-Null
-    $packageEntries = @('package.json', 'HexGuide.exe', 'HexGuide.exe.config', 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll', 'runtime', 'licenses', 'dist', 'server', 'native', '开始使用.txt', 'build-info.json', 'README.md', 'README-data.md', 'README-statistics.md', 'PRIVACY.md', 'THIRD-PARTY-NOTICES.md')
+    $packageEntries = @('package.json', 'HexGuide.exe', 'HexGuide.exe.config', 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll', 'runtime', 'licenses', 'dist', 'server', 'native', 'docs', '开始使用.txt', 'build-info.json', 'README.md', 'README-data.md', 'README-statistics.md', 'PRIVACY.md', 'THIRD-PARTY-NOTICES.md')
     $archiveSources = @($packageEntries | ForEach-Object { $entry = Join-Path $stage $_; if (Test-Path -LiteralPath $entry) { $entry } })
     Compress-Archive -LiteralPath $archiveSources -DestinationPath $ArchivePath -CompressionLevel Optimal -Force
     Write-Output "Archive: $ArchivePath"

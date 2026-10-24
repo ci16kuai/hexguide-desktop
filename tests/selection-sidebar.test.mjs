@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {BackgroundSidebar, SessionConflictError, SessionValidationError} from '../server/sidebar.mjs';
+import {matchOcrProposals} from '../server/ocr.mjs';
 
 const data = JSON.parse(await readFile(new URL('../dist/data.json',import.meta.url),'utf8'));
 const itemsCatalog = JSON.parse(await readFile(new URL('../dist/items.json',import.meta.url),'utf8'));
@@ -98,6 +99,7 @@ test('synthetic manual changes win over captured evidence, and a consumed triple
   await sidebar.setSession({owned:[],route:'spell',...guards(sidebar.getSession())});
   advance(1000); await sidebar.scan();
   assert.equal(sidebar.getSelectionObservation().status,'waiting','same consumed triple cannot auto-add a manually removed choice');
+  assert.equal(sidebar.getModel().selectionDiagnostics.scanCode,'scan-offer-consumed');
   assert.deepEqual(sidebar.getSession().owned,[]);
 });
 
@@ -124,6 +126,7 @@ test('synthetic pending OCR is cancelled when a manual edit changes the session'
   finish({status:'recognized',proposals:ids.slice(0,3).map(id=>({id})),selectionCapture:capture(initial)});
   assert.equal((await pending).status,'waiting');
   assert.equal(sidebar.getSelectionObservation().status,'waiting');
+  assert.equal(sidebar.getModel().selectionDiagnostics.scanCode,'scan-context-changed');
 });
 
 test('synthetic same-offer scan refresh cannot interrupt already observed selection evidence', async () => {
@@ -139,20 +142,20 @@ test('synthetic same-offer scan refresh cannot interrupt already observed select
 
 test('synthetic diagnostic snapshots distinguish new failed attempts from retained old offers without exposing identity', async () => {
   const {sidebar,setResponse,advance} = setup();
-  assert.deepEqual(sidebar.getModel().selectionDiagnostics,{metadataStatus:'not-scanned',captureAgeMs:null,backendArmed:false,lastScanAgeMs:null});
+  assert.deepEqual(sidebar.getModel().selectionDiagnostics,{metadataStatus:'not-scanned',scanCode:'not-scanned',captureAgeMs:null,backendArmed:false,lastScanAgeMs:null});
   await sidebar.scan();
-  assert.deepEqual(sidebar.getModel().selectionDiagnostics,{metadataStatus:'accepted',captureAgeMs:0,backendArmed:true,lastScanAgeMs:0});
+  assert.deepEqual(sidebar.getModel().selectionDiagnostics,{metadataStatus:'accepted',scanCode:'title-layout-confirmed',captureAgeMs:0,backendArmed:true,lastScanAgeMs:0});
   advance(1200);
   setResponse({status:'unavailable',selectionMetadataStatus:'title-incomplete',privateName:'do not expose',message:'failed latest frame'});
   await sidebar.scan();
   const model=sidebar.getModel();
   assert.equal(model.offers.length,3);
   assert.equal(model.ocr.status,'recognized','candidate display is preserved independently of the last diagnostic attempt');
-  assert.deepEqual(model.selectionDiagnostics,{metadataStatus:'title-incomplete',captureAgeMs:null,backendArmed:false,lastScanAgeMs:0});
+  assert.deepEqual(model.selectionDiagnostics,{metadataStatus:'title-incomplete',scanCode:'ocr-unavailable',captureAgeMs:null,backendArmed:false,lastScanAgeMs:0});
   advance(90000);
   const diagnostic=sidebar.getModel().selectionDiagnostics;
   assert.equal(diagnostic.lastScanAgeMs,60000);
-  assert.deepEqual(Object.keys(diagnostic).sort(),['backendArmed','captureAgeMs','lastScanAgeMs','metadataStatus']);
+  assert.deepEqual(Object.keys(diagnostic).sort(),['backendArmed','captureAgeMs','lastScanAgeMs','metadataStatus','scanCode']);
   assert.doesNotMatch(JSON.stringify(diagnostic),/do not expose|privateName|12345|offerToken|regions/);
 });
 
@@ -165,6 +168,7 @@ test('synthetic diagnostics distinguish missing, malformed, out-of-region, stale
   ]) {
     const {sidebar,setResponse}=setup(); setResponse(response); await sidebar.scan();
     assert.equal(sidebar.getModel().selectionDiagnostics.metadataStatus,expected);
+    if(expected==='stale')assert.equal(sidebar.getModel().selectionDiagnostics.scanCode,'scan-capture-stale');
     assert.equal(sidebar.getModel().selectionDiagnostics.backendArmed,false);
     assert.equal(sidebar.getModel().offers.length,3);
   }
@@ -172,6 +176,45 @@ test('synthetic diagnostics distinguish missing, malformed, out-of-region, stale
   setResponse({status:'waiting',selectionMetadataStatus:'private arbitrary text'});
   await sidebar.scan();
   assert.equal(sidebar.getModel().selectionDiagnostics.metadataStatus,'title-incomplete');
+  assert.equal(sidebar.getModel().selectionDiagnostics.scanCode,'ocr-unavailable');
   update({stage:'loading'}); await sidebar.scan();
   assert.equal(sidebar.getModel().selectionDiagnostics.metadataStatus,'context-ineligible');
+  assert.equal(sidebar.getModel().selectionDiagnostics.scanCode,'scan-context-ineligible');
+});
+
+test('latest scan codes distinguish foreground, empty OCR, partial titles and capture failures while retaining old offers', async () => {
+  const heading=(id,column)=>({text:data.augments.find(augment=>augment.id===id).name,x:250+column*600,y:350,width:240,height:28});
+  const recognized=lines=>({status:'recognized',diagnostics:{width:1920,height:1080},lines});
+  for(const [expected,raw] of [
+    ['game-not-foreground',{status:'waiting',code:'game-not-foreground',stage:'foreground-check'}],
+    ['foreground-changed',{status:'waiting',code:'foreground-changed',stage:'foreground-check'}],
+    ['ocr-no-text',recognized([])],
+    ['title-name-unmatched',recognized([{text:'Private Player Name and C:/private/window',x:250,y:350,width:240,height:28}])],
+    ['title-layout-incomplete',recognized(ids.slice(0,2).map(heading))],
+    ['capture-size-invalid',{...recognized([]),diagnostics:{width:0,height:1080}}],
+    ['ocr-capture-failed',{status:'unavailable',code:'ocr-capture-failed',stage:'capture'}],
+    ['ocr-passes-incomplete',{status:'unavailable',code:'ocr-passes-incomplete',stage:'result'}],
+    ['ocr-unavailable',{status:'unavailable',code:'Private Player Name and C:/private/window',stage:'private'}],
+  ]){
+    const {sidebar,advance,setResponse}=setup();
+    await sidebar.scan();advance(1000);
+    const matched=matchOcrProposals(raw,data.augments);
+    assert.equal(matched.selectionMetadataStatus,'title-incomplete');
+    setResponse(matched);await sidebar.scan();
+    const model=sidebar.getModel();
+    assert.equal(model.offers.length,3,expected);
+    assert.equal(model.ocr.status,'recognized','displayed old offers do not describe the new failed capture');
+    assert.equal(model.selectionDiagnostics.scanCode,expected);
+    assert.equal(model.selectionDiagnostics.metadataStatus,'title-incomplete');
+    assert.equal(model.selectionDiagnostics.backendArmed,false);
+    assert.doesNotMatch(JSON.stringify(model.selectionDiagnostics),/Private|private|window|Player/);
+  }
+});
+
+test('scanner exceptions expose a fixed latest code and cannot leak error details', async () => {
+  const {sidebar}=setup();
+  sidebar.scanner=async()=>{throw Error('Private Player Name C:/secret credentials');};
+  await sidebar.scan();
+  assert.equal(sidebar.getModel().selectionDiagnostics.scanCode,'scan-execution-failed');
+  assert.doesNotMatch(JSON.stringify(sidebar.getModel().selectionDiagnostics),/Private|secret|credentials/);
 });

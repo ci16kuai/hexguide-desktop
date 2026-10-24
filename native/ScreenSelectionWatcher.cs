@@ -26,9 +26,13 @@ namespace HexGuide.Desktop
         private string lastCancelCode = "none";
         private long lastCaptureAt, lastFailureAt, lastCancelAt;
         private int captureAttempts, captureSuccesses, captureFailures;
+        private long lastRefreshCapture;
+        private int sameIdentityRefreshes, pendingRefreshesPreserved;
+        private int sameIdentityReferenceUpdates, pressedRefreshesPreserved;
         internal event Action<Dictionary<string, object>> SelectionObserved;
         internal event Action<string> StatusChanged;
         internal string StatusCode { get; private set; }
+        internal static int LargestDiagnosticFixtureBytes { get; private set; }
 
         internal ScreenSelectionWatcher()
         {
@@ -60,17 +64,14 @@ namespace HexGuide.Desktop
             ScreenSelectionObservation next;
             if (!ScreenSelectionObservation.TryRead(ModelValue.Object(model, "selection"), Now(), out next))
             { Suspend("waiting", observation != null); return; }
-            if (observation != null)
-            {
-                if (observation.Identity() != next.Identity()) { Suspend("offers-changed", true); return; }
-                if (observation.CapturedAt == next.CapturedAt || PreservePendingObservation(observation, next, decision)) return;
-            }
+            if (TryApplySameIdentityReference(next, Now())) return;
             // A model cached before a click/roll must not arm the watcher again.
             if (next.CapturedAt <= lastSeenCapture) return;
             if (!decision.ConsiderCapture(next.CapturedAt, next.Identity())) { SetStatus("settling"); return; }
             lastSeenCapture = next.CapturedAt;
+            lastRefreshCapture = next.CapturedAt;
             observation = next;
-            decision.Arm(next.CapturedAt);
+            decision.Arm(next.CapturedAt, Now());
             nextFrameAt = 0;
             if (buttonKnown && lastButtonDown) { Suspend("held-before-arm", true); return; }
             SetStatus("baseline");
@@ -78,9 +79,46 @@ namespace HexGuide.Desktop
 
         internal void CancelForLocalAction() { Suspend("local-action", true); }
 
+        // Separate from timer startup so model refresh ordering can be checked
+        // with deterministic, in-memory fixtures only.
+        private bool TryApplySameIdentityReference(ScreenSelectionObservation next, long now)
+        {
+            if (observation == null) return false;
+            if (observation.Identity() != next.Identity()) { Suspend("offers-changed", true); return true; }
+            bool preserveInput = PreserveInputObservation(observation, next, decision);
+            TrackReferenceRefresh(next.CapturedAt, preserveInput && decision.Pending, preserveInput && decision.Pressed);
+            if (observation.CapturedAt == next.CapturedAt || preserveInput) return true;
+            if (next.CapturedAt <= lastSeenCapture) return true;
+            if (!decision.ConsiderCapture(next.CapturedAt, next.Identity())) { SetStatus("settling"); return true; }
+            lastSeenCapture = lastRefreshCapture = next.CapturedAt;
+            observation = next;
+            // A new OCR image of the exact same ordered offer is a reference
+            // update, not a new interaction. The next frame and every edge still
+            // have to match this new image using the unchanged strict thresholds.
+            decision.RefreshReference(next.CapturedAt);
+            sameIdentityReferenceUpdates = Math.Min(1000000, sameIdentityReferenceUpdates + 1);
+            return true;
+        }
+
+        private void TrackReferenceRefresh(long capturedAt, bool preservePending, bool preservePressed)
+        {
+            if (capturedAt <= lastRefreshCapture) return;
+            lastRefreshCapture = capturedAt;
+            sameIdentityRefreshes = Math.Min(1000000, sameIdentityRefreshes + 1);
+            if (preservePending) pendingRefreshesPreserved = Math.Min(1000000, pendingRefreshesPreserved + 1);
+            if (preservePressed) pressedRefreshesPreserved = Math.Min(1000000, pressedRefreshesPreserved + 1);
+        }
+
+
         internal static bool PreservePendingObservation(ScreenSelectionObservation active, ScreenSelectionObservation incoming, ScreenSelectionDecision state)
         {
             return active != null && incoming != null && state.Pending && !state.Invalid
+                && active.Identity() == incoming.Identity();
+        }
+
+        internal static bool PreserveInputObservation(ScreenSelectionObservation active, ScreenSelectionObservation incoming, ScreenSelectionDecision state)
+        {
+            return active != null && incoming != null && (state.Pressed || state.Pending) && !state.Invalid
                 && active.Identity() == incoming.Identity();
         }
 
@@ -121,7 +159,7 @@ namespace HexGuide.Desktop
                 lastAttempt = DecisionDiagnostics(code);
             if (observation != null && invalidate) decision.Invalidate(Now());
             observation = null;
-            decision.Reset();
+            decision.Reset(Now());
             if (!eligible) timer.Stop();
             SetStatus(code);
         }
@@ -232,6 +270,10 @@ namespace HexGuide.Desktop
             current["lastCancelCode"] = lastCancelCode;
             current["lastCancelAgeMs"] = Age(now, lastCancelAt);
             current["activeCaptureAgeMs"] = Age(now, observation == null ? 0 : observation.CapturedAt);
+            current["sameIdentityRefreshes"] = sameIdentityRefreshes;
+            current["pendingRefreshesPreserved"] = pendingRefreshesPreserved;
+            current["pressedRefreshesPreserved"] = pressedRefreshesPreserved;
+            current["sameIdentityReferenceUpdates"] = sameIdentityReferenceUpdates;
             foreach (var entry in decision.DiagnosticState(now)) current[entry.Key] = entry.Value;
             if (lastAttempt != null) current["lastAttempt"] = new Dictionary<string, object>(lastAttempt);
             return current;
@@ -263,9 +305,33 @@ namespace HexGuide.Desktop
             object armed;
             return new Dictionary<string, object> {
                 { "metadataStatus", status }, { "captureAgeMs", BackendAge(value, "captureAgeMs") },
+                { "scanCode", BackendScanCode(ModelValue.Text(value, "scanCode")) },
                 { "backendArmed", value != null && value.TryGetValue("backendArmed", out armed) && armed is bool && (bool)armed },
                 { "lastScanAgeMs", BackendAge(value, "lastScanAgeMs") }
             };
+        }
+
+        private static string BackendScanCode(string code)
+        {
+            // Exact mirror of SELECTION_SCAN_CODES in server/scan-diagnostics.mjs.
+            switch (code)
+            {
+                case "title-layout-confirmed": case "capture-size-invalid": case "ocr-no-text":
+                case "title-name-unmatched": case "title-layout-incomplete": case "title-layout-ambiguous":
+                case "game-not-foreground": case "foreground-changed": case "ocr-language-missing":
+                case "ocr-engine-unavailable": case "window-bounds-unavailable": case "window-size-unsupported":
+                case "ocr-passes-incomplete": case "ocr-initializing-failed": case "ocr-native-window-failed":
+                case "ocr-foreground-check-failed": case "ocr-winrt-runtime-failed": case "ocr-ocr-language-failed":
+                case "ocr-ocr-engine-failed": case "ocr-window-bounds-failed": case "ocr-capture-failed":
+                case "ocr-resize-failed": case "ocr-encode-failed": case "ocr-stream-write-failed":
+                case "ocr-decode-failed": case "ocr-software-bitmap-failed": case "ocr-recognize-failed":
+                case "ocr-result-failed": case "ocr-unavailable": case "scan-busy":
+                case "scan-platform-unsupported": case "scan-output-too-large": case "scan-output-invalid":
+                case "scan-execution-failed": case "not-scanned": case "scan-loop-failed":
+                case "scan-context-ineligible": case "scan-context-changed": case "scan-proposals-incomplete":
+                case "scan-offer-owned": case "scan-offer-consumed": case "scan-capture-stale": return code;
+                default: return "not-scanned";
+            }
         }
 
         private static object BackendAge(Dictionary<string, object> value, string key)
@@ -446,7 +512,7 @@ namespace HexGuide.Desktop
 
         internal static int ValidateFixtures()
         {
-            int checks = ScreenSelectionDecision.ValidateFixtures();
+            int checks = ScreenSelectionDecision.ValidateFixtures() + ValidateReferenceRefreshFixtures();
             using (var watcher = new ScreenSelectionWatcher())
             {
                 watcher.RecordCaptureResult(true, "captured", Now());
@@ -457,6 +523,129 @@ namespace HexGuide.Desktop
                     || (string)snapshot["lastCancelCode"] != "visual-evidence-incomplete"
                     || Convert.ToInt32(snapshot["captureFailures"]) != 0 || snapshot["lastCancelAgeMs"] == null)
                     throw new InvalidOperationException("A first-frame visual mismatch was lost after returning to waiting.");
+                checks++;
+            }
+            return checks + ValidateMaximumDiagnosticFixture();
+        }
+
+        private static int ValidateMaximumDiagnosticFixture()
+        {
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                watcher.StatusCode = "visual-evidence-incomplete";
+                watcher.eligible = watcher.hadGameFocus = true;
+                watcher.captureAttempts = watcher.captureSuccesses = watcher.captureFailures = 1000000;
+                watcher.sameIdentityRefreshes = watcher.sameIdentityReferenceUpdates = 1000000;
+                watcher.pendingRefreshesPreserved = watcher.pressedRefreshesPreserved = 1000000;
+                watcher.lastCaptureAt = watcher.lastFailureAt = watcher.lastCancelAt = 1;
+                watcher.lastCaptureCode = watcher.lastFailureCode = "occlusion-enumeration-incomplete";
+                watcher.lastCancelCode = "visual-evidence-incomplete";
+                watcher.observation = new ScreenSelectionObservation { CapturedAt = 1 };
+                watcher.decision.PrepareMaximumDiagnosticFixture();
+                watcher.lastAttempt = new Dictionary<string, object> {
+                    { "status", "visual-evidence-incomplete" }, { "baselineFrames", 1000 }, { "feedbackFrames", 1000 },
+                    { "dismissedFrames", 1000 }, { "pending", true }
+                };
+                string json = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(watcher.Diagnostics());
+                LargestDiagnosticFixtureBytes = System.Text.Encoding.UTF8.GetByteCount(json);
+                if (LargestDiagnosticFixtureBytes > 3400 || json.Contains("synthetic-private") || json.Contains("\"delta\"")
+                    || json.Contains("signature") || json.Contains("windowHandle") || json.Contains("\"ids\""))
+                    throw new InvalidOperationException("The maximum native diagnostic snapshot exceeded its privacy or 3400-byte budget.");
+                return 1;
+            }
+        }
+
+        private static int ValidateReferenceRefreshFixtures()
+        {
+            Func<long, ScreenSelectionObservation> capture = delegate(long time)
+            {
+                var rows = new[] { new int[192], new int[192], new int[192] };
+                foreach (var row in rows) for (int i = 0; i < row.Length; i++) row[i] = 25;
+                return new ScreenSelectionObservation {
+                    Token = "synthetic-private-token", GameId = "synthetic-private-game", Epoch = 1, Revision = 1,
+                    CapturedAt = time, Window = new IntPtr(42), ClientBounds = new Rectangle(0, 0, 800, 600),
+                    Regions = new[] { new Rectangle(100, 100, 100, 200), new Rectangle(300, 100, 100, 200), new Rectangle(500, 100, 100, 200) },
+                    Signatures = rows, Ids = new[] { "private-a", "private-b", "private-c" }
+                };
+            };
+            var failures = new List<string>();
+            using (var ready = new ScreenSelectionWatcher())
+            {
+                ready.observation = capture(1000); ready.lastSeenCapture = ready.lastRefreshCapture = 1000;
+                ready.decision.Arm(1000);
+                ready.decision.Frame(ready.observation.Signatures, ready.observation.Signatures, 1100);
+                ready.decision.Frame(ready.observation.Signatures, ready.observation.Signatures, 1170);
+                ready.TryApplySameIdentityReference(capture(1150), 1190);
+                ready.decision.Pointer(true, 1, true, 1200, ready.observation.Signatures, ready.observation.Signatures);
+                ready.decision.Pointer(false, 1, true, 1250, ready.observation.Signatures, ready.observation.Signatures);
+                if (ready.decision.Invalid || !ready.decision.Pending) failures.Add("same-identity refresh created a ready-to-click blind interval");
+            }
+            using (var pressed = new ScreenSelectionWatcher())
+            {
+                pressed.observation = capture(1000); pressed.lastSeenCapture = pressed.lastRefreshCapture = 1000;
+                pressed.decision.Arm(1000);
+                pressed.decision.Frame(pressed.observation.Signatures, pressed.observation.Signatures, 1100);
+                pressed.decision.Frame(pressed.observation.Signatures, pressed.observation.Signatures, 1170);
+                pressed.decision.Pointer(true, 1, true, 1200, pressed.observation.Signatures, pressed.observation.Signatures);
+                pressed.TryApplySameIdentityReference(capture(1150), 1225);
+                pressed.decision.Pointer(false, 1, true, 1250, pressed.observation.Signatures, pressed.observation.Signatures);
+                if (pressed.decision.Invalid || !pressed.decision.Pending) failures.Add("same-identity refresh erased a mouse-down before its matching mouse-up");
+            }
+            if (failures.Count > 0) throw new InvalidOperationException(string.Join("; ", failures));
+            int checks = 2;
+            using (var mismatch = new ScreenSelectionWatcher())
+            {
+                mismatch.observation = capture(1000); mismatch.lastSeenCapture = mismatch.lastRefreshCapture = 1000;
+                mismatch.decision.Arm(1000); mismatch.decision.Frame(mismatch.observation.Signatures, mismatch.observation.Signatures, 1100);
+                mismatch.decision.Frame(mismatch.observation.Signatures, mismatch.observation.Signatures, 1170);
+                var changedReference = capture(1150);
+                foreach (var row in changedReference.Signatures) for (int i = 0; i < row.Length; i++) row[i] = 75;
+                mismatch.TryApplySameIdentityReference(changedReference, 1190);
+                mismatch.decision.Frame(capture(1000).Signatures, mismatch.observation.Signatures, 1250);
+                if (!mismatch.decision.Invalid || ModelValue.Text(ModelValue.Object(mismatch.decision.DiagnosticState(1300), "lastReject"), "code") != "frame-preclick-mae-close")
+                    throw new InvalidOperationException("A same-identity reference refresh bypassed strict next-frame matching.");
+                checks++;
+            }
+            using (var edgeMismatch = new ScreenSelectionWatcher())
+            {
+                edgeMismatch.observation = capture(1000); edgeMismatch.lastSeenCapture = edgeMismatch.lastRefreshCapture = 1000;
+                edgeMismatch.decision.Arm(1000); edgeMismatch.decision.Frame(edgeMismatch.observation.Signatures, edgeMismatch.observation.Signatures, 1100);
+                edgeMismatch.decision.Frame(edgeMismatch.observation.Signatures, edgeMismatch.observation.Signatures, 1170);
+                var changedReference = capture(1150);
+                foreach (var row in changedReference.Signatures) for (int i = 0; i < row.Length; i++) row[i] = 75;
+                edgeMismatch.TryApplySameIdentityReference(changedReference, 1190);
+                edgeMismatch.decision.Pointer(true, 1, true, 1200, capture(1000).Signatures, edgeMismatch.observation.Signatures);
+                if (!edgeMismatch.decision.Invalid || ModelValue.Text(ModelValue.Object(edgeMismatch.decision.DiagnosticState(1300), "lastReject"), "code") != "pointer-panel-mae-close")
+                    throw new InvalidOperationException("A same-identity reference refresh bypassed strict pointer-edge matching.");
+                checks++;
+            }
+            for (int change = 0; change < 3; change++) using (var changedIdentity = new ScreenSelectionWatcher())
+            {
+                changedIdentity.observation = capture(1000); changedIdentity.lastSeenCapture = changedIdentity.lastRefreshCapture = 1000;
+                changedIdentity.decision.Arm(1000); changedIdentity.decision.Frame(changedIdentity.observation.Signatures, changedIdentity.observation.Signatures, 1100);
+                changedIdentity.decision.Frame(changedIdentity.observation.Signatures, changedIdentity.observation.Signatures, 1170);
+                changedIdentity.decision.Pointer(true, 1, true, 1200, changedIdentity.observation.Signatures, changedIdentity.observation.Signatures);
+                var replacement = capture(1150);
+                if (change == 0) replacement.Token = "different-private-token";
+                if (change == 1) replacement.Ids[1] = "different-private-id";
+                if (change == 2) replacement.Regions[1].Offset(1, 0);
+                changedIdentity.TryApplySameIdentityReference(replacement, 1225);
+                if (changedIdentity.observation != null || changedIdentity.decision.Pressed || changedIdentity.decision.Pending
+                    || ModelValue.Text(changedIdentity.Diagnostics(), "lastCancelCode") != "offers-changed")
+                    throw new InvalidOperationException("A token, candidate, or physical-region change preserved an old pressed interaction.");
+                checks++;
+            }
+            using (var preserved = new ScreenSelectionWatcher())
+            {
+                preserved.observation = capture(1000); preserved.lastSeenCapture = preserved.lastRefreshCapture = 1000;
+                preserved.decision.Arm(1000); preserved.decision.Frame(preserved.observation.Signatures, preserved.observation.Signatures, 1100);
+                preserved.decision.Frame(preserved.observation.Signatures, preserved.observation.Signatures, 1170);
+                preserved.decision.Pointer(true, 1, true, 1200, preserved.observation.Signatures, preserved.observation.Signatures);
+                preserved.TryApplySameIdentityReference(capture(1150), 1225); preserved.TryApplySameIdentityReference(capture(1150), 1230);
+                if (preserved.observation.CapturedAt != 1000 || preserved.pressedRefreshesPreserved != 1 || preserved.sameIdentityRefreshes != 1)
+                    throw new InvalidOperationException("Repeated cached captures replaced or double-counted a preserved press.");
+                preserved.decision.Frame(preserved.observation.Signatures, preserved.observation.Signatures, 2801);
+                if (!preserved.decision.Invalid) throw new InvalidOperationException("Preserving an OCR reference disabled the existing held-input deadline.");
                 checks++;
             }
             return checks;
@@ -599,11 +788,19 @@ namespace HexGuide.Desktop
         private string witnessIdentity;
         private string witnessState = "not-started";
         private int invalidations;
+        private long referenceCapturedAt, lastDecisionAt, lastObservedFrameAt, readySince;
+        private long lastReadyMs, longestReadyMs, lastRejectAt;
+        private int frameGapMs, lastEdgeColumn = -1;
+        private bool lastEdgeDown, metricsAvailable;
+        private int maeFailureMask, closeFailureMask;
+        private int[] closeCells = new int[3];
+        private Dictionary<string, object> lastReject;
         private int pressedColumn = -1;
         internal bool Invalid, Ready, Pending, Complete;
         internal int BaselineFrames, FeedbackFrames, DismissedFrames, SelectedIndex = -1;
         internal long ClickedAt;
         internal double[] LastDelta = new double[3];
+        internal bool Pressed { get { return pressedColumn >= 0 && !Pending; } }
         internal bool CanArm(long capturedAt)
         {
             return invalidatedAt == 0 ? capturedAt > 0 : capturedAt >= invalidatedAt + 2000 && capturedAt == acceptedCapture;
@@ -626,6 +823,7 @@ namespace HexGuide.Desktop
         }
         internal void Invalidate(long now)
         {
+            EndReady(now);
             if (now > invalidatedAt)
             {
                 invalidatedAt = now; witnessCapture = acceptedCapture = 0; witnessIdentity = null;
@@ -642,31 +840,66 @@ namespace HexGuide.Desktop
                 { "fenceRemainingMs", invalidatedAt <= 0 ? 0 : Math.Max(0, Math.Min(2000, invalidatedAt + 2000 - now)) },
                 { "witnessCount", acceptedCapture > 0 ? 2 : witnessCapture > 0 ? 1 : 0 },
                 { "witnessCaptureAgeMs", ScreenSelectionWatcher.Age(now, witnessCapture) },
-                { "witnessState", witnessState }
+                { "witnessState", witnessState },
+                { "referenceAgeMs", ScreenSelectionWatcher.Age(now, referenceCapturedAt) },
+                { "pressed", Pressed }, { "edgeDown", lastEdgeDown }, { "edgeColumn", lastEdgeColumn },
+                { "holdAgeMs", !Pressed ? 0 : BoundedDuration(now, pressedAt, 2500) },
+                { "frameGapMs", frameGapMs }, { "readyAgeMs", Ready && !Invalid ? BoundedDuration(now, readySince, 60000) : 0 },
+                { "lastReadyMs", lastReadyMs }, { "longestReadyMs", Math.Max(longestReadyMs, Ready && !Invalid ? BoundedDuration(now, readySince, 60000) : 0) },
+                { "lastRejectAgeMs", ScreenSelectionWatcher.Age(now, lastRejectAt) },
+                { "lastReject", lastReject == null ? null : CopyReject(lastReject) }
             };
         }
-        internal void Reset()
+        internal void Reset() { Reset(lastDecisionAt); }
+        internal void Reset(long now)
         {
+            EndReady(now);
             Invalid = Ready = Pending = Complete = false;
             BaselineFrames = FeedbackFrames = DismissedFrames = 0;
             pressedColumn = SelectedIndex = -1; pressedAt = lastFrameAt = ClickedAt = 0;
             preClick = null; LastDelta = new double[3];
+            referenceCapturedAt = lastObservedFrameAt = 0;
+            metricsAvailable = false; maeFailureMask = closeFailureMask = frameGapMs = 0;
+            closeCells = new int[3];
+            lastEdgeDown = false; lastEdgeColumn = -1;
         }
-        internal void Arm(long capturedAt) { Reset(); if (!CanArm(capturedAt)) Invalid = true; }
+        internal void Arm(long capturedAt) { Arm(capturedAt, Math.Max(capturedAt, lastDecisionAt)); }
+        internal void Arm(long capturedAt, long observedAt)
+        {
+            Reset(observedAt);
+            referenceCapturedAt = capturedAt;
+            if (!CanArm(capturedAt)) Reject("arm-reference-ineligible", observedAt);
+        }
+        internal void RefreshReference(long capturedAt)
+        {
+            if (capturedAt > referenceCapturedAt) referenceCapturedAt = capturedAt;
+        }
 
         internal void Pointer(bool down, int column, bool onGame, long now, int[][] edgeFrame, int[][] baseline)
         {
             if (Invalid || Complete) return;
-            if (!onGame || column < 0 || column > 2) { Invalidate(now); return; }
-            if (!Valid(edgeFrame) || !Valid(baseline) || !PanelMatches(edgeFrame, baseline)) { Invalidate(now); return; }
+            NoteDecision(now, false);
+            lastEdgeDown = down;
+            lastEdgeColumn = column >= 0 && column <= 2 ? column : -1;
+            if (!onGame) { Reject("pointer-not-game", now); return; }
+            if (column < 0 || column > 2) { Reject("pointer-column-invalid", now); return; }
+            if (!Valid(edgeFrame)) { Reject("pointer-invalid-current", now); return; }
+            if (!Valid(baseline)) { Reject("pointer-invalid-reference", now); return; }
+            if (!MeasurePanel(edgeFrame, baseline)) { Reject(PanelRejection("pointer-panel"), now); return; }
             if (down)
             {
-                if (!Ready || Pending || preClick == null || now - lastFrameAt > 180) { Invalidate(now); return; }
+                if (Pending) { Reject("pointer-down-pending", now); return; }
+                if (!Ready) { Reject("pointer-down-not-ready", now); return; }
+                if (preClick == null) { Reject("pointer-down-missing-frame", now); return; }
+                if (now - lastFrameAt > 180) { Reject("pointer-down-stale-frame", now); return; }
+                EndReady(now);
                 pressedColumn = column; pressedAt = now; Ready = false;
             }
             else
             {
-                if (pressedColumn != column || now - pressedAt > 1500 || now <= pressedAt) { Invalidate(now); return; }
+                if (pressedColumn != column) { Reject("pointer-up-column-mismatch", now); return; }
+                if (now - pressedAt > 1500) { Reject("pointer-up-hold-timeout", now); return; }
+                if (now <= pressedAt) { Reject("pointer-up-time-backward", now); return; }
                 SelectedIndex = column; ClickedAt = now; Pending = true;
             }
             // This is the frame captured at this actual button edge, not the
@@ -678,23 +911,22 @@ namespace HexGuide.Desktop
         internal void Frame(int[][] current, int[][] baseline, long now)
         {
             if (Invalid || Complete) return;
-            if (!Valid(current) || !Valid(baseline)) { Invalidate(now); return; }
-            bool panelMatches = true;
-            for (int index = 0; index < 3; index++)
-            {
-                LastDelta[index] = Difference(current[index], baseline[index]);
-                panelMatches &= LastDelta[index] <= 10 && CloseFraction(current[index], baseline[index]) >= .78;
-            }
+            NoteDecision(now, true);
+            if (!Valid(current)) { Reject("frame-invalid-current", now); return; }
+            if (!Valid(baseline)) { Reject("frame-invalid-reference", now); return; }
+            bool panelMatches = MeasurePanel(current, baseline);
             if (!Pending)
             {
-                if (pressedColumn >= 0) { if (now - pressedAt > 1500) Invalidate(now); return; }
-                if (!panelMatches) { Invalidate(now); return; }
+                if (pressedColumn >= 0) { if (now - pressedAt > 1500) Reject("frame-hold-timeout", now); return; }
+                if (!panelMatches) { Reject(PanelRejection("frame-preclick"), now); return; }
                 BaselineFrames = Math.Min(1000, BaselineFrames + 1);
+                if (!Ready && BaselineFrames >= 2) readySince = now;
                 Ready = BaselineFrames >= 2;
                 preClick = Clone(current); lastFrameAt = now;
                 return;
             }
-            if (now < ClickedAt || now - ClickedAt > 2500) { Invalidate(now); return; }
+            if (now < ClickedAt) { Reject("frame-pending-time-backward", now); return; }
+            if (now - ClickedAt > 2500) { Reject("frame-pending-timeout", now); return; }
             if (now - ClickedAt <= 950 && UniqueFeedback(current, preClick, SelectedIndex)) FeedbackFrames = Math.Min(1000, FeedbackFrames + 1);
             bool gone = true;
             for (int index = 0; index < 3; index++)
@@ -702,6 +934,105 @@ namespace HexGuide.Desktop
             DismissedFrames = gone ? Math.Min(1000, DismissedFrames + 1) : 0;
             // A click followed only by disappearing cards is insufficient.
             Complete = FeedbackFrames > 0 && DismissedFrames >= 3;
+        }
+
+        private static long BoundedDuration(long now, long start, long maximum)
+        {
+            return start <= 0 ? 0 : Math.Max(0, Math.Min(maximum, now - start));
+        }
+
+        private void EndReady(long now)
+        {
+            if (readySince <= 0) return;
+            lastReadyMs = BoundedDuration(now, readySince, 60000);
+            longestReadyMs = Math.Max(longestReadyMs, lastReadyMs);
+            readySince = 0;
+        }
+
+        private void NoteDecision(long now, bool frame)
+        {
+            lastDecisionAt = now;
+            frameGapMs = (int)BoundedDuration(now, lastObservedFrameAt, 2500);
+            if (frame) lastObservedFrameAt = now;
+            metricsAvailable = false;
+            maeFailureMask = closeFailureMask = 0;
+            closeCells = new int[3];
+        }
+
+        private bool MeasurePanel(int[][] current, int[][] baseline)
+        {
+            metricsAvailable = true;
+            for (int index = 0; index < 3; index++)
+            {
+                LastDelta[index] = Difference(current[index], baseline[index]);
+                closeCells[index] = CloseCount(current[index], baseline[index]);
+                if (LastDelta[index] > 10) maeFailureMask |= 1 << index;
+                if (closeCells[index] / 64.0 < .78) closeFailureMask |= 1 << index;
+            }
+            return maeFailureMask == 0 && closeFailureMask == 0;
+        }
+
+        private string PanelRejection(string prefix)
+        {
+            return prefix + (maeFailureMask != 0 && closeFailureMask != 0 ? "-mae-close" : maeFailureMask != 0 ? "-mae" : "-close");
+        }
+
+        private void Reject(string code, long now)
+        {
+            lastRejectAt = now;
+            lastReject = new Dictionary<string, object> {
+                { "code", RejectionCode(code) }, { "referenceAgeMs", ScreenSelectionWatcher.Age(now, referenceCapturedAt) },
+                { "frameGapMs", frameGapMs }, { "pressed", Pressed }, { "edgeDown", lastEdgeDown },
+                { "edgeColumn", lastEdgeColumn }, { "holdAgeMs", !Pressed ? 0 : BoundedDuration(now, pressedAt, 2500) },
+                { "pending", Pending }, { "ready", Ready }, { "readyAgeMs", BoundedDuration(now, readySince, 60000) },
+                { "baselineFrames", BaselineFrames }, { "feedbackFrames", FeedbackFrames }, { "dismissedFrames", DismissedFrames },
+                { "metricsAvailable", metricsAvailable }, { "maeFailureMask", maeFailureMask }, { "closeFailureMask", closeFailureMask },
+                { "closeCells", (int[])closeCells.Clone() }
+            };
+            Invalidate(now);
+        }
+
+        private static string RejectionCode(string code)
+        {
+            switch (code)
+            {
+                case "arm-reference-ineligible":
+                case "frame-invalid-current": case "frame-invalid-reference":
+                case "frame-preclick-mae": case "frame-preclick-close": case "frame-preclick-mae-close":
+                case "frame-hold-timeout": case "frame-pending-time-backward": case "frame-pending-timeout":
+                case "pointer-not-game": case "pointer-column-invalid":
+                case "pointer-invalid-current": case "pointer-invalid-reference":
+                case "pointer-panel-mae": case "pointer-panel-close": case "pointer-panel-mae-close":
+                case "pointer-down-pending": case "pointer-down-not-ready": case "pointer-down-missing-frame": case "pointer-down-stale-frame":
+                case "pointer-up-column-mismatch": case "pointer-up-hold-timeout": case "pointer-up-time-backward": return code;
+                default: return "decision-invalid";
+            }
+        }
+
+        private static Dictionary<string, object> CopyReject(Dictionary<string, object> value)
+        {
+            var result = new Dictionary<string, object>(value);
+            result["closeCells"] = ((int[])value["closeCells"]).Clone();
+            return result;
+        }
+
+        // Size-bound fixture only. Each diagnostic field is filled to its
+        // documented range; this is not claimed to be a possible game state.
+        internal void PrepareMaximumDiagnosticFixture()
+        {
+            referenceCapturedAt = pressedAt = readySince = 1;
+            lastEdgeColumn = pressedColumn = 2;
+            lastEdgeDown = true; metricsAvailable = true;
+            maeFailureMask = closeFailureMask = 7;
+            closeCells = new[] { 64, 64, 64 };
+            frameGapMs = 2500;
+            BaselineFrames = FeedbackFrames = DismissedFrames = 1000;
+            Ready = true; Pending = false;
+            Reject("frame-pending-time-backward", 1000000);
+            invalidations = 1000000; invalidatedAt = witnessCapture = acceptedCapture = 1;
+            witnessIdentity = "synthetic-private-identity"; witnessState = "before-settle-fence";
+            lastRejectAt = 1;
+            lastReadyMs = longestReadyMs = 60000;
         }
 
         private static bool Valid(int[][] values)
@@ -714,18 +1045,16 @@ namespace HexGuide.Desktop
             }
             return true;
         }
-        private static bool PanelMatches(int[][] current, int[][] baseline)
-        {
-            for (int index = 0; index < 3; index++)
-                if (Difference(current[index], baseline[index]) > 10 || CloseFraction(current[index], baseline[index]) < .78) return false;
-            return true;
-        }
         private static int[][] Clone(int[][] source) { return new[] { (int[])source[0].Clone(), (int[])source[1].Clone(), (int[])source[2].Clone() }; }
         private static double Difference(int[] left, int[] right)
         {
             double sum = 0; for (int index = 0; index < 192; index++) sum += Math.Abs(left[index] - right[index]); return sum / 192;
         }
         private static double CloseFraction(int[] left, int[] right)
+        {
+            return CloseCount(left, right) / 64.0;
+        }
+        private static int CloseCount(int[] left, int[] right)
         {
             int close = 0;
             for (int cell = 0; cell < 64; cell++)
@@ -734,7 +1063,7 @@ namespace HexGuide.Desktop
                 double delta = (Math.Abs(left[offset] - right[offset]) + Math.Abs(left[offset + 1] - right[offset + 1]) + Math.Abs(left[offset + 2] - right[offset + 2])) / 3.0;
                 if (delta <= 12) close++;
             }
-            return close / 64.0;
+            return close;
         }
         private static bool UniqueFeedback(int[][] current, int[][] before, int selected)
         {
@@ -760,6 +1089,91 @@ namespace HexGuide.Desktop
                 if (change > 0) positive += change;
             }
             return brighter >= 4 && positive / 64 >= 3.5;
+        }
+
+        private static int ValidateDecisionDiagnosticFixtures()
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool pass, string message) { if (!pass) throw new InvalidOperationException(message); checks++; };
+            Func<int, int[][]> flat = delegate(int value) {
+                var rows = new[] { new int[192], new int[192], new int[192] };
+                foreach (var row in rows) for (int i = 0; i < row.Length; i++) row[i] = value;
+                return rows;
+            };
+            int[][] baseline = flat(25), bad = new[] { new int[1], new int[192], new int[192] };
+            Func<ScreenSelectionDecision> ready = delegate {
+                var state = new ScreenSelectionDecision(); state.Arm(1000); state.Frame(baseline, baseline, 1100); state.Frame(baseline, baseline, 1170); return state;
+            };
+            Action<ScreenSelectionDecision, string> rejected = delegate(ScreenSelectionDecision state, string code) {
+                var failure = ModelValue.Object(state.DiagnosticState(5000), "lastReject");
+                check(state.Invalid && ModelValue.Text(failure, "code") == code, "Decision rejection did not retain its exact fixed branch: " + code);
+            };
+            var maeImage = flat(25);
+            for (int cell = 0; cell < 5; cell++) for (int channel = 0; channel < 3; channel++) maeImage[0][cell * 3 + channel] = 185;
+            var mae = ready(); mae.Frame(maeImage, baseline, 1250); rejected(mae, "frame-preclick-mae");
+            var maeFailure = ModelValue.Object(mae.DiagnosticState(1250), "lastReject");
+            check((int)maeFailure["maeFailureMask"] == 1 && (int)maeFailure["closeFailureMask"] == 0
+                && ((int[])maeFailure["closeCells"])[0] == 59 && Convert.ToInt64(maeFailure["referenceAgeMs"]) == 250
+                && Convert.ToInt64(maeFailure["readyAgeMs"]) == 80 && !(bool)maeFailure["pressed"],
+                "MAE-only failure did not retain bounded card counts and the actual reference/ready ages.");
+            mae.RefreshReference(1300);
+            check(mae.Invalid && ModelValue.Text(ModelValue.Object(mae.DiagnosticState(1350), "lastReject"), "code") == "frame-preclick-mae",
+                "A reference update cleared a previous visual error.");
+            ((int[])maeFailure["closeCells"])[0] = 0;
+            mae.Reset(1400); mae.ConsiderCapture(3300, "same-private-context"); mae.ConsiderCapture(3700, "same-private-context");
+            mae.Arm(3700, 3800); mae.Frame(baseline, baseline, 3900);
+            var retained = ModelValue.Object(mae.DiagnosticState(3900), "lastReject");
+            check(((int[])retained["closeCells"])[0] == 59 && Convert.ToInt64(retained["referenceAgeMs"]) == 250
+                && ModelValue.Text(retained, "code") == "frame-preclick-mae",
+                "Reset, a later valid frame, or mutation of an exported snapshot changed the frozen failure.");
+
+            var closeImage = flat(25);
+            var bothImage = flat(25);
+            for (int cell = 0; cell < 15; cell++) for (int channel = 0; channel < 3; channel++) closeImage[0][cell * 3 + channel] = 38;
+            for (int cell = 0; cell < 16; cell++) for (int channel = 0; channel < 3; channel++) bothImage[0][cell * 3 + channel] = 105;
+            var close = ready(); close.Frame(closeImage, baseline, 1250); rejected(close, "frame-preclick-close");
+            var both = ready(); both.Frame(bothImage, baseline, 1250); rejected(both, "frame-preclick-mae-close");
+            var badCurrent = ready(); badCurrent.Frame(bad, baseline, 1250); rejected(badCurrent, "frame-invalid-current");
+            var badReference = ready(); badReference.Frame(baseline, bad, 1250); rejected(badReference, "frame-invalid-reference");
+            check(!(bool)ModelValue.Object(badReference.DiagnosticState(1300), "lastReject")["metricsAvailable"],
+                "Malformed visual data reused metrics from an older valid frame.");
+            var held = ready(); held.Pointer(true, 1, true, 1200, baseline, baseline); held.Frame(baseline, baseline, 2801); rejected(held, "frame-hold-timeout");
+            var holdFailure = ModelValue.Object(held.DiagnosticState(2900), "lastReject");
+            check((bool)holdFailure["pressed"] && (bool)holdFailure["edgeDown"] && (int)holdFailure["edgeColumn"] == 1
+                && Convert.ToInt64(holdFailure["holdAgeMs"]) == 1601, "A held-button rejection lost its actual edge state.");
+            var backward = ready(); backward.Pointer(true, 1, true, 1200, baseline, baseline); backward.Pointer(false, 1, true, 1250, baseline, baseline);
+            backward.Frame(baseline, baseline, 1249); rejected(backward, "frame-pending-time-backward");
+            var timeout = ready(); timeout.Pointer(true, 1, true, 1200, baseline, baseline); timeout.Pointer(false, 1, true, 1250, baseline, baseline);
+            timeout.Frame(baseline, baseline, 3751); rejected(timeout, "frame-pending-timeout");
+            check(!(bool)ModelValue.Object(timeout.DiagnosticState(3800), "lastReject")["pressed"], "Released mouse input was still reported as held during pending feedback.");
+
+            var notGame = ready(); notGame.Pointer(true, 1, false, 1200, baseline, baseline); rejected(notGame, "pointer-not-game");
+            var wrongColumn = ready(); wrongColumn.Pointer(true, 99, true, 1200, baseline, baseline); rejected(wrongColumn, "pointer-column-invalid");
+            check((int)ModelValue.Object(wrongColumn.DiagnosticState(1300), "lastReject")["edgeColumn"] == -1, "A diagnostic column escaped its fixed range.");
+            var pointerCurrent = ready(); pointerCurrent.Pointer(true, 1, true, 1200, bad, baseline); rejected(pointerCurrent, "pointer-invalid-current");
+            var pointerReference = ready(); pointerReference.Pointer(true, 1, true, 1200, baseline, bad); rejected(pointerReference, "pointer-invalid-reference");
+            var pointerMae = ready(); pointerMae.Pointer(true, 1, true, 1200, maeImage, baseline); rejected(pointerMae, "pointer-panel-mae");
+            var pointerClose = ready(); pointerClose.Pointer(true, 1, true, 1200, closeImage, baseline); rejected(pointerClose, "pointer-panel-close");
+            var pointerBoth = ready(); pointerBoth.Pointer(true, 1, true, 1200, bothImage, baseline); rejected(pointerBoth, "pointer-panel-mae-close");
+            var pendingDown = ready(); pendingDown.Pointer(true, 1, true, 1200, baseline, baseline); pendingDown.Pointer(false, 1, true, 1250, baseline, baseline);
+            pendingDown.Pointer(true, 1, true, 1300, baseline, baseline); rejected(pendingDown, "pointer-down-pending");
+            var early = new ScreenSelectionDecision(); early.Arm(1000); early.Frame(baseline, baseline, 1100); early.Pointer(true, 1, true, 1150, baseline, baseline); rejected(early, "pointer-down-not-ready");
+            var missing = ready(); missing.preClick = null; missing.Pointer(true, 1, true, 1200, baseline, baseline); rejected(missing, "pointer-down-missing-frame");
+            var stale = ready(); stale.Pointer(true, 1, true, 1400, baseline, baseline); rejected(stale, "pointer-down-stale-frame");
+            var crossed = ready(); crossed.Pointer(true, 0, true, 1200, baseline, baseline); crossed.Pointer(false, 1, true, 1250, baseline, baseline); rejected(crossed, "pointer-up-column-mismatch");
+            var longUp = ready(); longUp.Pointer(true, 1, true, 1200, baseline, baseline); longUp.Pointer(false, 1, true, 2701, baseline, baseline); rejected(longUp, "pointer-up-hold-timeout");
+            var backwardsUp = ready(); backwardsUp.Pointer(true, 1, true, 1200, baseline, baseline); backwardsUp.Pointer(false, 1, true, 1200, baseline, baseline); rejected(backwardsUp, "pointer-up-time-backward");
+
+            var duration = ready(); duration.RefreshReference(1150);
+            check(duration.Ready && Convert.ToInt64(duration.DiagnosticState(1300)["readyAgeMs"]) == 130, "Updating the reference restarted the continuous ready duration.");
+            duration.Reset(1400);
+            check(Convert.ToInt64(duration.DiagnosticState(1500)["lastReadyMs"]) == 230, "A reset lost the completed ready interval.");
+            duration.Arm(1500, 1500); duration.Frame(baseline, baseline, 1600); duration.Frame(baseline, baseline, 1670);
+            duration.Frame(baseline, baseline, 2050); duration.Pointer(true, 1, true, 2100, baseline, baseline);
+            check(Convert.ToInt64(duration.DiagnosticState(2200)["longestReadyMs"]) == 430, "Ready intervals were added together or did not end at mouse-down.");
+            check(!retained.ContainsKey("delta") && !retained.ContainsKey("signature") && !retained.ContainsKey("ids") && !retained.ContainsKey("reference"),
+                "A rejection snapshot exposed image or identity data.");
+            return checks;
         }
 
         internal static int ValidateFixtures()
@@ -863,7 +1277,8 @@ namespace HexGuide.Desktop
                 { "metadataStatus", "untrusted-sensitive-text" }, { "captureAgeMs", long.MaxValue },
                 { "lastScanAgeMs", -2L }, { "backendArmed", "true" }, { "ids", new[] { "secret-id" } }
             });
-            check(safeBackend.Count == 4 && (string)safeBackend["metadataStatus"] == "not-scanned"
+            check(safeBackend.Count == 5 && (string)safeBackend["metadataStatus"] == "not-scanned"
+                && (string)safeBackend["scanCode"] == "not-scanned"
                 && Convert.ToInt64(safeBackend["captureAgeMs"]) == 60000 && safeBackend["lastScanAgeMs"] == null
                 && !(bool)safeBackend["backendArmed"] && !safeBackend.ContainsKey("ids"),
                 "Backend diagnostics copied unknown text, identity, unbounded ages, or nonboolean values.");
@@ -930,7 +1345,7 @@ namespace HexGuide.Desktop
                 check(inFlight.Complete, "Preserving a pending observation lost the subsequent animation/disappearance sequence.");
             }
             check(!ScreenSelectionObservation.TryRead(metadata, 32000, out parsed), "Expired synthetic metadata was accepted.");
-            return checks;
+            return checks + ValidateDecisionDiagnosticFixtures();
         }
     }
 }

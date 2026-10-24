@@ -3,6 +3,7 @@ import path from 'node:path';
 import {enrichData, recommend} from '../dist/engine.js';
 import {buildLivePlan} from '../dist/adaptive.js';
 import {SelectionObserver, SelectionValidationError, SelectionConflictError, createOfferToken, sanitizeSelectionCapture} from './selection.mjs';
+import {OCR_SCAN_CODES, sanitizeScanCode} from './scan-diagnostics.mjs';
 
 const ROUTES = new Set(['auto', 'attack', 'spell', 'tank', 'support', 'crit']);
 const END_PHASES = new Set(['ChampSelect', 'Lobby', 'Matchmaking', 'ReadyCheck', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
@@ -18,7 +19,7 @@ export class SessionConflictError extends Error {}
 
 // Only machine-readable diagnostics may leave the OCR wrapper. Never retain
 // raw screen text, player names, paths or frame IDs in the sidebar model.
-const OCR_CODES = new Set(['title-layout-confirmed', 'capture-size-invalid', 'ocr-no-text', 'title-name-unmatched', 'title-layout-incomplete', 'title-layout-ambiguous', 'game-not-foreground', 'foreground-changed', 'window-bounds-unavailable', 'window-size-unsupported', 'ocr-language-missing', 'ocr-engine-unavailable', 'ocr-passes-incomplete', 'ocr-unavailable', 'scan-loop-failed', ...['capture', 'window-bounds', 'ocr-language', 'ocr-engine', 'resize', 'encode', 'stream-write', 'decode', 'software-bitmap', 'recognize', 'result'].map(stage => `ocr-${stage}-failed`)]);
+const OCR_CODES = new Set([...OCR_SCAN_CODES, 'scan-loop-failed']);
 function publicOcrDetails(raw) {
   const details = {};
   if (OCR_CODES.has(raw?.code)) details.code = raw.code;
@@ -45,7 +46,7 @@ export class BackgroundSidebar {
     this.offerToken = null;
     this.consumedOfferKey = null;
     this.selectionObserver = new SelectionObserver({now});
-    this.selectionAttempt = {metadataStatus:'not-scanned', capturedAt:null, completedAt:null};
+    this.selectionAttempt = {metadataStatus:'not-scanned', scanCode:'not-scanned', capturedAt:null, completedAt:null};
     this.offerTime = 0;
     this.lastScan = -Infinity;
     this.generation = 0;
@@ -166,22 +167,24 @@ export class BackgroundSidebar {
   selectionEligible(live) { return this.ocr.enabled && live.phase === 'InProgress' && live.stage !== 'loading' && !(live.mode?.known && !live.mode.isMayhem); }
   getSelectionObservation() { const live = this.observe(); return this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live)); }
 
-  recordSelectionAttempt(raw, complete, live, contextCurrent = true) {
+  recordSelectionAttempt(raw, complete, live, contextCurrent = true, rejectionCode) {
     const capture = sanitizeSelectionCapture(raw?.selectionCapture);
+    let scanCode = sanitizeScanCode(rejectionCode ?? raw?.code, complete ? 'title-layout-confirmed' : 'ocr-unavailable');
     let metadataStatus = METADATA_STATUSES.has(raw?.selectionMetadataStatus) ? raw.selectionMetadataStatus
       : !complete ? 'title-incomplete' : raw?.selectionCapture == null ? 'missing' : capture ? 'accepted' : 'shape-invalid';
-    if (!contextCurrent) metadataStatus = 'context-ineligible';
+    if (!contextCurrent) { metadataStatus = 'context-ineligible'; scanCode = sanitizeScanCode(rejectionCode, 'scan-context-ineligible'); }
     else if (metadataStatus === 'accepted') {
-      if (!complete || !this.selectionEligible(live)) metadataStatus = 'context-ineligible';
+      if (!complete || !this.selectionEligible(live)) { metadataStatus = 'context-ineligible'; if (!rejectionCode) scanCode = 'scan-context-ineligible'; }
       else if (!capture) metadataStatus = 'shape-invalid';
       else if (capture.capturedAt <= this.selectionObserver.invalidatedAt || capture.capturedAt > this.now() + 1000
-        || this.now() - capture.capturedAt > this.selectionObserver.maxAge) metadataStatus = 'stale';
+        || this.now() - capture.capturedAt > this.selectionObserver.maxAge) { metadataStatus = 'stale'; scanCode = 'scan-capture-stale'; }
     }
-    this.selectionAttempt = {metadataStatus, capturedAt:capture?.capturedAt ?? null, completedAt:this.now()};
+    this.selectionAttempt = {metadataStatus, scanCode, capturedAt:capture?.capturedAt ?? null, completedAt:this.now()};
   }
 
   selectionDiagnostics(selection) {
     return {metadataStatus:this.selectionAttempt.metadataStatus,
+      scanCode:this.selectionAttempt.scanCode,
       captureAgeMs:diagnosticAge(this.selectionAttempt.capturedAt, this.now()),
       backendArmed:selection.status === 'armed',
       lastScanAgeMs:diagnosticAge(this.selectionAttempt.completedAt, this.now())};
@@ -280,17 +283,21 @@ export class BackgroundSidebar {
     this.pending = (async () => {
       let raw;
       try { raw = this.scanner ? await this.scanner() : null; }
-      catch { /* Local capture failure contains no public diagnostic details. */ }
+      catch { raw = {code:'scan-execution-failed'}; }
       const current = this.observe();
       if (generation !== this.generation || current.phase !== 'InProgress' || current.stage === 'loading') {
-        this.recordSelectionAttempt(raw, false, current, false);
+        this.recordSelectionAttempt(raw, false, current, false, 'scan-context-changed');
         this.selectionObserver.invalidate(); return {status:'waiting', message:'本局已变化，请等待新一轮三选一卡片。', proposals:[]};
       }
       const status = ['recognized', 'waiting', 'unavailable'].includes(raw?.status) ? raw.status : 'unavailable';
       const proposals = (Array.isArray(raw?.proposals) ? raw.proposals : []).filter(proposal => this.augments.has(proposal?.id)).map(proposal => ({id:proposal.id, name:this.augments.get(proposal.id).name, confidence:'exact'}));
-      const complete = status === 'recognized' && proposals.length === 3 && new Set(proposals.map(proposal => proposal.id)).size === 3 && proposals.every(proposal => !this.session.owned.includes(proposal.id)) && JSON.stringify(proposals.map(proposal => proposal.id)) !== this.consumedOfferKey;
+      const triplet = status === 'recognized' && proposals.length === 3 && new Set(proposals.map(proposal => proposal.id)).size === 3;
+      const alreadyOwned = proposals.some(proposal => this.session.owned.includes(proposal.id));
+      const consumed = JSON.stringify(proposals.map(proposal => proposal.id)) === this.consumedOfferKey;
+      const complete = triplet && !alreadyOwned && !consumed;
+      const rejectionCode = status !== 'recognized' ? undefined : !triplet ? 'scan-proposals-incomplete' : alreadyOwned ? 'scan-offer-owned' : consumed ? 'scan-offer-consumed' : undefined;
       const scannedAt = new Date(this.now()).toISOString();
-      this.recordSelectionAttempt(raw, complete, current);
+      this.recordSelectionAttempt(raw, complete, current, true, rejectionCode);
       if (complete) {
         const changedOffers = JSON.stringify(this.offers.map(offer => offer.id)) !== JSON.stringify(proposals.map(offer => offer.id));
         if (changedOffers || !this.offerToken) this.offerToken = createOfferToken();
@@ -329,7 +336,7 @@ export class BackgroundSidebar {
     const plan = buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], champions:[...this.champions.values()], itemsCatalog:this.itemsCatalog, now:this.now()});
     const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live));
     return {
-      version:'1.10.1', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      version:'1.10.2', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
       gameEpoch:this.gameEpoch, selection, selectionDiagnostics:this.selectionDiagnostics(selection),
       mode:live.mode || {queueId:null, isMayhem:false, known:false},
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
@@ -354,6 +361,7 @@ export class BackgroundSidebar {
       try { await this.pollOnce(); }
       catch {
         this.selectionObserver.invalidate();
+        this.recordSelectionAttempt({code:'scan-loop-failed'}, false, null);
         if (!this.offers.length) Object.assign(this.ocr, {status:'unavailable', code:'scan-loop-failed', message:'本次自动识别暂未完成，稍后会自动重试。', observedAt:new Date(this.now()).toISOString()});
       } finally {
         if (!this.stopped) { this.timer = setTimeout(tick, 1000); this.timer.unref?.(); }

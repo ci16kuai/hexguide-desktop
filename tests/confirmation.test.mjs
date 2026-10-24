@@ -134,6 +134,7 @@ test('a transient poll exception does not permanently stop background recognitio
   sidebar.start();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(sidebar.getModel().ocr.code,'scan-loop-failed');
+  assert.equal(sidebar.getModel().selectionDiagnostics.scanCode,'scan-loop-failed');
   await Promise.race([resumed,new Promise((_,reject) => { const timeout=setTimeout(() => reject(new Error('Recognition loop failed to resume')),2500);timeout.unref(); })]);
   assert.equal(count,2);
 });

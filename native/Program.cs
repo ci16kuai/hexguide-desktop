@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.10.1.0")]
-[assembly: AssemblyFileVersion("1.10.1.0")]
-[assembly: AssemblyInformationalVersion("1.10.1")]
+[assembly: AssemblyVersion("1.10.2.0")]
+[assembly: AssemblyFileVersion("1.10.2.0")]
+[assembly: AssemblyInformationalVersion("1.10.2")]
 
 namespace HexGuide.Desktop
 {
@@ -31,6 +31,23 @@ namespace HexGuide.Desktop
         [STAThread]
         private static void Main(string[] args)
         {
+            // Pure fixtures only: no form, message loop, backend, game capture,
+            // hotkey registration, or reads of the user's installed settings.
+            if (args.Length == 1 && args[0] == "--selection-self-test")
+            {
+                Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
+                try
+                {
+                    int checks = ScreenSelectionWatcher.ValidateFixtures() + MainWindow.ValidateSelectionDiagnosticFixtures();
+                    Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
+                        { "version", "1.10.2" }, { "checks", checks },
+                        { "nativeDiagnosticMaxBytes", ScreenSelectionWatcher.LargestDiagnosticFixtureBytes },
+                        { "mode", "offline-no-ui" }, { "liveGameVerified", false }
+                    }));
+                }
+                catch (Exception error) { Console.Error.WriteLine(error.Message); Environment.ExitCode = 1; }
+                return;
+            }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             // Off-screen product-view verification: no MainWindow, tray, backend, hotkey or game action.
@@ -177,7 +194,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.10.1 · 我的这一局";
+            Text = "海克斯指南 1.10.2 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -582,13 +599,39 @@ namespace HexGuide.Desktop
         internal static string SelectionDiagnosticsJson(ScreenSelectionWatcher watcher, Dictionary<string, object> model, DateTime now)
         {
             var snapshot = new Dictionary<string, object> {
-                { "version", "1.10.1" }, { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
+                { "version", "1.10.2" }, { "schemaVersion", 2 },
+                { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
                 { "native", watcher.Diagnostics() },
                 { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
             };
             string json = new JavaScriptSerializer().Serialize(snapshot);
             if (Encoding.UTF8.GetByteCount(json) > 4096) throw new InvalidOperationException("Selection diagnostic snapshot exceeds its fixed bound.");
             return json;
+        }
+
+        internal static int ValidateSelectionDiagnosticFixtures()
+        {
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                watcher.RecordCaptureResult(false, "card-occluded", 1);
+                var privateBackend = new Dictionary<string, object> {
+                    { "selectionDiagnostics", new Dictionary<string, object> {
+                        { "metadataStatus", "PRIVATE-MARKER" }, { "captureAgeMs", long.MaxValue },
+                        { "lastScanAgeMs", 1 }, { "backendArmed", true }, { "ids", new[] { "PRIVATE-MARKER" } },
+                        { "scanCode", "PRIVATE-MARKER" },
+                        { "capture", new Dictionary<string, object> { { "windowHandle", "PRIVATE-MARKER" } } }
+                    } }, { "name", "PRIVATE-MARKER" }
+                };
+                string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+                var snapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
+                if (snapshot.Count != 5 || Encoding.UTF8.GetByteCount(json) > 4096
+                    || ModelValue.Text(snapshot, "version") != "1.10.2" || ModelValue.Text(snapshot, "schemaVersion") != "2")
+                    throw new InvalidOperationException("The persisted selection diagnostic snapshot exceeded its schema or byte bound.");
+                if (json.Contains("PRIVATE-MARKER") || json.Contains("\"ids\"") || json.Contains("windowHandle")
+                    || json.Contains("\"signature\"") || json.Contains("\"signatures\"") || json.Contains("\"delta\""))
+                    throw new InvalidOperationException("Untrusted or private metadata entered the selection diagnostic snapshot.");
+                return 2;
+            }
         }
 
         private async Task ToggleScanningAsync()
@@ -1569,27 +1612,7 @@ namespace HexGuide.Desktop
                 int visibilityChecks = SidebarVisibilityState.ValidateFixtures();
                 int shortcutChecks = SidebarShortcut.ValidateFixtures();
                 int selectionChecks = ScreenSelectionWatcher.ValidateFixtures();
-                using (var diagnosticWatcher = new ScreenSelectionWatcher())
-                {
-                    diagnosticWatcher.RecordCaptureResult(false, "card-occluded", 1);
-                    var privateBackend = new Dictionary<string, object> {
-                        { "selectionDiagnostics", new Dictionary<string, object> {
-                            { "metadataStatus", "PRIVATE-MARKER" }, { "captureAgeMs", long.MaxValue },
-                            { "lastScanAgeMs", 1 }, { "backendArmed", true }, { "ids", new[] { "PRIVATE-MARKER" } },
-                            { "capture", new Dictionary<string, object> { { "windowHandle", "PRIVATE-MARKER" } } }
-                        } }, { "name", "PRIVATE-MARKER" }
-                    };
-                    string diagnosticJson = MainWindow.SelectionDiagnosticsJson(diagnosticWatcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
-                    var diagnosticSnapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(diagnosticJson);
-                    Require(diagnosticSnapshot.Count == 4 && Encoding.UTF8.GetByteCount(diagnosticJson) <= 4096
-                        && ModelValue.Text(diagnosticSnapshot, "version") == "1.10.1",
-                        "The persisted selection diagnostic snapshot exceeded its fixed schema or byte bound.");
-                    selectionChecks++;
-                    Require(!diagnosticJson.Contains("PRIVATE-MARKER") && !diagnosticJson.Contains("\"ids\"")
-                        && !diagnosticJson.Contains("windowHandle") && !diagnosticJson.Contains("signature") && !diagnosticJson.Contains("\"delta\""),
-                        "The persisted selection diagnostic snapshot contained candidate, window, pixel, or untrusted backend fields.");
-                    selectionChecks++;
-                }
+                selectionChecks += MainWindow.ValidateSelectionDiagnosticFixtures();
                 string iconPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-augment-icons.png");
                 int augmentIconChecks = ValidateAugmentIconFixtures(iconPreviewPath);
                 int defaultWidth = window.Width, defaultHeight = window.Height;
