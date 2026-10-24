@@ -130,6 +130,19 @@ test('OCR candidates are not confirmed selections; empty frames retain three car
   assert.deepEqual(sidebar.getModel().ocr.proposals,[]);
 });
 
+test('mixed-quality offers and confirmed augments retain their own catalog rarity independent of rank', async () => {
+  const mixed = ['big_shot', current.find(a => a.rarity === 'silver').id, 'its_critical'];
+  const {sidebar} = setup({scanner:async () => ({status:'recognized', proposals:mixed.map(id => ({id, confidence:'exact'}))})});
+  await sidebar.scan();
+  const model = sidebar.getModel();
+  assert.deepEqual(model.offers.map(a => a.id),mixed);
+  assert.deepEqual(model.offers.map(a => a.rarity),['prismatic','silver','gold']);
+  assert.deepEqual(model.offers.map(a => a.name),mixed.map(id => data.augments.find(a => a.id === id).name));
+  assert.deepEqual([...model.offers.map(a => a.rank)].sort(),[1,2,3]);
+  await sidebar.setSession({owned:mixed, route:'auto'});
+  assert.deepEqual(sidebar.getModel().owned.map(a => a.rarity),['prismatic','silver','gold']);
+});
+
 test('manual and background scan requests share one capture and ignore late results from an ended game', async () => {
   let calls = 0;
   let finish;
@@ -199,6 +212,7 @@ test('confirming a selected card dismisses old offers and recommendations reflec
   assert.deepEqual(model.offers,[]);
   assert.deepEqual(model.owned.map(a => a.id),[ids[0]]);
   assert.equal(typeof model.owned[0].icon,'string');
+  assert.equal(model.owned[0].rarity,current.find(a => a.id === ids[0]).rarity);
   assert.equal(typeof model.owned[0].summary,'string');
   assert.doesNotMatch(model.owned[0].summary,/<[^>]*>/);
   assert.equal(model.route,'spell');

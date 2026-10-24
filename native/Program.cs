@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.9.5.0")]
-[assembly: AssemblyFileVersion("1.9.5.0")]
-[assembly: AssemblyInformationalVersion("1.9.5")]
+[assembly: AssemblyVersion("1.9.6.0")]
+[assembly: AssemblyFileVersion("1.9.6.0")]
+[assembly: AssemblyInformationalVersion("1.9.6")]
 
 namespace HexGuide.Desktop
 {
@@ -62,8 +62,8 @@ namespace HexGuide.Desktop
         }
     }
 
-    // Other foreground apps temporarily hide the panel without changing its open
-    // intent. Returning to the game or main window restores that same intent.
+    // Other apps hide the panel only while the game is fully covered/minimized.
+    // Occlusion never changes the user's open/closed intent.
     internal sealed class SidebarVisibilityState
     {
         internal bool Enabled { get; private set; }
@@ -75,8 +75,12 @@ namespace HexGuide.Desktop
         }
         internal bool ShouldShow(bool gameForeground, bool mainForeground)
         {
-            if (Enabled && gameForeground) automaticOpened = true;
-            return Enabled && (gameForeground || mainForeground) && (Pinned || automaticOpened);
+            return ShouldShow(gameForeground, mainForeground, false);
+        }
+        internal bool ShouldShow(bool gameForeground, bool mainForeground, bool backgroundGameExposed)
+        {
+            if (Enabled && (gameForeground || backgroundGameExposed)) automaticOpened = true;
+            return Enabled && (gameForeground || mainForeground || backgroundGameExposed) && (Pinned || automaticOpened);
         }
         internal bool HideForMainWindow { get { return !(Pinned || automaticOpened); } }
         internal void OpenPinned() { Enabled = true; Pinned = true; }
@@ -127,6 +131,12 @@ namespace HexGuide.Desktop
             hiddenAutomatic.ShouldShow(true, false); hiddenAutomatic.ShouldShow(false, false);
             hiddenAutomatic.Toggle(false);
             check(!hiddenAutomatic.ShouldShow(true, false) && !hiddenAutomatic.ShouldShow(false, true), "Explicitly toggling a temporarily hidden automatic panel did not close its open intent.");
+            var background = new SidebarVisibilityState(false);
+            check(background.ShouldShow(false, false, true), "A visible background game did not preserve automatic sidebar display.");
+            check(!background.ShouldShow(false, false, false) && background.Enabled, "A fully covered game did not temporarily hide the sidebar.");
+            check(background.ShouldShow(false, false, true), "Exposing the background game did not restore the open sidebar.");
+            background.Close();
+            check(!background.ShouldShow(false, false, true) && !background.ShouldShow(true, false, false), "Background exposure reopened a manually closed sidebar.");
             return checks;
         }
     }
@@ -157,13 +167,14 @@ namespace HexGuide.Desktop
         private string sessionToken;
         private IntPtr lastGame;
         private DateTime nextFetch = DateTime.MinValue;
+        private DateTime nextBackgroundGameLookup = DateTime.MinValue;
 
         internal MainWindow(string dataDirectory, bool background, bool preview)
         {
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.9.5 · 我的这一局";
+            Text = "海克斯指南 1.9.6 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -358,7 +369,17 @@ namespace HexGuide.Desktop
             bool gameForeground = GameWindow.IsVerifiedGame(foreground);
             bool mainForeground = foreground != IntPtr.Zero && IsHandleCreated && foreground == Handle;
             if (gameForeground) lastGame = foreground;
-            desiredSidebarVisible = sidebarVisibility.ShouldShow(gameForeground, mainForeground);
+            bool backgroundGameExposed = false;
+            if (!gameForeground && !mainForeground && sidebarVisibility.Enabled)
+            {
+                if (!GameWindow.IsVerifiedGame(lastGame) && DateTime.UtcNow >= nextBackgroundGameLookup)
+                {
+                    lastGame = GameWindow.FindGame(IntPtr.Zero);
+                    nextBackgroundGameLookup = DateTime.UtcNow.AddSeconds(2);
+                }
+                if (lastGame != IntPtr.Zero) backgroundGameExposed = GameWindow.HasExposedGameArea(lastGame, sidebar.IsHandleCreated ? sidebar.Handle : IntPtr.Zero);
+            }
+            desiredSidebarVisible = sidebarVisibility.ShouldShow(gameForeground, mainForeground, backgroundGameExposed);
             if (!desiredSidebarVisible) { if (sidebar.Visible) sidebar.Hide(); UpdateSidebarHint(false); return; }
             IntPtr target = gameForeground ? foreground : lastGame;
             Rectangle area = GameWindow.PlacementArea(target);
@@ -965,7 +986,7 @@ namespace HexGuide.Desktop
             if (section == "offers")
             {
                 int count = Math.Min(3, ModelValue.Array(Model, "offers").Count);
-                return S(27) + S(30) + (count == 0 ? S(59) : S(84) + count * S(35) + S(8));
+                return S(27) + S(34) + (count == 0 ? S(59) : S(123) + count * S(35) + S(8));
             }
             if (!buildExpanded) return S(126);
             var plan = ModelValue.Object(Model, "plan");
@@ -1058,8 +1079,56 @@ namespace HexGuide.Desktop
         private void DrawAugmentIcon(Graphics g, Dictionary<string, object> augment, Rectangle rectangle)
         {
             DrawBuildIcon(g, ModelValue.Text(augment, "icon"), rectangle);
+            DrawRarityFrame(g, rectangle, ModelValue.Text(augment, "rarity"));
             Rectangle visible = Rectangle.Intersect(viewport, rectangle);
             if (visible.Width > 0 && visible.Height > 0) augmentTargets[visible] = augment;
+        }
+        private void DrawRarityFrame(Graphics g, Rectangle rectangle, string rarity)
+        {
+            int stroke = Math.Max(1, S(2)), inset = Math.Max(1, stroke / 2);
+            Rectangle frame = Rectangle.Inflate(rectangle, -inset, -inset);
+            if (frame.Width < 1 || frame.Height < 1) return;
+            if (rarity == "prismatic")
+            {
+                int midX = frame.Left + frame.Width / 2, midY = frame.Top + frame.Height / 2;
+                using (var violet = new Pen(Color.FromArgb(181, 122, 238), stroke))
+                using (var cyan = new Pen(Color.FromArgb(110, 210, 219), stroke))
+                {
+                    g.DrawLine(violet, frame.Left, frame.Top, midX, frame.Top); g.DrawLine(cyan, midX, frame.Top, frame.Right, frame.Top);
+                    g.DrawLine(cyan, frame.Right, frame.Top, frame.Right, midY); g.DrawLine(violet, frame.Right, midY, frame.Right, frame.Bottom);
+                    g.DrawLine(violet, frame.Right, frame.Bottom, midX, frame.Bottom); g.DrawLine(cyan, midX, frame.Bottom, frame.Left, frame.Bottom);
+                    g.DrawLine(cyan, frame.Left, frame.Bottom, frame.Left, midY); g.DrawLine(violet, frame.Left, midY, frame.Left, frame.Top);
+                }
+                return;
+            }
+            Color color = rarity == "gold" ? Color.FromArgb(216, 181, 101) : rarity == "silver" ? Color.FromArgb(179, 192, 207) : Color.FromArgb(55, 77, 97);
+            using (var pen = new Pen(color, stroke)) g.DrawRectangle(pen, frame);
+        }
+        private Font FitOfferNameFont(Graphics g, string name, Rectangle area)
+        {
+            float minimum = Math.Min(smallFont.SizeInPoints, 6.5F * appearance.Scale / 100F);
+            for (float size = smallFont.SizeInPoints; ; size = Math.Max(minimum, size - 0.25F))
+            {
+                var font = new Font(smallFont.FontFamily, size, smallFont.Style, GraphicsUnit.Point);
+                if (OfferNameFits(g, name, font, area) || size <= minimum) return font;
+                font.Dispose();
+            }
+        }
+        private static bool OfferNameFits(Graphics g, string name, Font font, Rectangle area)
+        {
+            var flags = TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix;
+            Size measured = TextRenderer.MeasureText(g, name, font, new Size(Math.Max(1, area.Width), int.MaxValue), flags);
+            int lineHeight = TextRenderer.MeasureText(g, "中", font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Height;
+            return measured.Height <= Math.Min(area.Height, lineHeight * 2);
+        }
+        private void DrawOfferName(Graphics g, string name, Rectangle area)
+        {
+            using (var font = FitOfferNameFont(g, name, area))
+            {
+                int lineHeight = TextRenderer.MeasureText(g, "中", font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Height;
+                area.Height = Math.Min(area.Height, lineHeight * 2);
+                TextRenderer.DrawText(g, name, font, area, ForeColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
+            }
         }
         private void ClearAugmentHint()
         {
@@ -1135,7 +1204,7 @@ namespace HexGuide.Desktop
         {
             ArrayList offers = ModelValue.Array(Model, "offers");
             Write(g, "三选一参考", normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(27);
-            Write(g, "游戏选好后点图标确认，角标为优先级", smallFont, muted, new Rectangle(x, y, width, S(28))); y += S(30);
+            Write(g, "先在游戏选好，再点确认\n边框表品质，角标为推荐顺序", smallFont, muted, new Rectangle(x, y, width, S(32))); y += S(34);
             if (offers.Count == 0)
             {
                 Write(g, RecognitionSummary(ModelValue.Object(Model, "ocr")), normalFont, muted, new Rectangle(x, y, width, S(30)));
@@ -1143,7 +1212,7 @@ namespace HexGuide.Desktop
             }
             else
             {
-                int index = 0, gap = S(6), cellWidth = Math.Max(1, (width - gap * 2) / 3), cardHeight = S(78);
+                int index = 0, gap = S(6), cellWidth = Math.Max(1, (width - gap * 2) / 3), cardHeight = S(117);
                 foreach (object item in offers)
                 {
                     if (index >= 3) break;
@@ -1152,18 +1221,20 @@ namespace HexGuide.Desktop
                     Rectangle card = new Rectangle(cardX, y, cellWidth, cardHeight);
                     using (var brush = new SolidBrush(Color.FromArgb(23, 36, 48))) g.FillRectangle(brush, card);
                     string rank = ModelValue.Text(offer, "rank");
-                    using (var pen = new Pen(rank == "1" ? Color.FromArgb(216, 181, 101) : Color.FromArgb(55, 77, 97))) g.DrawRectangle(pen, card.Left, card.Top, Math.Max(1, card.Width - 1), Math.Max(1, card.Height - 1));
+                    DrawRarityFrame(g, card, ModelValue.Text(offer, "rarity"));
                     int iconSize = Math.Min(S(44), Math.Max(1, cellWidth - S(12)));
                     Rectangle icon = new Rectangle(cardX + (cellWidth - iconSize) / 2, y + S(6), iconSize, iconSize);
                     DrawAugmentIcon(g, offer, icon);
-                    Write(g, rank, smallFont, accent, new Rectangle(cardX + S(3), y + S(2), S(16), S(18)));
-                    PaintButton(g, new Rectangle(cardX + S(3), y + S(54), Math.Max(1, cellWidth - S(6)), S(21)), "确认");
+                    using (var brush = new SolidBrush(Color.FromArgb(20, 48, 58))) g.FillRectangle(brush, new Rectangle(cardX + S(3), y + S(3), S(17), S(18)));
+                    Write(g, rank, smallFont, accent, new Rectangle(cardX + S(5), y + S(3), S(15), S(18)));
+                    DrawOfferName(g, ModelValue.Text(offer, "name"), new Rectangle(cardX + S(3), y + S(54), Math.Max(1, cellWidth - S(6)), S(33)));
+                    PaintButton(g, new Rectangle(cardX + S(3), y + S(91), Math.Max(1, cellWidth - S(6)), S(21)), "确认");
                     string offerId = ModelValue.Text(offer, "id");
                     Rectangle visibleCard = Rectangle.Intersect(viewport, card);
                     if (visibleCard.Width > 0 && visibleCard.Height > 0 && offerId.Length > 0) offerButtons[visibleCard] = offerId;
                     index++;
                 }
-                y += S(84); index = 0;
+                y += S(123); index = 0;
                 string[] slots = { "左", "中", "右" };
                 foreach (object item in offers)
                 {
@@ -1233,7 +1304,9 @@ namespace HexGuide.Desktop
                 if (!target.Key.Contains(e.Location)) continue;
                 string name = ModelValue.Text(target.Value, "name"), reason = ModelValue.Text(target.Value, "reason");
                 if (reason.Length == 0) reason = ModelValue.Text(target.Value, "summary");
-                hint = name + (reason.Length > 0 ? "\n" + reason : "");
+                string rarity = ModelValue.Text(target.Value, "rarity");
+                string quality = rarity == "silver" ? "白银" : rarity == "gold" ? "黄金" : rarity == "prismatic" ? "棱彩" : "品质待核实";
+                hint = name + " · " + quality + (reason.Length > 0 ? "\n" + reason : "");
                 break;
             }
             if (hint != activeAugmentHint) { activeAugmentHint = hint; augmentHint.SetToolTip(this, hint); }
@@ -1367,9 +1440,15 @@ namespace HexGuide.Desktop
                     var bitmap = new Bitmap(48, 48);
                     using (var graphics = Graphics.FromImage(bitmap)) graphics.Clear(color);
                     window.buildIcons[icon] = bitmap; colors[id] = color;
-                    var augment = new Dictionary<string, object> { { "id", id }, { "icon", icon }, { "name", "示例海克斯名称 " + index }, { "reason", "保留该海克斯的机制与推荐解释。" } };
+                    var augment = new Dictionary<string, object> { { "id", id }, { "icon", icon }, { "name", "示例海克斯名称 " + index }, { "reason", "保留该海克斯的机制与推荐解释。" }, { "rarity", new string[] { "silver", "gold", "prismatic", "" }[index % 4] } };
                     if (index < 12) owned.Add(augment);
-                    else if (index < 15) { augment["rank"] = index == 12 ? 2 : index == 13 ? 1 : 3; offers.Add(augment); }
+                    else if (index < 15)
+                    {
+                        augment["rank"] = index == 12 ? 2 : index == 13 ? 1 : 3;
+                        augment["rarity"] = index == 12 ? "prismatic" : "gold";
+                        augment["name"] = new string[] { "大腕", "升级：贪欲九头蛇", "鼓声暴起 低音轰鸣" }[index - 12];
+                        offers.Add(augment);
+                    }
                     else next.Add(augment);
                 }
                 var fixture = new Dictionary<string, object> {
@@ -1389,6 +1468,19 @@ namespace HexGuide.Desktop
                     check(window.offerButtons.Count == 3, "Three icon cards did not expose three confirmation targets.");
                     var targets = new List<KeyValuePair<Rectangle, string>>(window.offerButtons);
                     targets.Sort(delegate(KeyValuePair<Rectangle, string> first, KeyValuePair<Rectangle, string> second) { return first.Key.Left.CompareTo(second.Key.Left); });
+                    int frameInset = Math.Max(1, window.S(2) / 2);
+                    var frameColors = new List<int[]>();
+                    for (int index = 0; index < targets.Count; index++)
+                    {
+                        Rectangle card = targets[index].Key;
+                        int[] samples = RarityFramePixels(before, card, frameInset); frameColors.Add(samples);
+                        check(samples[0] == (index == 0 ? Color.FromArgb(181, 122, 238) : Color.FromArgb(216, 181, 101)).ToArgb()
+                            && samples[1] == (index == 0 ? Color.FromArgb(110, 210, 219) : Color.FromArgb(216, 181, 101)).ToArgb(), "Candidate borders did not follow the first-prismatic, second-gold, third-gold qualities.");
+                        Rectangle nameArea = new Rectangle(card.Left + window.S(3), card.Top + window.S(54), Math.Max(1, card.Width - window.S(6)), window.S(33));
+                        string name = ModelValue.Text(offers[index] as Dictionary<string, object>, "name");
+                        using (var graphics = Graphics.FromImage(before)) using (var font = window.FitOfferNameFont(graphics, name, nameArea))
+                            check(OfferNameFits(graphics, name, font, nameArea), "A common Chinese augment name could not fit two lines at narrow width and 130% scale.");
+                    }
                     string selected = "";
                     Action<string> confirm = delegate(string id) { selected = id; };
                     window.OfferConfirmed += confirm;
@@ -1411,30 +1503,57 @@ namespace HexGuide.Desktop
                         string id = ModelValue.Text(target.Value, "id");
                         check(before.GetPixel(area.Left + area.Width / 2, area.Top + area.Height / 2).ToArgb() == colors[id].ToArgb(), "Augment icon art did not match its identity.");
                     }
-                    RenameFixtureAugments(owned, offers, next);
+                    (offers[0] as Dictionary<string, object>)["rank"] = 1;
+                    (offers[1] as Dictionary<string, object>)["rank"] = 2;
                     window.Model = fixture;
-                    using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Owned or offered augment names were still drawn by default.");
+                    using (var ranked = RenderFixture(window))
+                    {
+                        for (int index = 0; index < targets.Count; index++)
+                        {
+                            int[] afterRank = RarityFramePixels(ranked, targets[index].Key, frameInset);
+                            check(afterRank[0] == frameColors[index][0] && afterRank[1] == frameColors[index][1], "Changing recommendation rank changed the candidate quality border.");
+                        }
+                    }
+                    (offers[0] as Dictionary<string, object>)["rank"] = 2;
+                    (offers[1] as Dictionary<string, object>)["rank"] = 1;
+                    RenameFixtureAugments(owned, next);
+                    window.Model = fixture;
+                    using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Owned or future augment names were still drawn by default.");
+                    foreach (object offer in offers) (offer as Dictionary<string, object>)["name"] = "候选名称已改变";
+                    window.Model = fixture;
+                    using (var renamed = RenderFixture(window)) check(!EqualFixturePixels(before, renamed), "Candidate augment names were not visible beneath their icons.");
                 }
                 window.ExpandBuild();
                 using (var before = RenderFixture(window))
                 {
                     string expanded = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-expanded.png");
                     before.Save(expanded, System.Drawing.Imaging.ImageFormat.Png);
-                    RenameFixtureAugments(owned, offers, next); window.Model = fixture;
+                    RenameFixtureAugments(owned, next); window.Model = fixture;
                     using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Recently selected or future augment names were still drawn by default.");
                 }
                 window.ScrollTo(window.contentHeight);
                 check(window.offerButtons.Count == 0 && window.augmentTargets.Count == 0, "Scrolling kept stale icon hit targets before repaint.");
                 using (var before = RenderFixture(window))
                 {
-                    RenameFixtureAugments(owned, offers, next); window.Model = fixture;
+                    RenameFixtureAugments(owned, next); window.Model = fixture;
                     using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Scrolled augment labels became visible.");
                     Rectangle scrolledViewport = window.viewport;
                     foreach (var target in window.offerButtons) check(scrolledViewport.Contains(target.Key), "Scrolled confirmation targets escaped the visible viewport.");
                 }
                 check(!window.Visible && window.ShowWithoutActivation && window.activeAugmentHint.Length == 0, "Icon fixtures displayed or activated a real window or tooltip.");
+                using (var palette = new Bitmap(96, 48)) using (var graphics = Graphics.FromImage(palette))
+                {
+                    window.DrawRarityFrame(graphics, new Rectangle(0, 0, 40, 40), "silver");
+                    window.DrawRarityFrame(graphics, new Rectangle(48, 0, 40, 40), "unknown");
+                    check(palette.GetPixel(20, Math.Max(1, window.S(2) / 2)).ToArgb() == Color.FromArgb(179, 192, 207).ToArgb(), "Silver quality did not render a silver border.");
+                    check(palette.GetPixel(68, Math.Max(1, window.S(2) / 2)).ToArgb() == Color.FromArgb(55, 77, 97).ToArgb(), "Unknown quality was incorrectly styled as a known rarity.");
+                }
             }
             return checks;
+        }
+        private static int[] RarityFramePixels(Bitmap bitmap, Rectangle frame, int inset)
+        {
+            return new int[] { bitmap.GetPixel(frame.Left + frame.Width / 4, frame.Top + inset).ToArgb(), bitmap.GetPixel(frame.Left + frame.Width * 3 / 4, frame.Top + inset).ToArgb() };
         }
         private static Bitmap RenderFixture(SidebarWindow window)
         {
@@ -1842,8 +1961,252 @@ namespace HexGuide.Desktop
     internal static class GameWindow
     {
         private delegate bool EnumWindowCallback(IntPtr window, IntPtr parameter);
+        private delegate bool EnumMonitorCallback(IntPtr monitor, IntPtr dc, IntPtr rectangle, IntPtr parameter);
         [StructLayout(LayoutKind.Sequential)] private struct ClientRectangle { internal int Left, Top, Right, Bottom; }
         [StructLayout(LayoutKind.Sequential)] private struct ClientPoint { internal int X, Y; }
+        [StructLayout(LayoutKind.Sequential)] private struct MonitorMetadata
+        {
+            internal int Size;
+            internal ClientRectangle Monitor, Work;
+            internal uint Flags;
+        }
+        private const int RegionError = 0, EmptyRegion = 1, ComplexRegion = 3, RegionAnd = 1, RegionOr = 2, RegionDifference = 4;
+        private const int MaximumCoveringWindows = 256, MaximumRegionBytes = 65536;
+        private const long LayeredStyle = 0x00080000L, RightToLeftStyle = 0x00400000L;
+
+        // Metadata geometry only: no capture, game-memory access, input, window
+        // activation or window movement. Unknown coverage is treated as hidden.
+        // Tiny border/corner remnants do not count as a usable view of the game.
+        internal static bool HasExposedGameArea(IntPtr verifiedGame, IntPtr ignoredSidebar)
+        {
+            IntPtr previousDpi = IntPtr.Zero, remaining = IntPtr.Zero, monitors = IntPtr.Zero;
+            try
+            {
+                if (!IsVerifiedGame(verifiedGame) || !IsWindowVisible(verifiedGame) || IsIconic(verifiedGame)) return false;
+                bool cloaked;
+                if (!TryIsCloaked(verifiedGame, out cloaked) || cloaked) return false;
+                // The application is DPI-unaware. DWM frame bounds are physical
+                // pixels, so use one temporary coordinate context for every API.
+                previousDpi = SetThreadDpiAwarenessContext(new IntPtr(-4));
+                if (previousDpi == IntPtr.Zero) previousDpi = SetThreadDpiAwarenessContext(new IntPtr(-3));
+                if (previousDpi == IntPtr.Zero) return false;
+                ClientRectangle client, windowBounds;
+                var origin = new ClientPoint();
+                if (!GetClientRect(verifiedGame, out client) || !ClientToScreen(verifiedGame, ref origin)
+                    || !GetWindowRect(verifiedGame, out windowBounds)) return false;
+                if ((GetWindowLongPtr(verifiedGame, -20).ToInt64() & RightToLeftStyle) != 0) return false;
+                long right = (long)origin.X + client.Right - client.Left, bottom = (long)origin.Y + client.Bottom - client.Top;
+                if (right > int.MaxValue || bottom > int.MaxValue || right <= origin.X || bottom <= origin.Y) return false;
+                remaining = CreateRectRgn(origin.X, origin.Y, (int)right, (int)bottom);
+                if (remaining == IntPtr.Zero) return false;
+                IntPtr gameShape = WindowCoverageRegion(verifiedGame, windowBounds);
+                if (gameShape == IntPtr.Zero) return false;
+                try { if (CombineRgn(remaining, remaining, gameShape, RegionAnd) <= EmptyRegion) return false; }
+                finally { DeleteObject(gameShape); }
+                monitors = CreateRectRgn(0, 0, 0, 0);
+                if (monitors == IntPtr.Zero) return false;
+                bool monitorFailure = false; int monitorCount = 0;
+                bool enumerated = EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, delegate(IntPtr monitor, IntPtr dc, IntPtr rectangle, IntPtr unused)
+                {
+                    if (++monitorCount > 32) { monitorFailure = true; return false; }
+                    var metadata = new MonitorMetadata { Size = Marshal.SizeOf(typeof(MonitorMetadata)) };
+                    if (!GetMonitorInfo(monitor, ref metadata)) { monitorFailure = true; return false; }
+                    IntPtr work = CreateRectRgn(metadata.Work.Left, metadata.Work.Top, metadata.Work.Right, metadata.Work.Bottom);
+                    if (work == IntPtr.Zero) { monitorFailure = true; return false; }
+                    try { if (CombineRgn(monitors, monitors, work, RegionOr) == RegionError) { monitorFailure = true; return false; } }
+                    finally { DeleteObject(work); }
+                    return true;
+                }, IntPtr.Zero);
+                if (!enumerated || monitorFailure || CombineRgn(remaining, remaining, monitors, RegionAnd) <= EmptyRegion) return false;
+                var visited = new HashSet<IntPtr>();
+                IntPtr above = GetWindow(verifiedGame, 3); // GW_HWNDPREV: nearer the top of Z order.
+                int count = 0;
+                while (above != IntPtr.Zero)
+                {
+                    if (++count > MaximumCoveringWindows || !visited.Add(above) || above == verifiedGame) return false;
+                    IntPtr current = above;
+                    above = GetWindow(current, 3);
+                    if (!IsWindow(current)) return false;
+                    if (current == ignoredSidebar || !IsWindowVisible(current) || IsIconic(current)) continue;
+                    if (!TryIsCloaked(current, out cloaked)) return false;
+                    if (cloaked || IsKnownTranslucent(current)) continue;
+                    ClientRectangle bounds;
+                    if (!GetWindowRect(current, out bounds)) return false;
+                    if (bounds.Right <= bounds.Left || bounds.Bottom <= bounds.Top || !RectInRegion(remaining, ref bounds)) continue;
+                    IntPtr coverage = WindowCoverageRegion(current, bounds);
+                    if (coverage == IntPtr.Zero) return false;
+                    int result;
+                    try { result = CombineRgn(remaining, remaining, coverage, RegionDifference); }
+                    finally { DeleteObject(coverage); }
+                    if (result <= EmptyRegion) return false;
+                    if (result == ComplexRegion && !RegionWithinBudget(remaining)) return false;
+                }
+                ClientRectangle finalBounds;
+                if (!IsWindow(verifiedGame) || !IsWindowVisible(verifiedGame) || IsIconic(verifiedGame)
+                    || !TryIsCloaked(verifiedGame, out cloaked) || cloaked || !GetWindowRect(verifiedGame, out finalBounds)
+                    || finalBounds.Left != windowBounds.Left || finalBounds.Top != windowBounds.Top
+                    || finalBounds.Right != windowBounds.Right || finalBounds.Bottom != windowBounds.Bottom) return false;
+                return HasMeaningfulExposure(remaining);
+            }
+            catch { return false; }
+            finally
+            {
+                if (remaining != IntPtr.Zero) DeleteObject(remaining);
+                if (monitors != IntPtr.Zero) DeleteObject(monitors);
+                if (previousDpi != IntPtr.Zero) { try { SetThreadDpiAwarenessContext(previousDpi); } catch { } }
+            }
+        }
+        private static bool TryIsCloaked(IntPtr window, out bool cloaked)
+        {
+            int value;
+            bool success = DwmGetWindowAttribute(window, 14, out value, sizeof(int)) == 0; // DWMWA_CLOAKED
+            cloaked = value != 0; return success;
+        }
+        private static bool IsKnownTranslucent(IntPtr window)
+        {
+            if ((GetWindowLongPtr(window, -20).ToInt64() & LayeredStyle) == 0) return false;
+            uint color, flags; byte alpha;
+            // WS_EX_TRANSPARENT is a painting-order flag, not proof that pixels
+            // are transparent. Per-pixel layered opacity cannot be read here;
+            // an unknown layered window conservatively contributes its bounds.
+            return GetLayeredWindowAttributes(window, out color, out alpha, out flags) && (flags & 2) != 0 && alpha < 255;
+        }
+        private static IntPtr WindowCoverageRegion(IntPtr window, ClientRectangle windowBounds)
+        {
+            ClientRectangle frame;
+            if (DwmGetWindowAttribute(window, 9, out frame, Marshal.SizeOf(typeof(ClientRectangle))) != 0
+                || frame.Right <= frame.Left || frame.Bottom <= frame.Top) frame = windowBounds;
+            // Clip to both extents, avoiding invisible resize borders without
+            // letting a transient/inconsistent DWM frame extend past the HWND.
+            frame.Left = Math.Max(frame.Left, windowBounds.Left); frame.Top = Math.Max(frame.Top, windowBounds.Top);
+            frame.Right = Math.Min(frame.Right, windowBounds.Right); frame.Bottom = Math.Min(frame.Bottom, windowBounds.Bottom);
+            if (frame.Right <= frame.Left || frame.Bottom <= frame.Top) return IntPtr.Zero;
+            IntPtr coverage = CreateRectRgn(frame.Left, frame.Top, frame.Right, frame.Bottom), shape = IntPtr.Zero;
+            if (coverage == IntPtr.Zero) return IntPtr.Zero;
+            try
+            {
+                if ((GetWindowLongPtr(window, -20).ToInt64() & RightToLeftStyle) == 0)
+                {
+                    shape = CreateRectRgn(0, 0, 0, 0);
+                    if (shape == IntPtr.Zero) { DeleteObject(coverage); return IntPtr.Zero; }
+                    int kind = GetWindowRgn(window, shape);
+                    if (kind == ComplexRegion && !RegionWithinBudget(shape)) { DeleteObject(coverage); return IntPtr.Zero; }
+                    // ERROR also means a normal rectangular window has no
+                    // explicit region. Its conservative frame remains usable.
+                    if (kind != RegionError)
+                    {
+                        if (OffsetRgn(shape, windowBounds.Left, windowBounds.Top) == RegionError
+                            || CombineRgn(coverage, coverage, shape, RegionAnd) == RegionError)
+                        { DeleteObject(coverage); return IntPtr.Zero; }
+                    }
+                }
+                return coverage;
+            }
+            catch { DeleteObject(coverage); return IntPtr.Zero; }
+            finally { if (shape != IntPtr.Zero) DeleteObject(shape); }
+        }
+        private static bool RegionWithinBudget(IntPtr region)
+        {
+            uint size = GetRegionData(region, 0, null);
+            return size >= 32 && size <= MaximumRegionBytes;
+        }
+        private static bool HasMeaningfulExposure(IntPtr region)
+        {
+            uint size = GetRegionData(region, 0, null);
+            if (size < 32 || size > MaximumRegionBytes) return false;
+            byte[] data = new byte[(int)size];
+            if (GetRegionData(region, size, data) != size) return false;
+            uint rectangles = BitConverter.ToUInt32(data, 8);
+            if (BitConverter.ToUInt32(data, 0) != 32 || BitConverter.ToUInt32(data, 4) != 1 || rectangles > (size - 32) / 16) return false;
+            long area = 0; bool usefulRectangle = false;
+            for (int index = 0; index < rectangles; index++)
+            {
+                int offset = 32 + index * 16;
+                long width = (long)BitConverter.ToInt32(data, offset + 8) - BitConverter.ToInt32(data, offset);
+                long height = (long)BitConverter.ToInt32(data, offset + 12) - BitConverter.ToInt32(data, offset + 4);
+                if (width <= 0 || height <= 0 || width > 100000 || height > 100000) return false;
+                area += width * height;
+                if (width >= 16 && height >= 16) usefulRectangle = true;
+            }
+            return usefulRectangle && area >= 1024;
+        }
+        private sealed class CoverageFixture
+        {
+            internal int Id;
+            internal Rectangle[] Areas;
+            internal bool Visible = true, Minimized, Cloaked, Translucent;
+        }
+        // The fixture runner performs only region arithmetic on supplied data;
+        // it never enumerates, samples, captures or changes any real window.
+        private static bool ExposureFixture(Rectangle game, Rectangle[] monitors, CoverageFixture[] covering, int ignored, bool visible, bool minimized, bool cloaked)
+        {
+            if (!visible || minimized || cloaked || game.Width <= 0 || game.Height <= 0) return false;
+            IntPtr remaining = CreateRectRgn(game.Left, game.Top, game.Right, game.Bottom), clipped = CreateRectRgn(0, 0, 0, 0);
+            if (remaining == IntPtr.Zero || clipped == IntPtr.Zero)
+            { if (remaining != IntPtr.Zero) DeleteObject(remaining); if (clipped != IntPtr.Zero) DeleteObject(clipped); return false; }
+            try
+            {
+                foreach (Rectangle monitor in monitors)
+                {
+                    IntPtr part = CreateRectRgn(monitor.Left, monitor.Top, monitor.Right, monitor.Bottom);
+                    try { if (part == IntPtr.Zero || CombineRgn(clipped, clipped, part, RegionOr) == RegionError) return false; }
+                    finally { if (part != IntPtr.Zero) DeleteObject(part); }
+                }
+                if (CombineRgn(remaining, remaining, clipped, RegionAnd) <= EmptyRegion) return false;
+                foreach (CoverageFixture window in covering)
+                {
+                    if (window.Id == ignored || !window.Visible || window.Minimized || window.Cloaked || window.Translucent) continue;
+                    foreach (Rectangle bounds in window.Areas)
+                    {
+                        IntPtr part = CreateRectRgn(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom);
+                        try { if (part == IntPtr.Zero || CombineRgn(remaining, remaining, part, RegionDifference) <= EmptyRegion) return false; }
+                        finally { if (part != IntPtr.Zero) DeleteObject(part); }
+                    }
+                }
+                return HasMeaningfulExposure(remaining);
+            }
+            finally { DeleteObject(remaining); DeleteObject(clipped); }
+        }
+        private static int ValidateExposureFixtures()
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool condition, string message)
+            { if (!condition) throw new InvalidOperationException(message); checks++; };
+            Rectangle game = new Rectangle(0, 0, 200, 160);
+            Rectangle[] screens = { new Rectangle(-600, -400, 1400, 1000) };
+            var none = new CoverageFixture[0];
+            Func<CoverageFixture[], bool> exposed = delegate(CoverageFixture[] covers)
+            { return ExposureFixture(game, screens, covers, 99, true, false, false); };
+            check(exposed(none), "An uncovered synthetic game area was hidden.");
+            check(!exposed(new[] { new CoverageFixture { Id = 1, Areas = new[] { game } } }), "A single opaque covering region left a synthetic game exposed.");
+            check(!exposed(new[] {
+                new CoverageFixture { Id = 1, Areas = new[] { new Rectangle(0, 0, 100, 160) } },
+                new CoverageFixture { Id = 2, Areas = new[] { new Rectangle(100, 0, 100, 160) } }
+            }), "The union of two windows did not cover the synthetic game.");
+            check(exposed(new[] { new CoverageFixture { Id = 1, Areas = new[] { new Rectangle(0, 0, 140, 160) } } }), "A substantial exposed part was discarded.");
+            check(ExposureFixture(new Rectangle(-500, -200, 200, 160), screens,
+                new[] { new CoverageFixture { Id = 1, Areas = new[] { new Rectangle(-500, -200, 100, 160) } } }, 99, true, false, false), "Negative monitor coordinates broke region subtraction.");
+            check(exposed(new[] { new CoverageFixture { Id = 99, Areas = new[] { game } } }), "The ignored sidebar covered its own synthetic game.");
+            check(exposed(new[] { new CoverageFixture { Id = 1, Areas = new[] { game }, Translucent = true } }), "A known translucent overlay counted as opaque coverage.");
+            check(exposed(new[] { new CoverageFixture { Id = 1, Areas = new[] { game }, Visible = false } }), "An invisible window counted as coverage.");
+            check(exposed(new[] { new CoverageFixture { Id = 1, Areas = new[] { game }, Minimized = true } }), "A minimized covering window counted as coverage.");
+            check(exposed(new[] { new CoverageFixture { Id = 1, Areas = new[] { game }, Cloaked = true } }), "A cloaked covering window counted as coverage.");
+            check(!ExposureFixture(game, screens, none, 99, true, true, false), "A minimized game was classified as exposed.");
+            check(!ExposureFixture(game, screens, none, 99, false, false, false), "An invisible game was classified as exposed.");
+            check(!ExposureFixture(game, screens, none, 99, true, false, true), "A cloaked game was classified as exposed.");
+            check(!ExposureFixture(game, new[] { new Rectangle(400, 0, 100, 100) }, none, 99, true, false, false), "A game outside monitor working areas was classified as exposed.");
+            check(!ExposureFixture(new Rectangle(100, 0, 50, 100), new[] { new Rectangle(0, 0, 100, 100), new Rectangle(150, 0, 100, 100) }, none, 99, true, false, false), "A multi-monitor gap counted as visible screen area.");
+            check(!exposed(new[] { new CoverageFixture { Id = 1, Areas = new[] { new Rectangle(0, 0, 199, 160) } } }), "A one-pixel resize-border remnant counted as an exposed game.");
+            check(!exposed(new[] { new CoverageFixture { Id = 1, Areas = new[] {
+                new Rectangle(6, 0, 188, 160), new Rectangle(0, 6, 200, 148)
+            } } }), "Separated tiny corners with a large bounding box counted as exposure.");
+            check(exposed(new[] { new CoverageFixture { Id = 1, Areas = new[] {
+                new Rectangle(0, 0, 70, 160), new Rectangle(130, 0, 70, 160)
+            } } }), "A complex covering region's substantial central opening was lost.");
+            check(!ExposureFixture(new Rectangle(0, 0, 20, 20), screens, none, 99, true, false, false), "A total exposed area below the usefulness threshold was accepted.");
+            check(ExposureFixture(new Rectangle(0, 0, 32, 32), screens, none, 99, true, false, false), "A meaningful 32-by-32 area failed the exposure threshold.");
+            return checks;
+        }
         internal static Rectangle PlacementArea(IntPtr window)
         {
             Rectangle monitor = window == IntPtr.Zero ? Screen.PrimaryScreen.WorkingArea : Screen.FromHandle(window).WorkingArea;
@@ -1928,7 +2291,7 @@ namespace HexGuide.Desktop
                 && !IsShortcutWindow(IntPtr.Zero, IntPtr.Zero, true)
                 && !IsShortcutWindow(other, IntPtr.Zero, false);
             if (!scopePassed) throw new InvalidOperationException("Shortcut foreground scope self-test failed.");
-            return 13;
+            return 13 + ValidateExposureFixtures();
         }
         internal static IntPtr FindGame(IntPtr previous)
         {
@@ -1955,6 +2318,22 @@ namespace HexGuide.Desktop
         [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
         [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr window, out ClientRectangle rectangle);
         [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr window, ref ClientPoint point);
+        [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out ClientRectangle rectangle);
+        [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
+        [DllImport("user32.dll")] private static extern bool GetLayeredWindowAttributes(IntPtr window, out uint colorKey, out byte alpha, out uint flags);
+        [DllImport("user32.dll")] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+        [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr dc, IntPtr rectangle, EnumMonitorCallback callback, IntPtr parameter);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorMetadata metadata);
+        [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);
+        [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out ClientRectangle value, int size);
+        [DllImport("gdi32.dll")] private static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+        [DllImport("gdi32.dll")] private static extern int CombineRgn(IntPtr destination, IntPtr first, IntPtr second, int mode);
+        [DllImport("gdi32.dll")] private static extern int OffsetRgn(IntPtr region, int x, int y);
+        [DllImport("gdi32.dll")] private static extern bool RectInRegion(IntPtr region, ref ClientRectangle rectangle);
+        [DllImport("gdi32.dll")] private static extern uint GetRegionData(IntPtr region, uint size, [Out] byte[] data);
+        [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr value);
+        [DllImport("user32.dll")] private static extern int GetWindowRgn(IntPtr window, IntPtr region);
         [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
         [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr window, StringBuilder title, int maximum);
