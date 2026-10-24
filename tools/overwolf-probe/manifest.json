@@ -1,0 +1,32 @@
+{
+  "manifest_version": 1,
+  "type": "WebApp",
+  "meta": {
+    "name": "Sample App",
+    "author": "Overwolf",
+    "version": "2.0.3",
+    "minimum-overwolf-version": "0.311.0.6",
+    "description": "Locally modified developer sample: HexGuide augment verification only",
+    "icon": "icons/hexguide.png",
+    "icon_gray": "icons/hexguide.png",
+    "launcher_icon": "icons/hexguide.ico",
+    "window_icon": "icons/hexguide.png"
+  },
+  "permissions": ["GameInfo"],
+  "data": {
+    "start_window": "observer",
+    "windows": {
+      "observer": {
+        "file": "observer.html",
+        "desktop_only": true,
+        "native_window": true,
+        "resizable": true,
+        "transparent": false,
+        "size": {"width": 820, "height": 780},
+        "min_size": {"width": 520, "height": 560}
+      }
+    },
+    "game_targeting": {"type": "dedicated", "game_ids": [5426]},
+    "game_events": [5426]
+  }
+}

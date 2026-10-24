@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>海克斯已选数据验证</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; background: #091521; color: #e6f1fa; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 26px; line-height: 1.55; }
+    main { max-width: 780px; margin: auto; }
+    .eyebrow { margin: 0 0 8px; color: #8dc5db; font-size: 12px; letter-spacing: .08em; }
+    h1 { margin: 0 0 12px; font-size: 25px; }
+    h2 { margin: 0 0 16px; font-size: 17px; }
+    p { margin: 0; }
+    .muted { color: #9eb3c6; font-size: 13px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 22px 0; }
+    button { border: 1px solid #39556b; border-radius: 6px; padding: 9px 16px; font: inherit; font-size: 14px; color: #dfedf6; background: #132939; cursor: pointer; }
+    button.primary { background: #20505b; border-color: #78c9c6; }
+    button:disabled { opacity: .45; cursor: default; }
+    button:focus-visible { outline: 2px solid #dfb666; outline-offset: 3px; }
+    section { margin: 16px 0; padding: 20px; background: #102231; border: 1px solid #2a4357; border-radius: 9px; }
+    dl { margin: 0; display: grid; grid-template-columns: 90px 1fr; gap: 8px 14px; font-size: 14px; }
+    dt { color: #9eb3c6; }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    #status { color: #94dfd1; }
+    .cards { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .cards li { padding: 15px 10px; background: #142b3c; border: 1px solid #324f65; border-radius: 6px; min-height: 88px; }
+    .slot { display: block; color: #92b7ca; font-size: 12px; margin-bottom: 7px; }
+    .name { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+    #picked { margin: 0; padding-left: 24px; }
+    #picked li { padding: 5px 0; }
+    .observation-note { margin-top: 12px; color: #9eb3c6; font-size: 13px; }
+    footer { margin-top: 22px; color: #91a8bb; font-size: 12px; }
+    @media (max-width: 480px) { body { padding: 16px; } section { padding: 16px; } .cards { gap: 6px; } .cards li { padding: 12px 8px; } .name { font-size: 13px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">本地修改示例 · 非官方产品</p>
+      <h1>海克斯已选数据验证</h1>
+      <p class="muted">开始后，只观察当前英雄联盟的候选和已选海克斯。结果只在此窗口临时显示，暂未接入正式助手。</p>
+    </header>
+    <div class="actions">
+      <button id="start" class="primary" type="button" disabled>开始观察</button>
+      <button id="stop" type="button" disabled>停止观察</button>
+      <button id="clear" type="button">清除显示</button>
+    </div>
+    <section aria-label="观察状态">
+      <dl>
+        <dt>状态</dt><dd id="status" role="status" aria-live="polite">正在准备本地目录</dd>
+        <dt>接口订阅</dt><dd id="subscription">未订阅</dd>
+        <dt>对局状态</dt><dd id="match">尚未观察</dd>
+        <dt>最近更新</dt><dd id="updated">尚未收到真实数据</dd>
+      </dl>
+    </section>
+    <section>
+      <h2>当前三选一</h2>
+      <ul class="cards" id="candidates">
+        <li><span class="slot">候选 1</span><span class="name" id="candidate-1">等待真实数据</span></li>
+        <li><span class="slot">候选 2</span><span class="name" id="candidate-2">等待真实数据</span></li>
+        <li><span class="slot">候选 3</span><span class="name" id="candidate-3">等待真实数据</span></li>
+      </ul>
+      <p class="observation-note" id="candidate-note">尚未收到候选更新。</p>
+    </section>
+    <section>
+      <h2>接口返回的已选海克斯</h2>
+      <ol id="picked"></ol>
+      <p class="observation-note" id="picked-note">尚未收到已选更新。</p>
+    </section>
+    <footer>
+      <p>未知名称仅计数，不显示原始数据；不记录玩家身份，不保存或上传对局。</p>
+      <p>普通浏览器无法验证此接口。真实可用性以本机 Overwolf 和本局实际回传为准。</p>
+    </footer>
+  </main>
+  <script type="module" src="./observer.mjs"></script>
+</body>
+</html>
