@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.10.2.0")]
-[assembly: AssemblyFileVersion("1.10.2.0")]
-[assembly: AssemblyInformationalVersion("1.10.2")]
+[assembly: AssemblyVersion("1.10.3.0")]
+[assembly: AssemblyFileVersion("1.10.3.0")]
+[assembly: AssemblyInformationalVersion("1.10.3")]
 
 namespace HexGuide.Desktop
 {
@@ -31,6 +31,15 @@ namespace HexGuide.Desktop
         [STAThread]
         private static void Main(string[] args)
         {
+            if (args.Length == 1 && args[0] == "--selection-title-observe")
+            {
+                Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
+                var input = new char[16385]; int length = 0, read;
+                while (length < input.Length && (read = Console.In.Read(input, length, input.Length - length)) > 0) length += read;
+                string payload = length == input.Length ? null : new string(input, 0, length);
+                Console.WriteLine(new JavaScriptSerializer().Serialize(ScreenSelectionWatcher.ObserveTitleIdentity(payload)));
+                return;
+            }
             // Pure fixtures only: no form, message loop, backend, game capture,
             // hotkey registration, or reads of the user's installed settings.
             if (args.Length == 1 && args[0] == "--selection-self-test")
@@ -38,9 +47,11 @@ namespace HexGuide.Desktop
                 Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
                 try
                 {
-                    int checks = ScreenSelectionWatcher.ValidateFixtures() + MainWindow.ValidateSelectionDiagnosticFixtures();
+                    int ownedChecks = Convert.ToInt32(OwnedAugmentVerificationFixtures.Run()["checks"]);
+                    int checks = ScreenSelectionWatcher.ValidateFixtures() + MainWindow.ValidateSelectionDiagnosticFixtures() + ownedChecks;
                     Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                        { "version", "1.10.2" }, { "checks", checks },
+                        { "version", "1.10.3" }, { "checks", checks },
+                        { "titleProbeVersion", 1 },
                         { "nativeDiagnosticMaxBytes", ScreenSelectionWatcher.LargestDiagnosticFixtureBytes },
                         { "mode", "offline-no-ui" }, { "liveGameVerified", false }
                     }));
@@ -194,7 +205,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.10.2 · 我的这一局";
+            Text = "海克斯指南 1.10.3 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -599,7 +610,7 @@ namespace HexGuide.Desktop
         internal static string SelectionDiagnosticsJson(ScreenSelectionWatcher watcher, Dictionary<string, object> model, DateTime now)
         {
             var snapshot = new Dictionary<string, object> {
-                { "version", "1.10.2" }, { "schemaVersion", 2 },
+                { "version", "1.10.3" }, { "schemaVersion", 2 },
                 { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
                 { "native", watcher.Diagnostics() },
                 { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
@@ -625,7 +636,7 @@ namespace HexGuide.Desktop
                 string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
                 var snapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
                 if (snapshot.Count != 5 || Encoding.UTF8.GetByteCount(json) > 4096
-                    || ModelValue.Text(snapshot, "version") != "1.10.2" || ModelValue.Text(snapshot, "schemaVersion") != "2")
+                    || ModelValue.Text(snapshot, "version") != "1.10.3" || ModelValue.Text(snapshot, "schemaVersion") != "2")
                     throw new InvalidOperationException("The persisted selection diagnostic snapshot exceeded its schema or byte bound.");
                 if (json.Contains("PRIVATE-MARKER") || json.Contains("\"ids\"") || json.Contains("windowHandle")
                     || json.Contains("\"signature\"") || json.Contains("\"signatures\"") || json.Contains("\"delta\""))

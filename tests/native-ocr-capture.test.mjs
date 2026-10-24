@@ -15,6 +15,10 @@ test('native Chinese OCR reads all three generated headings and maps title crops
   const raw = JSON.parse(stdout.replace(/^\uFEFF/, '').trim());
   if (raw.unavailable) { t.skip(raw.reason); return; }
   assert.equal(raw.frameId, 'synthetic-fixture-not-live-game');
+  assert.equal(raw.identityAnchors.version,1);
+  assert.equal(raw.identityAnchors.algorithm,'luma-sobel-16x8-v1');
+  assert.equal(raw.identityAnchors.frameId,raw.frameId);
+  assert.equal(raw.identityAnchors.capturedAt,raw.selectionCapture.capturedAt);
   const data = JSON.parse(await readFile(new URL('../dist/data.json', import.meta.url), 'utf8'));
   for (const pass of ['card-titles-color', 'card-titles-contrast']) {
     const lines = raw.lines.filter(line => line.pass === pass);
@@ -25,7 +29,23 @@ test('native Chinese OCR reads all three generated headings and maps title crops
       assert.ok(line.x >= line.crop.x && line.x + line.width <= line.crop.x + line.crop.width + 1);
       assert.ok(line.y >= 570 && line.y < 640, 'coordinates must be original 1440p pixels, not 3x crop pixels');
     }
-    assert.deepEqual(matchOcrProposals({...raw, lines}, data.augments).proposals.map(item => item.name), ['升级：耀光', '贪欲束缚', '急急小子'], `${pass} must be independently compatible with the proposal matcher`);
+    const matched=matchOcrProposals({...raw,lines},data.augments);
+    assert.deepEqual(matched.proposals.map(item => item.name), ['升级：耀光', '贪欲束缚', '急急小子'], `${pass} must be independently compatible with the proposal matcher`);
+    const anchors=lines.map(line=>raw.identityAnchors.anchors[line.identityAnchorIndex]);
+    assert.ok(anchors.every(Boolean),'each actual OCR line must reference its same-frame descriptor');
+    for(const anchor of anchors){
+      assert.equal(anchor.feature.length,128);
+      assert.ok(anchor.feature.every(value=>Number.isInteger(value)&&value>=0&&value<=64));
+      assert.equal(anchor.feature.reduce((sum,value)=>sum+value,0),anchor.quality.edgePixels);
+      assert.equal(anchor.feature.filter(value=>value>0).length,anchor.quality.activeCells);
+    }
+    // This dense Chinese fixture exposed the old 4096-edge ceiling. The shared
+    // quality gate now distinguishes spatially varied strokes from flat edge
+    // noise; keep the same text and font as a regression, without weakening any
+    // identity similarity or game-selection evidence threshold.
+    assert.ok(anchors.every(anchor=>anchor.quality.usable));
+    assert.equal(matched.selectionMetadataStatus,'accepted');
+    assert.equal(matched.selectionCapture.identityAnchors.cards.length,3);
   }
   for (const geometry of raw.geometries) for (const region of geometry.regions) {
     assert.ok(region.x >= 0 && region.y >= 0 && region.width > 0 && region.height > 0);

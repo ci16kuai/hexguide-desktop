@@ -24,13 +24,14 @@ test('three exact titles in the real Windows OCR geometry become a confirmation 
   assert.ok(!('text' in result) && !('lines' in result),'safe matching diagnostics never echo raw OCR text');
 });
 
-test('synthetic capture identity is exposed only after a complete title match and strips unrelated data', () => {
+test('RGB-only metadata keeps matched candidates but cannot authorize automatic selection', () => {
   const input = frame(['钢化你心','歌利亚巨人','渴血'].map((name,index)=>title(name,index)));
   input.selectionCapture = {capturedAt:1792800000000,width:2560,height:1440,originX:0,originY:0,windowHandle:'1234',privateText:'do not retain',
     regions:[0,1,2].map(column=>({column,x:400+column*600,y:300,width:400,height:700,signature:Array(192).fill(80),privateName:'do not retain'}))};
   const result = matchOcrProposals(input,augments);
-  assert.equal(result.selectionMetadataStatus,'accepted');
-  assert.equal(result.selectionCapture.regions.length,3);
+  assert.equal(result.selectionMetadataStatus,'missing');
+  assert.equal('selectionCapture' in result,false);
+  assert.equal(result.proposals.length,3);
   assert.doesNotMatch(JSON.stringify(result),/do not retain/);
   input.lines.pop();
   const incomplete = matchOcrProposals(input,augments);

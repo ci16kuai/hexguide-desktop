@@ -29,6 +29,7 @@ namespace HexGuide.Desktop
         private long lastRefreshCapture;
         private int sameIdentityRefreshes, pendingRefreshesPreserved;
         private int sameIdentityReferenceUpdates, pressedRefreshesPreserved;
+        private int titleChecks, titleMatches, lastTitleMatchMask;
         internal event Action<Dictionary<string, object>> SelectionObserved;
         internal event Action<string> StatusChanged;
         internal string StatusCode { get; private set; }
@@ -63,7 +64,17 @@ namespace HexGuide.Desktop
             timer.Start();
             ScreenSelectionObservation next;
             if (!ScreenSelectionObservation.TryRead(ModelValue.Object(model, "selection"), Now(), out next))
-            { Suspend("waiting", observation != null); return; }
+            {
+                // OCR can finish on the first empty post-click frame while the
+                // faster watcher is still collecting dismissal evidence. Only
+                // an already-released click may continue on this bounded lease;
+                // it is never a source of Ready or a new pointer observation.
+                ScreenSelectionObservation continuation;
+                if (observation != null && decision.Pending && !decision.Invalid
+                    && ScreenSelectionObservation.TryReadContinuation(ModelValue.Object(model, "selectionResult"), Now(), decision.ClickedAt, out continuation)
+                    && observation.Identity() == continuation.Identity()) return;
+                Suspend("waiting", observation != null); return;
+            }
             if (TryApplySameIdentityReference(next, Now())) return;
             // A model cached before a click/roll must not arm the watcher again.
             if (next.CapturedAt <= lastSeenCapture) return;
@@ -135,6 +146,7 @@ namespace HexGuide.Desktop
             switch (code)
             {
                 case "baseline": return "屏幕自动确认（实验）：正在核对本轮卡片";
+                case "identity-waiting": return "屏幕自动确认（实验）：标题暂不可核对，保留本轮等待清晰画面";
                 case "ready": return "屏幕自动确认（实验）：已就绪，等待游戏内选择";
                 case "pending": return "屏幕自动确认（实验）：正在核对选择特效";
                 case "feedback": return "屏幕自动确认（实验）：已观察到变化，等待卡片收起";
@@ -219,22 +231,23 @@ namespace HexGuide.Desktop
                     }
                     int column = onGame ? observation.ColumnAt(point.X, point.Y) : -1;
                     if (!onGame || column < 0) { Suspend("outside-click", true); return; }
-                    int[][] edgeFrame;
-                    if (!Capture(observation, out edgeFrame)) { Suspend("geometry-or-occlusion", true); return; }
+                    int[][] edgeFrame; int edgeTitleMask;
+                    if (!Capture(observation, out edgeFrame, out edgeTitleMask)) { Suspend("geometry-or-occlusion", true); return; }
                     // Capture on both edges. A highlight already visible by
                     // release must not be mistaken for a NEW selection effect.
-                    decision.Pointer(down, column, onGame, now, edgeFrame, observation.Signatures);
-                    if (decision.Invalid) { Suspend("outside-click", true); return; }
+                    decision.PointerWithTitleIdentity(down, column, onGame, now, edgeFrame, observation.Signatures, edgeTitleMask == 7);
+                    if (decision.Invalid) { Suspend("visual-evidence-incomplete", true); return; }
                     if (decision.Pending) SetStatus("pending");
                 }
                 else lastButtonDown = down;
                 if (observation == null) return;
                 if (now < nextFrameAt) return;
                 nextFrameAt = now + 65;
-                int[][] signatures;
-                if (!Capture(observation, out signatures)) { Suspend("geometry-or-occlusion", true); return; }
-                decision.Frame(signatures, observation.Signatures, now);
+                int[][] signatures; int titleMask;
+                if (!Capture(observation, out signatures, out titleMask)) { Suspend("geometry-or-occlusion", true); return; }
+                decision.FrameWithTitleIdentity(signatures, observation.Signatures, now, titleMask);
                 if (decision.Invalid) { Suspend("visual-evidence-incomplete", true); return; }
+                if (!decision.Ready && !decision.Pending && !decision.Pressed) SetStatus("identity-waiting");
                 if (decision.Ready) SetStatus("ready");
                 if (decision.FeedbackFrames > 0) SetStatus("feedback");
                 if (!decision.Complete) return;
@@ -274,6 +287,9 @@ namespace HexGuide.Desktop
             current["pendingRefreshesPreserved"] = pendingRefreshesPreserved;
             current["pressedRefreshesPreserved"] = pressedRefreshesPreserved;
             current["sameIdentityReferenceUpdates"] = sameIdentityReferenceUpdates;
+            current["titleChecks"] = titleChecks;
+            current["titleMatches"] = titleMatches;
+            current["titleMatchMask"] = lastTitleMatchMask;
             foreach (var entry in decision.DiagnosticState(now)) current[entry.Key] = entry.Value;
             if (lastAttempt != null) current["lastAttempt"] = new Dictionary<string, object>(lastAttempt);
             return current;
@@ -343,11 +359,12 @@ namespace HexGuide.Desktop
             return Math.Min(60000, age);
         }
 
-        private bool Capture(ScreenSelectionObservation value, out int[][] signatures)
+        private bool Capture(ScreenSelectionObservation value, out int[][] signatures, out int titleMask)
         {
             string code;
-            bool success = TryCapture(value, out signatures, out code);
+            bool success = TryCapture(value, out signatures, out titleMask, out code);
             RecordCaptureResult(success, code, Now());
+            if (success) { lastTitleMatchMask = titleMask; titleChecks = Math.Min(1000000, titleChecks + 1); if (titleMask == 7) titleMatches = Math.Min(1000000, titleMatches + 1); }
             return success;
         }
 
@@ -376,9 +393,51 @@ namespace HexGuide.Desktop
 
         private static IntPtr RootWindow(IntPtr window) { return window == IntPtr.Zero ? IntPtr.Zero : GetAncestor(window, 2); }
 
-        private static bool TryCapture(ScreenSelectionObservation value, out int[][] signatures, out string failure)
+        // Explicit diagnostic entry point only. It never starts this watcher's
+        // timer, sends input, opens UI, contacts the backend or commits a choice.
+        internal static Dictionary<string, object> ObserveTitleIdentity(string input)
+        {
+            var output = new Dictionary<string, object> {
+                { "mode", "read-only-game-title-probe" }, { "actualSelectionConfirmed", false },
+                { "status", "invalid-input" }, { "captures", 0 }, { "allTitlesMatched", 0 },
+                { "legacyRgbWouldReject", 0 }, { "readyFrames", 0 }, { "titleMaskCounts", new int[8] }
+            };
+            if (input == null || System.Text.Encoding.UTF8.GetByteCount(input) > 16384) return output;
+            ScreenSelectionObservation reference;
+            try
+            {
+                var serializer = new System.Web.Script.Serialization.JavaScriptSerializer { MaxJsonLength = 16384, RecursionLimit = 20 };
+                if (!ScreenSelectionObservation.TryRead(serializer.DeserializeObject(input) as Dictionary<string, object>, Now(), out reference)) return output;
+            }
+            catch { return output; }
+            int captures = 0, matches = 0, oldRejects = 0, readyFrames = 0;
+            var counts = new int[8]; var decision = new ScreenSelectionDecision();
+            decision.Arm(reference.CapturedAt, Now());
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            string status = "completed";
+            while (clock.ElapsedMilliseconds < 8000 && captures < 100)
+            {
+                int[][] frame; int mask; string failure;
+                if (!TryCapture(reference, out frame, out mask, out failure)) { status = failure; break; }
+                long stamp = Now(); captures++; counts[mask]++;
+                if (mask == 7) matches++;
+                var legacy = new ScreenSelectionDecision(); legacy.Arm(reference.CapturedAt, stamp);
+                legacy.Frame(frame, reference.Signatures, stamp);
+                if (legacy.Invalid) oldRejects++;
+                decision.FrameWithTitleIdentity(frame, reference.Signatures, stamp, mask);
+                if (decision.Ready && !decision.Invalid) readyFrames++;
+                System.Threading.Thread.Sleep(65);
+            }
+            output["status"] = status; output["captures"] = captures; output["allTitlesMatched"] = matches;
+            output["legacyRgbWouldReject"] = oldRejects; output["readyFrames"] = readyFrames; output["titleMaskCounts"] = counts;
+            output["elapsedMs"] = (int)Math.Min(10000, clock.ElapsedMilliseconds);
+            return output;
+        }
+
+        private static bool TryCapture(ScreenSelectionObservation value, out int[][] signatures, out int titleMask, out string failure)
         {
             signatures = null;
+            titleMask = 0;
             failure = "capture-exception";
             IntPtr previous = IntPtr.Zero;
             try
@@ -394,6 +453,7 @@ namespace HexGuide.Desktop
                 if (client != value.ClientBounds) { failure = "client-changed"; return false; }
                 if (!Unoccluded(value, out failure)) return false;
                 var frames = new int[3][];
+                int matches = 0;
                 for (int index = 0; index < 3; index++)
                 {
                     Rectangle region = value.Regions[index];
@@ -404,6 +464,16 @@ namespace HexGuide.Desktop
                             graphics.CopyFromScreen(client.Left + region.Left, client.Top + region.Top, 0, 0,
                                 region.Size, CopyPixelOperation.SourceCopy);
                         frames[index] = ReadSignature(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+                        bool cardMatches = value.TitleAnchors != null && value.TitleAnchors.Length == 3
+                            && value.TitleAnchors[index] != null && value.TitleAnchors[index].Length > 0;
+                        if (cardMatches) foreach (ScreenTitleAnchor anchor in value.TitleAnchors[index])
+                        {
+                            Rectangle local = anchor.Box;
+                            local.Offset(-region.X, -region.Y);
+                            CardTitleFeature feature = CardTitleIdentity.Extract(bitmap, local);
+                            if (!feature.Usable || !CardTitleIdentity.Matches(feature.Feature, anchor.Feature)) cardMatches = false;
+                        }
+                        if (cardMatches) matches |= 1 << index;
                     }
                 }
                 Rectangle final;
@@ -412,6 +482,7 @@ namespace HexGuide.Desktop
                 if (final != client) { failure = "client-changed"; return false; }
                 if (!Unoccluded(value, out failure)) return false;
                 signatures = frames;
+                titleMask = matches;
                 failure = "captured";
                 return true;
             }
@@ -512,7 +583,8 @@ namespace HexGuide.Desktop
 
         internal static int ValidateFixtures()
         {
-            int checks = ScreenSelectionDecision.ValidateFixtures() + ValidateReferenceRefreshFixtures();
+            int checks = ScreenSelectionDecision.ValidateFixtures() + ValidateReferenceRefreshFixtures()
+                + CardTitleIdentity.ValidateFixtures() + ScreenSelectionDecision.ValidateTitleIdentityFixtures();
             using (var watcher = new ScreenSelectionWatcher())
             {
                 watcher.RecordCaptureResult(true, "captured", Now());
@@ -668,6 +740,12 @@ namespace HexGuide.Desktop
         [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out NativeRect value, int size);
     }
 
+    internal sealed class ScreenTitleAnchor
+    {
+        internal Rectangle Box;
+        internal int[] Feature;
+    }
+
     internal sealed class ScreenSelectionObservation
     {
         internal string Token;
@@ -677,6 +755,7 @@ namespace HexGuide.Desktop
         internal Rectangle ClientBounds;
         internal Rectangle[] Regions;
         internal int[][] Signatures;
+        internal ScreenTitleAnchor[][] TitleAnchors;
         internal string[] Ids;
 
         private static bool Number(Dictionary<string, object> value, string key, long minimum, long maximum, out long result)
@@ -689,9 +768,22 @@ namespace HexGuide.Desktop
         }
 
         internal static bool TryRead(Dictionary<string, object> value, long now, out ScreenSelectionObservation observation)
+        { return TryReadCore(value, now, "armed", out observation); }
+
+        internal static bool TryReadContinuation(Dictionary<string, object> value, long now, long clickedAt, out ScreenSelectionObservation observation)
         {
             observation = null;
-            if (ModelValue.Text(value, "status") != "armed" || ModelValue.Text(value, "provider") != "screen"
+            long suspendedAt, expiresAt;
+            if (!Number(value, "suspendedAt", 1, long.MaxValue, out suspendedAt)
+                || !Number(value, "expiresAt", now, long.MaxValue, out expiresAt)
+                || clickedAt <= 0 || clickedAt > suspendedAt || now < suspendedAt || now - suspendedAt > 2500) return false;
+            return TryReadCore(value, now, "leased", out observation);
+        }
+
+        private static bool TryReadCore(Dictionary<string, object> value, long now, string requiredStatus, out ScreenSelectionObservation observation)
+        {
+            observation = null;
+            if (ModelValue.Text(value, "status") != requiredStatus || ModelValue.Text(value, "provider") != "screen"
                 || !ModelValue.Boolean(value, "experimental")) return false;
             string token = ModelValue.Text(value, "offerToken");
             if (token.Length < 16 || token.Length > 128) return false;
@@ -738,9 +830,47 @@ namespace HexGuide.Desktop
                 signatures[index] = signature;
                 if (index > 0 && boxes[index - 1].Right >= boxes[index].Left) return false;
             }
+            var identity = ModelValue.Object(capture, "identityAnchors");
+            long identityVersion;
+            if (ModelValue.Text(identity, "algorithm") != CardTitleIdentity.Algorithm
+                || !Number(identity, "version", 1, 1, out identityVersion)) return false;
+            var identityCards = ModelValue.Array(identity, "cards");
+            if (identityCards.Count != 3) return false;
+            var titleAnchors = new ScreenTitleAnchor[3][];
+            for (int index = 0; index < 3; index++)
+            {
+                var card = identityCards[index] as Dictionary<string, object>;
+                long column;
+                if (!Number(card, "column", index, index, out column)) return false;
+                var anchors = ModelValue.Array(card, "anchors");
+                if (anchors.Count < 1 || anchors.Count > 2) return false;
+                titleAnchors[index] = new ScreenTitleAnchor[anchors.Count];
+                for (int line = 0; line < anchors.Count; line++)
+                {
+                    var anchor = anchors[line] as Dictionary<string, object>;
+                    var box = ModelValue.Object(anchor, "box");
+                    long x, y, anchorWidth, anchorHeight;
+                    if (!Number(box, "x", 0, width, out x) || !Number(box, "y", 0, height, out y)
+                        || !Number(box, "width", 8, width, out anchorWidth) || !Number(box, "height", 8, height, out anchorHeight)) return false;
+                    Rectangle rectangle = new Rectangle((int)x, (int)y, (int)anchorWidth, (int)anchorHeight);
+                    if (!boxes[index].Contains(rectangle)) return false;
+                    var raw = ModelValue.Array(anchor, "feature");
+                    if (raw.Count != 128) return false;
+                    var feature = new int[128];
+                    for (int cell = 0; cell < 128; cell++)
+                    {
+                        long number;
+                        if (raw[cell] == null || raw[cell] is bool || !long.TryParse(Convert.ToString(raw[cell], CultureInfo.InvariantCulture), out number)
+                            || number < 0 || number > 64) return false;
+                        feature[cell] = (int)number;
+                    }
+                    if (!CardTitleIdentity.IsUsable(feature)) return false;
+                    titleAnchors[index][line] = new ScreenTitleAnchor { Box = rectangle, Feature = feature };
+                }
+            }
             observation = new ScreenSelectionObservation { Token = token, GameId = gameId, Epoch = epoch, Revision = revision,
                 CapturedAt = capturedAt, Window = new IntPtr(handle), ClientBounds = new Rectangle((int)originX, (int)originY, (int)width, (int)height),
-                Regions = boxes, Signatures = signatures, Ids = names };
+                Regions = boxes, Signatures = signatures, TitleAnchors = titleAnchors, Ids = names };
             return true;
         }
 
@@ -796,6 +926,7 @@ namespace HexGuide.Desktop
         private int[] closeCells = new int[3];
         private Dictionary<string, object> lastReject;
         private int pressedColumn = -1;
+        internal int TitleIdentityPauses;
         internal bool Invalid, Ready, Pending, Complete;
         internal int BaselineFrames, FeedbackFrames, DismissedFrames, SelectedIndex = -1;
         internal long ClickedAt;
@@ -846,6 +977,7 @@ namespace HexGuide.Desktop
                 { "holdAgeMs", !Pressed ? 0 : BoundedDuration(now, pressedAt, 2500) },
                 { "frameGapMs", frameGapMs }, { "readyAgeMs", Ready && !Invalid ? BoundedDuration(now, readySince, 60000) : 0 },
                 { "lastReadyMs", lastReadyMs }, { "longestReadyMs", Math.Max(longestReadyMs, Ready && !Invalid ? BoundedDuration(now, readySince, 60000) : 0) },
+                { "titleIdentityPauses", TitleIdentityPauses },
                 { "lastRejectAgeMs", ScreenSelectionWatcher.Age(now, lastRejectAt) },
                 { "lastReject", lastReject == null ? null : CopyReject(lastReject) }
             };
@@ -876,6 +1008,12 @@ namespace HexGuide.Desktop
         }
 
         internal void Pointer(bool down, int column, bool onGame, long now, int[][] edgeFrame, int[][] baseline)
+        { PointerCore(down, column, onGame, now, edgeFrame, baseline, false, false); }
+
+        internal void PointerWithTitleIdentity(bool down, int column, bool onGame, long now, int[][] edgeFrame, int[][] baseline, bool titlesMatch)
+        { PointerCore(down, column, onGame, now, edgeFrame, baseline, true, titlesMatch); }
+
+        private void PointerCore(bool down, int column, bool onGame, long now, int[][] edgeFrame, int[][] baseline, bool titleMode, bool titlesMatch)
         {
             if (Invalid || Complete) return;
             NoteDecision(now, false);
@@ -885,7 +1023,16 @@ namespace HexGuide.Desktop
             if (column < 0 || column > 2) { Reject("pointer-column-invalid", now); return; }
             if (!Valid(edgeFrame)) { Reject("pointer-invalid-current", now); return; }
             if (!Valid(baseline)) { Reject("pointer-invalid-reference", now); return; }
-            if (!MeasurePanel(edgeFrame, baseline)) { Reject(PanelRejection("pointer-panel"), now); return; }
+            // In title mode the card's body/border is permitted to animate or
+            // change hue on hover. A real down edge must still identify all
+            // three exact title anchors. The release may already show a closing
+            // card, but must be over the same verified game/card and within the
+            // original press deadline. No hover alone produces a click lease.
+            if (titleMode)
+            {
+                if (down && !titlesMatch) { Reject("pointer-title-unverified", now); return; }
+            }
+            else if (!MeasurePanel(edgeFrame, baseline)) { Reject(PanelRejection("pointer-panel"), now); return; }
             if (down)
             {
                 if (Pending) { Reject("pointer-down-pending", now); return; }
@@ -909,16 +1056,36 @@ namespace HexGuide.Desktop
         }
 
         internal void Frame(int[][] current, int[][] baseline, long now)
+        { FrameCore(current, baseline, now, false, 0); }
+
+        internal void FrameWithTitleIdentity(int[][] current, int[][] baseline, long now, bool titlesMatch)
+        { FrameCore(current, baseline, now, true, titlesMatch ? 7 : 0); }
+
+        internal void FrameWithTitleIdentity(int[][] current, int[][] baseline, long now, int titleMask)
+        { FrameCore(current, baseline, now, true, titleMask); }
+
+        private void FrameCore(int[][] current, int[][] baseline, long now, bool titleMode, int titleMask)
         {
             if (Invalid || Complete) return;
             NoteDecision(now, true);
             if (!Valid(current)) { Reject("frame-invalid-current", now); return; }
             if (!Valid(baseline)) { Reject("frame-invalid-reference", now); return; }
+            if (titleMode && (titleMask < 0 || titleMask > 7)) { Reject("frame-title-mask-invalid", now); return; }
             bool panelMatches = MeasurePanel(current, baseline);
             if (!Pending)
             {
                 if (pressedColumn >= 0) { if (now - pressedAt > 1500) Reject("frame-hold-timeout", now); return; }
-                if (!panelMatches) { Reject(PanelRejection("frame-preclick"), now); return; }
+                if (titleMode && titleMask != 7)
+                {
+                    // A transient obstruction or title effect pauses input
+                    // eligibility. It does not discard the offer or restart
+                    // the expensive two-OCR settling sequence.
+                    EndReady(now); Ready = false; BaselineFrames = 0;
+                    preClick = null; lastFrameAt = 0;
+                    TitleIdentityPauses = Math.Min(1000000, TitleIdentityPauses + 1);
+                    return;
+                }
+                if (!titleMode && !panelMatches) { Reject(PanelRejection("frame-preclick"), now); return; }
                 BaselineFrames = Math.Min(1000, BaselineFrames + 1);
                 if (!Ready && BaselineFrames >= 2) readySince = now;
                 Ready = BaselineFrames >= 2;
@@ -928,9 +1095,14 @@ namespace HexGuide.Desktop
             if (now < ClickedAt) { Reject("frame-pending-time-backward", now); return; }
             if (now - ClickedAt > 2500) { Reject("frame-pending-timeout", now); return; }
             if (now - ClickedAt <= 950 && UniqueFeedback(current, preClick, SelectedIndex)) FeedbackFrames = Math.Min(1000, FeedbackFrames + 1);
-            bool gone = true;
+            // Body differences that were already present before the click
+            // (hover, glow, refreshed OCR lighting) cannot mean dismissal.
+            // In title mode every title must have disappeared, and all three
+            // bodies must change relative to the actual release image.
+            int[][] dismissalReference = titleMode ? preClick : baseline;
+            bool gone = !titleMode || titleMask == 0;
             for (int index = 0; index < 3; index++)
-                gone &= LastDelta[index] >= 18 && CloseFraction(current[index], baseline[index]) <= .45;
+                gone &= Difference(current[index], dismissalReference[index]) >= 18 && CloseFraction(current[index], dismissalReference[index]) <= .45;
             DismissedFrames = gone ? Math.Min(1000, DismissedFrames + 1) : 0;
             // A click followed only by disappearing cards is insufficient.
             Complete = FeedbackFrames > 0 && DismissedFrames >= 3;
@@ -998,10 +1170,12 @@ namespace HexGuide.Desktop
             {
                 case "arm-reference-ineligible":
                 case "frame-invalid-current": case "frame-invalid-reference":
+                case "frame-title-mask-invalid":
                 case "frame-preclick-mae": case "frame-preclick-close": case "frame-preclick-mae-close":
                 case "frame-hold-timeout": case "frame-pending-time-backward": case "frame-pending-timeout":
                 case "pointer-not-game": case "pointer-column-invalid":
                 case "pointer-invalid-current": case "pointer-invalid-reference":
+                case "pointer-title-unverified":
                 case "pointer-panel-mae": case "pointer-panel-close": case "pointer-panel-mae-close":
                 case "pointer-down-pending": case "pointer-down-not-ready": case "pointer-down-missing-frame": case "pointer-down-stale-frame":
                 case "pointer-up-column-mismatch": case "pointer-up-hold-timeout": case "pointer-up-time-backward": return code;
@@ -1089,6 +1263,80 @@ namespace HexGuide.Desktop
                 if (change > 0) positive += change;
             }
             return brighter >= 4 && positive / 64 >= 3.5;
+        }
+
+        internal static int ValidateTitleIdentityFixtures()
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool value, string message) { checks++; if (!value) throw new InvalidOperationException(message); };
+            var baseline = new int[3][]; var hover = new int[3][]; var gone = new int[3][];
+            for (int column = 0; column < 3; column++)
+            {
+                baseline[column] = new int[192]; hover[column] = new int[192]; gone[column] = new int[192];
+                for (int cell = 0; cell < 192; cell++)
+                {
+                    baseline[column][cell] = 45 + column * 25;
+                    hover[column][cell] = 110 + column * 25;
+                    gone[column][cell] = 220;
+                }
+            }
+            Func<ScreenSelectionDecision> armed = delegate {
+                var state = new ScreenSelectionDecision(); state.Arm(1000);
+                state.FrameWithTitleIdentity(baseline, baseline, 1100, true);
+                state.FrameWithTitleIdentity(baseline, baseline, 1170, true);
+                return state;
+            };
+            var legacy = new ScreenSelectionDecision(); legacy.Arm(1000); legacy.Frame(hover, baseline, 1100);
+            check(legacy.Invalid, "Hover regression fixture does not exercise the old whole-card rejection.");
+            var title = armed();
+            title.FrameWithTitleIdentity(hover, baseline, 1240, true);
+            check(title.Ready && !title.Invalid, "Body hover cancelled a valid title identity.");
+            check(!title.Pending && !title.Complete, "Hover alone generated a synthetic selection.");
+            title.PointerWithTitleIdentity(true, 1, true, 1260, hover, baseline, true);
+            check(title.Pressed && !title.Invalid, "A verified title/card down edge was blocked by body hover.");
+            title.PointerWithTitleIdentity(false, 1, true, 1300, hover, baseline, true);
+            check(title.Pending && title.SelectedIndex == 1 && !title.Invalid, "Body hover blocked the same-column release.");
+            title.FrameWithTitleIdentity(gone, baseline, 1370, false);
+            title.FrameWithTitleIdentity(gone, baseline, 1440, false);
+            title.FrameWithTitleIdentity(gone, baseline, 1510, false);
+            check(!title.Complete, "Click and card disappearance bypassed independent confirmation evidence.");
+            var hovering = armed();
+            hovering.FrameWithTitleIdentity(hover, baseline, 1210, true);
+            hovering.PointerWithTitleIdentity(true, 1, true, 1230, hover, baseline, true);
+            hovering.PointerWithTitleIdentity(false, 1, true, 1280, hover, baseline, true);
+            var briefLight = Clone(hover);
+            for (int cell = 0; cell < 8 * 3; cell++) briefLight[1][cell] += 40;
+            hovering.FrameWithTitleIdentity(briefLight, baseline, 1350, 7);
+            hovering.FrameWithTitleIdentity(briefLight, baseline, 1420, 7);
+            hovering.FrameWithTitleIdentity(briefLight, baseline, 1490, 7);
+            check(hovering.FeedbackFrames > 0 && !hovering.Complete && hovering.DismissedFrames == 0,
+                "Existing hover/body differences were mistaken for dismissal while titles remained visible.");
+            hovering.FrameWithTitleIdentity(gone, baseline, 1560, 1);
+            hovering.FrameWithTitleIdentity(gone, baseline, 1630, 1);
+            hovering.FrameWithTitleIdentity(gone, baseline, 1700, 1);
+            check(!hovering.Complete && hovering.DismissedFrames == 0, "A remaining visible title was mistaken for three dismissed cards.");
+            hovering.FrameWithTitleIdentity(gone, baseline, 1770, 0);
+            hovering.FrameWithTitleIdentity(gone, baseline, 1840, 0);
+            hovering.FrameWithTitleIdentity(gone, baseline, 1910, 0);
+            check(hovering.Complete, "Verified click/feedback and three independent fully-dismissed title frames did not complete.");
+            var pause = armed();
+            pause.FrameWithTitleIdentity(hover, baseline, 1240, false);
+            check(!pause.Ready && !pause.Invalid && pause.TitleIdentityPauses == 1, "A temporary unreadable title hard-invalidated the offer.");
+            check(Convert.ToInt32(pause.DiagnosticState(1250)["invalidations"]) == 0, "A temporary title obstruction restarted the OCR settling fence.");
+            pause.FrameWithTitleIdentity(hover, baseline, 1310, true);
+            check(!pause.Ready, "One independent recovered frame prematurely restored readiness.");
+            pause.FrameWithTitleIdentity(hover, baseline, 1380, true);
+            check(pause.Ready && !pause.Invalid, "Two recovered title frames failed to restore readiness.");
+            var changed = armed(); changed.PointerWithTitleIdentity(true, 1, true, 1210, hover, baseline, false);
+            check(changed.Invalid && !changed.Pending, "Changed/unverified title allowed a click lease.");
+            var wrong = armed(); wrong.PointerWithTitleIdentity(true, 0, true, 1210, hover, baseline, true);
+            wrong.PointerWithTitleIdentity(false, 2, true, 1250, hover, baseline, true);
+            check(wrong.Invalid, "Cross-card drag was accepted by title mode.");
+            var outside = armed(); outside.PointerWithTitleIdentity(true, 1, false, 1210, hover, baseline, true);
+            check(outside.Invalid, "Another application's click was accepted by title mode.");
+            var expired = armed(); expired.PointerWithTitleIdentity(true, 1, true, 1500, hover, baseline, true);
+            check(expired.Invalid, "A stale native frame was accepted by title mode.");
+            return checks;
         }
 
         private static int ValidateDecisionDiagnosticFixtures()
@@ -1318,6 +1566,21 @@ namespace HexGuide.Desktop
                     { "width", 1920 }, { "height", 1080 }, { "originX", -2500 }, { "originY", 100 }, { "windowHandle", "42" }, { "regions", regionRows }
                 } }
             };
+            var identityCards = new object[3];
+            for (int index = 0; index < 3; index++)
+            {
+                var titleFeature = new int[128];
+                for (int cell = 0; cell < 128; cell++) titleFeature[cell] = cell % 2 == 0 ? 0 : 8;
+                identityCards[index] = new Dictionary<string, object> { { "column", index }, { "anchors", new object[] {
+                    new Dictionary<string, object> { { "box", new Dictionary<string, object> {
+                        { "x", 430 + index * 384 }, { "y", 350 }, { "width", 180 }, { "height", 30 }
+                    } }, { "feature", new ArrayList(titleFeature) } }
+                } } };
+            }
+            ModelValue.Object(metadata, "capture")["identityAnchors"] = new Dictionary<string, object> {
+                { "version", 1 }, { "algorithm", CardTitleIdentity.Algorithm }, { "frameId", "synthetic-only" },
+                { "pass", "card-titles-color" }, { "cards", identityCards }
+            };
             ScreenSelectionObservation parsed;
             check(ScreenSelectionObservation.TryRead(metadata, 1100, out parsed), "Valid synthetic screen metadata was rejected.");
             if (parsed != null)
@@ -1345,6 +1608,11 @@ namespace HexGuide.Desktop
                 check(inFlight.Complete, "Preserving a pending observation lost the subsequent animation/disappearance sequence.");
             }
             check(!ScreenSelectionObservation.TryRead(metadata, 32000, out parsed), "Expired synthetic metadata was accepted.");
+            metadata["status"] = "leased"; metadata["suspendedAt"] = 1300L; metadata["expiresAt"] = 16000L;
+            check(ScreenSelectionObservation.TryReadContinuation(metadata, 1400, 1250, out parsed), "An already released click could not continue across an unreadable OCR result.");
+            check(!ScreenSelectionObservation.TryRead(metadata, 1400, out parsed), "A suspended result lease was re-armed for a new click.");
+            check(!ScreenSelectionObservation.TryReadContinuation(metadata, 1400, 1301, out parsed), "A click after suspension used a continuation lease.");
+            check(!ScreenSelectionObservation.TryReadContinuation(metadata, 3900, 1250, out parsed), "Expired pending-animation continuation was accepted.");
             return checks + ValidateDecisionDiagnosticFixtures();
         }
     }

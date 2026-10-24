@@ -3,6 +3,10 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 Add-Type -AssemblyName System.Drawing
+# The fixture imports only production functions, never its screen-capture path.
+# Preload the shared algorithm from the source directory because PSScriptRoot
+# belongs to this synthetic fixture after function extraction.
+Add-Type -Path (Join-Path (Split-Path -Parent $Source) 'CardTitleIdentity.cs') -ReferencedAssemblies System.Drawing
 $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
 $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime]
 $null = [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Foundation, ContentType=WindowsRuntime]
@@ -21,7 +25,16 @@ $asTaskMethod = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Obj
 $helpers = [regex]::Match([IO.File]::ReadAllText($Source), '(?s)# OCR_REGION_HELPERS_BEGIN\r?\n(.*?)# OCR_REGION_HELPERS_END').Groups[1].Value
 if (-not $helpers) { throw 'Production OCR helpers were not found.' }
 Invoke-Expression $helpers
+$parseErrors = $null
+$sourceAst = [System.Management.Automation.Language.Parser]::ParseFile($Source, [ref]$null, [ref]$parseErrors)
+if ($parseErrors.Count) { throw 'Production OCR script has parse errors.' }
+$selectionFunction = $sourceAst.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-SelectionRegions'}, $true)
+if (-not $selectionFunction) { throw 'Production card-region function was not found.' }
+Invoke-Expression $selectionFunction.Extent.Text
 $frameId = 'synthetic-fixture-not-live-game'
+$identityAnchors = $null
+$identityAnchorCounts = @{}
+$identityFeatureReady = $null
 $scanClock = [Diagnostics.Stopwatch]::StartNew()
 $scanDeadlineMs = 25000
 $bitmap = New-Object System.Drawing.Bitmap(2560, 1440)
@@ -38,6 +51,7 @@ try {
     for ($column = 0; $column -lt 3; $column++) { $graphics.DrawString($names[$column], $font, $brush, [single]$xs[$column], [single]580) }
     $graphics.Dispose()
     $graphics = $null
+    $selectionCapture = @{capturedAt=1000; width=2560; height=1440; originX=0; originY=0; windowHandle='42'; regions=@(Get-SelectionRegions $bitmap 2560 1440)}
     $lines = @()
     foreach ($variant in @(@{name='card-titles-color'; contrast=$false}, @{name='card-titles-contrast'; contrast=$true})) {
         foreach ($region in @(Get-TitleRegions 2560 1440)) {
@@ -49,7 +63,7 @@ try {
     foreach ($size in @(@(1280, 720), @(2560, 1440), @(3440, 1440), @(8192, 8192))) {
         $geometries += @{width=$size[0]; height=$size[1]; regions=@(Get-TitleRegions $size[0] $size[1])}
     }
-    [Console]::WriteLine((@{status='recognized'; frameId=$frameId; capture=@{width=2560; height=1440}; lines=$lines; geometries=$geometries; elapsedMs=$scanClock.ElapsedMilliseconds} | ConvertTo-Json -Compress -Depth 8))
+    [Console]::WriteLine((@{status='recognized'; frameId=$frameId; capture=@{width=2560; height=1440}; selectionCapture=$selectionCapture; identityAnchors=$identityAnchors; lines=$lines; geometries=$geometries; elapsedMs=$scanClock.ElapsedMilliseconds} | ConvertTo-Json -Compress -Depth 8))
 } finally {
     if ($graphics) { $graphics.Dispose() }
     $brush.Dispose()

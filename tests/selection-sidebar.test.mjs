@@ -10,7 +10,9 @@ const itemsCatalog = JSON.parse(await readFile(new URL('../dist/items.json',impo
 const ids = data.augments.filter(a => a.availability === 'current' && !a.retiredPatch && a.recommendable !== false && !a.isInternalTemplate).slice(0,6).map(a => a.id);
 const initial = Date.parse('2026-10-24T01:00:00Z');
 const capture = time => ({capturedAt:time,width:1920,height:1080,originX:0,originY:0,windowHandle:'12345',
-  regions:[0,1,2].map(column => ({column,x:400+column*400,y:200,width:300,height:550,signature:Array(192).fill(80)}))});
+  regions:[0,1,2].map(column => ({column,x:400+column*400,y:200,width:300,height:550,signature:Array(192).fill(80)})),
+  identityAnchors:{version:1,algorithm:'luma-sobel-16x8-v1',frameId:'synthetic-sidebar-frame',pass:'card-titles-color',
+    cards:[0,1,2].map(column=>({column,anchors:[{box:{x:430+column*400,y:350,width:180,height:24},feature:Array.from({length:128},(_,index)=>index%2?16:0)}]}))}});
 function setup() {
   let clock = initial;
   let live = {connection:{status:'connected'},phase:'InProgress',stage:'playing',gameId:'custom-one',championId:'Ahri',level:9,gameTime:300,
@@ -47,7 +49,7 @@ test('synthetic failed capture retains UI offers but cancels automatic eligibili
   const {sidebar,setResponse} = setup();
   await sidebar.scan();
   const previous = sidebar.getSelectionObservation();
-  setResponse({status:'waiting',proposals:[],message:'not foreground'});
+  setResponse({status:'waiting',code:'game-not-foreground',proposals:[],message:'not foreground'});
   await sidebar.scan();
   assert.equal(sidebar.getModel().offers.length,3);
   assert.equal(sidebar.getSelectionObservation().status,'waiting');

@@ -79,6 +79,8 @@ foreach ($reference in $references) { $compilerArguments += '/reference:' + $ref
 $compilerArguments += Join-Path $projectRoot 'native\Program.cs'
 $compilerArguments += Join-Path $projectRoot 'native\SidebarShortcut.cs'
 $compilerArguments += Join-Path $projectRoot 'native\ScreenSelectionWatcher.cs'
+$compilerArguments += Join-Path $projectRoot 'native\CardTitleIdentity.cs'
+$compilerArguments += Join-Path $projectRoot 'native\OwnedAugmentVerification.cs'
 & $compiler @compilerArguments
 if ($LASTEXITCODE -ne 0) { throw 'Desktop launcher compilation failed.' }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\HexGuide.exe.config') -Destination (Join-Path $stage 'HexGuide.exe.config') -Force
@@ -108,6 +110,7 @@ foreach ($directory in @('dist', 'server', 'docs')) {
 }
 New-Item -ItemType Directory -Path (Join-Path $stage 'native') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\scan-augments.ps1') -Destination (Join-Path $stage 'native\scan-augments.ps1') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'native\CardTitleIdentity.cs') -Destination (Join-Path $stage 'native\CardTitleIdentity.cs') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'package.json') -Destination (Join-Path $stage 'package.json') -Force
 foreach ($document in @('README.md', 'README-data.md', 'README-statistics.md', 'PRIVACY.md', 'THIRD-PARTY-NOTICES.md')) {
     if (Test-Path -LiteralPath (Join-Path $projectRoot $document)) { Copy-Item -LiteralPath (Join-Path $projectRoot $document) -Destination $stage -Force }

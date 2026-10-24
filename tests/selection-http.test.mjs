@@ -30,7 +30,10 @@ function stateFixture(){
   let clock=Date.parse('2026-10-24T00:00:00Z');
   let snapshot={phase:'InProgress',gameId:'game-one',gameTime:600,connection:{status:'connected'},mode:{known:true,isMayhem:true},items:[]};
   const collector={getSnapshot:()=>structuredClone(snapshot)};
-  const sidebar=new BackgroundSidebar({collector,data,now:()=>clock,scanner:async()=>({status:'recognized',proposals:ids.map(id=>({id})),selectionCapture:{capturedAt:clock,width:1920,height:1080,originX:0,originY:0,windowHandle:'123456',regions:ids.map((_,column)=>({column,x:100+column*600,y:300,width:300,height:300,signature:Array(192).fill(100+column)}))}})});
+  const sidebar=new BackgroundSidebar({collector,data,now:()=>clock,scanner:async()=>({status:'recognized',proposals:ids.map(id=>({id})),selectionCapture:{capturedAt:clock,width:1920,height:1080,originX:0,originY:0,windowHandle:'123456',
+    regions:ids.map((_,column)=>({column,x:100+column*600,y:300,width:300,height:300,signature:Array(192).fill(100+column)})),
+    identityAnchors:{version:1,algorithm:'luma-sobel-16x8-v1',frameId:'synthetic-http-frame',pass:'card-titles-color',
+      cards:ids.map((_,column)=>({column,anchors:[{box:{x:130+column*600,y:350,width:180,height:24},feature:Array.from({length:128},(_,index)=>index%2?16:0)}]}))}}})});
   return {sidebar,collector,update:value=>{snapshot={...snapshot,...value};},advance:ms=>{clock+=ms;}};
 }
 

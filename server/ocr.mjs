@@ -145,6 +145,109 @@ function cardLayout(candidates, width, height) {
   return Math.max(...centers.map(item => item.y)) - Math.min(...centers.map(item => item.y)) <= Math.max(12, height * .018, Math.max(...heights) * .7);
 }
 
+const identityAlgorithm = 'luma-sobel-16x8-v1';
+const identityPasses = new Set(['card-titles-color','card-titles-contrast']);
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const integer = (value, minimum, maximum) => Number.isSafeInteger(value) && value >= minimum && value <= maximum;
+const exactKeys = (value, keys) => record(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value,key));
+const strictInside = (box,bounds) => validBox(box) && box.x >= bounds.x && box.y >= bounds.y
+  && box.x + box.width <= bounds.x + bounds.width && box.y + box.height <= bounds.y + bounds.height;
+const sameBox = (left,right) => ['x','y','width','height'].every(key => left[key] === right[key]);
+
+// These descriptors are private, bounded same-frame data, never diagnostics.
+// A usable shape continues an exact OCR identity; it does not identify a name.
+function readIdentityAnchors(raw, capture) {
+  const value = raw.identityAnchors;
+  if (!exactKeys(value,['version','algorithm','frameId','capturedAt','anchors']) || value.version !== 1
+    || value.algorithm !== identityAlgorithm || typeof value.frameId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(value.frameId)
+    || value.frameId !== raw.frameId || value.capturedAt !== capture.capturedAt
+    || !Array.isArray(value.anchors) || !value.anchors.length || value.anchors.length > 36) return null;
+  const counts = new Map();
+  const anchors = [];
+  for (let index = 0; index < value.anchors.length; index++) {
+    const anchor = value.anchors[index], box = anchor?.box, quality = anchor?.quality;
+    if (!exactKeys(anchor,['index','pass','column','box','feature','quality']) || anchor.index !== index
+      || !identityPasses.has(anchor.pass) || !integer(anchor.column,0,2)
+      || !exactKeys(box,['x','y','width','height']) || !integer(box.x,0,capture.width) || !integer(box.y,0,capture.height)
+      || !integer(box.width,8,capture.width) || !integer(box.height,8,capture.height)
+      || !strictInside(box,{x:0,y:0,width:capture.width,height:capture.height})
+      || !Array.isArray(anchor.feature) || anchor.feature.length !== 128 || Array.from(anchor.feature).some(value=>!integer(value,0,64))
+      || !exactKeys(quality,['usable','contrast','edgePixels','activeCells']) || typeof quality.usable !== 'boolean'
+      || !integer(quality.contrast,0,255) || !integer(quality.edgePixels,0,7812) || !integer(quality.activeCells,0,128)) return null;
+    const edgePixels = anchor.feature.reduce((sum,value)=>sum+value,0), activeCells = anchor.feature.filter(value=>value>0).length;
+    // Dense Chinese strokes can occupy more than half the resized pixels.
+    // Reject a near-uniform edge field through spatial variance, rather than
+    // rejecting legitimate glyphs solely because their total is above 4096.
+    const variance = anchor.feature.reduce((sum,value)=>sum+value*value,0)/128 - (edgePixels/128)**2;
+    const usable = quality.contrast >= 24 && edgePixels >= 64 && edgePixels <= 7000 && activeCells >= 8 && variance >= 8;
+    if (quality.edgePixels !== edgePixels || quality.activeCells !== activeCells || quality.usable !== usable) return null;
+    const key = `${anchor.pass}:${anchor.column}`, count = (counts.get(key) || 0) + 1;
+    if (count > 6) return null;
+    counts.set(key,count);
+    anchors.push({index,pass:anchor.pass,column:anchor.column,box:{...box},feature:[...anchor.feature],usable});
+  }
+  if (Buffer.byteLength(JSON.stringify(value)) > 32768) return null;
+  return {frameId:value.frameId,anchors};
+}
+
+function paddedLineBox(line) {
+  const left = Math.max(line.crop.x,Math.floor(line.x)-2), top = Math.max(line.crop.y,Math.floor(line.y)-2);
+  const right = Math.min(line.crop.x+line.crop.width,Math.ceil(line.x+line.width)+2);
+  const bottom = Math.min(line.crop.y+line.crop.height,Math.ceil(line.y+line.height)+2);
+  return {x:left,y:top,width:right-left,height:bottom-top};
+}
+
+function bindTitleAnchors(title, pass, frameId, anchors, capture, lookup) {
+  if (!Array.isArray(title.sourceLines)) return null;
+  const sources = [], seen = new Set();
+  for (const line of title.sourceLines) {
+    if (!integer(line.identityAnchorIndex,0,anchors.length-1) || line.frameId !== frameId || line.pass !== pass
+      || line.column !== title.column || !titleRegion(line,capture.width,capture.height)) continue;
+    const anchor = anchors[line.identityAnchorIndex];
+    if (anchor.pass !== pass || anchor.column !== title.column) continue;
+    if (seen.has(line.identityAnchorIndex)) return null;
+    seen.add(line.identityAnchorIndex);
+    sources.push(line);
+  }
+  const bindings = new Map();
+  const add = selected => {
+    const ordered = [...selected].sort((a,b) => Math.abs(a.y+a.height/2-b.y-b.height/2) <= Math.min(a.height,b.height)*.55 ? a.x-b.x : a.y-b.y);
+    const combined = boundingBox(ordered);
+    if (!combined || ['x','y','width','height'].some(key=>Math.abs(combined[key]-title[key])>2)
+      || lookup(ordered.map(line=>line.text).join(' '))?.id !== title.augment.id) return;
+    const result = [];
+    for (const line of ordered) {
+      const anchor = anchors[line.identityAnchorIndex];
+      if (!anchor.usable || anchor.pass !== pass || anchor.column !== title.column || !sameBox(anchor.box,paddedLineBox(line))
+        || !strictInside(anchor.box,capture.regions[title.column])) return;
+      result.push({box:{...anchor.box},feature:[...anchor.feature]});
+    }
+    const indices = ordered.map(line=>line.identityAnchorIndex);
+    if (new Set(indices).size !== indices.length) return;
+    bindings.set(indices.join(','),result);
+  };
+  for (let first = 0; first < sources.length; first++) {
+    add([sources[first]]);
+    for (let second = first+1; second < sources.length; second++) add([sources[first],sources[second]]);
+  }
+  return bindings.size === 1 ? [...bindings.values()][0] : null;
+}
+
+function bindIdentity(layout, raw, capture, lookup) {
+  const [frameId,pass] = JSON.parse(layout.group);
+  if (!identityPasses.has(pass)) return null;
+  const source = readIdentityAnchors(raw,capture);
+  if (!source || source.frameId !== frameId) return null;
+  const cards = [];
+  for (const title of layout.titles) {
+    const anchors = bindTitleAnchors(title,pass,frameId,source.anchors,capture,lookup);
+    if (!anchors) return null;
+    cards.push({column:title.column,anchors});
+  }
+  const identity = {version:1,algorithm:identityAlgorithm,frameId,pass,cards};
+  return Buffer.byteLength(JSON.stringify(identity)) <= 8192 ? identity : null;
+}
+
 export function matchOcrProposals(raw, augments) {
   if (raw?.status !== 'recognized') return result(raw?.status === 'waiting' ? 'waiting' : 'unavailable', typeof raw?.message === 'string' ? raw.message.slice(0, 200) : '本次没有读到清楚的海克斯名称，可手动选择。', [], nativeDetails(raw));
   const eligible = augments.filter(augment => augment.availability === 'current' && augment.recommendable !== false && !augment.retiredPatch && !augment.isInternalTemplate);
@@ -183,38 +286,51 @@ export function matchOcrProposals(raw, augments) {
     }
     add(group, readLine(line, lookup));
   }
-  for (const {group,column,lines:regionLines} of regions.values()) add(group, readTitleRegion(regionLines,lookup).map(match => ({...match,column})));
+  for (const {group,column,lines:regionLines} of regions.values()) add(group, readTitleRegion(regionLines,lookup).map(match => ({...match,column,sourceLines:regionLines})));
   diagnostics.passCount = groups.size;
   diagnostics.titleRegionCount = regions.size;
   diagnostics.exactTitleCount = [...groups.values()].reduce((sum, entries) => sum + entries.length, 0);
   diagnostics.titleGeometry = [...groups.values()].flat().slice(0, 12).map(({x,y,width,height,column}) => ({x,y,width,height,...(Number.isInteger(column) ? {column} : {})}));
   const layouts = new Map();
-  for (const entries of groups.values()) {
+  for (const [group,entries] of groups) {
     if (entries.length > 30) continue;
     for (let i = 0; i < entries.length - 2; i++) for (let j = i + 1; j < entries.length - 1; j++) for (let k = j + 1; k < entries.length; k++) {
       const triple = [entries[i], entries[j], entries[k]];
       if (!cardLayout(triple, width, height)) continue;
       triple.sort((a,b) => a.x - b.x);
-      layouts.set(JSON.stringify(triple.map(item => item.augment.id)), triple);
+      const key = JSON.stringify(triple.map(item => item.augment.id));
+      const alternatives = layouts.get(key) || [];
+      if (alternatives.length < 32) alternatives.push({group,titles:triple});
+      layouts.set(key,alternatives);
     }
   }
   diagnostics.layoutCount = layouts.size;
   if (layouts.size !== 1) return incomplete(layouts.size > 1 ? 'title-layout-ambiguous' : !lines.length ? 'ocr-no-text' : !diagnostics.exactTitleCount ? 'title-name-unmatched' : 'title-layout-incomplete');
-  const matched = [...layouts.values()][0];
+  const alternatives = [...layouts.values()][0];
+  const matched = alternatives[0].titles;
   const proposals = matched.map(({augment}) => ({id:augment.id, name:augment.name, confidence:'exact'}));
   const selectionCapture = sanitizeSelectionCapture(raw.selectionCapture, {width, height});
   // A recognized name must belong to the same physical card the click watcher
   // samples. Different layouts still display candidates but require confirmation.
-  const captureAligned = selectionCapture && matched.every((title, column) => {
+  const aligned = titles => selectionCapture && titles.every((title, column) => {
     const region = selectionCapture.regions[column];
     const centerX = title.x + title.width / 2, centerY = title.y + title.height / 2;
     return centerX >= region.x && centerX < region.x + region.width
       && centerY >= region.y && centerY < region.y + region.height;
   });
+  const captureAligned = alternatives.some(layout=>aligned(layout.titles));
   const selectionMetadataStatus = raw.selectionCapture == null ? 'missing'
     : !selectionCapture ? 'shape-invalid' : !captureAligned ? 'title-outside-region' : 'accepted';
+  let automaticCapture = null;
+  if (captureAligned) for (const layout of alternatives) {
+    if (!aligned(layout.titles)) continue;
+    const identityAnchors = bindIdentity(layout,raw,selectionCapture,lookup);
+    if (identityAnchors) { automaticCapture = {...selectionCapture,identityAnchors}; break; }
+  }
+  const automaticStatus = selectionMetadataStatus !== 'accepted' ? selectionMetadataStatus
+    : automaticCapture ? 'accepted' : raw.identityAnchors == null ? 'missing' : 'shape-invalid';
   return result('recognized', '识别到同排的三个候选标题，请逐一核对后再带入推荐；这不会自动记录为已选海克斯。', proposals,
-    {...details('title-layout-confirmed'), selectionMetadataStatus, ...(captureAligned ? {selectionCapture} : {})});
+    {...details('title-layout-confirmed'), selectionMetadataStatus:automaticStatus, ...(automaticCapture ? {selectionCapture:automaticCapture} : {})});
 }
 
 export function createOcrScanner({applicationDirectory, dataDirectory, augments = [], executeScript = execute, platform = process.platform} = {}) {

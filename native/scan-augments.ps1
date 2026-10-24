@@ -13,11 +13,18 @@ $frameId = [Guid]::NewGuid().ToString('N')
 $scanClock = [Diagnostics.Stopwatch]::StartNew()
 $scanDeadlineMs = 10000
 $selectionCapture = $null
+$identityAnchors = $null
+$identityAnchorCounts = @{}
+$identityFeatureReady = $null
 $previousDpiContext = [IntPtr]::Zero
 
 function Write-Result([string]$Status, [string]$Message, [object[]]$Lines = @(), [string]$Text = '', [string]$Code = 'ok') {
     $payload = @{status=$Status; code=$Code; stage=$script:stage; diagnostics=$script:diagnostics; frameId=$script:frameId; message=$Message; text=$Text; lines=@($Lines)}
     if ($script:selectionCapture -and $Status -eq 'recognized') { $payload.selectionCapture = $script:selectionCapture }
+    if ($script:identityAnchors -and $Status -eq 'recognized') {
+        $anchorJson = $script:identityAnchors | ConvertTo-Json -Compress -Depth 6
+        if ([Text.Encoding]::UTF8.GetByteCount($anchorJson) -le 32768) { $payload.identityAnchors = $script:identityAnchors }
+    }
     [Console]::WriteLine(($payload | ConvertTo-Json -Compress -Depth 7))
 }
 
@@ -54,6 +61,46 @@ function Get-SelectionRegions($Image, [int]$Width, [int]$Height) {
 }
 
 # OCR_REGION_HELPERS_BEGIN
+function Initialize-TitleIdentityFeature {
+    if ($script:identityFeatureReady -eq $false) { return $false }
+    try {
+        if (-not ('HexGuide.Desktop.CardTitleIdentity' -as [type])) {
+            Add-Type -Path (Join-Path $PSScriptRoot 'CardTitleIdentity.cs') -ReferencedAssemblies System.Drawing -ErrorAction Stop
+        }
+        $script:identityFeatureReady = $true
+    } catch { $script:identityFeatureReady = $false }
+    return $script:identityFeatureReady
+}
+
+function New-TitleIdentityAnchor($Image, $Region, $Entry, [string]$Pass) {
+    # Use exactly the original OCR frame, never a later capture. Wide title
+    # bands are discovery regions; only the actual whole OCR line gets an anchor.
+    if (-not $script:selectionCapture -or -not $Region.ContainsKey('column') -or $Pass -notin @('card-titles-color','card-titles-contrast')) { return $null }
+    if (-not (Initialize-TitleIdentityFeature)) { return $null }
+    if (-not $script:identityAnchorCounts) { $script:identityAnchorCounts = @{} }
+    $countKey = $Pass + ':' + $Region.column
+    if ([int]$script:identityAnchorCounts[$countKey] -ge 6) { return $null }
+    if ($Entry.x -lt $Region.x -or $Entry.y -lt $Region.y -or ($Entry.x + $Entry.width) -gt ($Region.x + $Region.width) -or ($Entry.y + $Entry.height) -gt ($Region.y + $Region.height)) { return $null }
+    $left = [int][Math]::Max($Region.x, [Math]::Floor($Entry.x) - 2)
+    $top = [int][Math]::Max($Region.y, [Math]::Floor($Entry.y) - 2)
+    $right = [int][Math]::Min(($Region.x + $Region.width), [Math]::Ceiling($Entry.x + $Entry.width) + 2)
+    $bottom = [int][Math]::Min(($Region.y + $Region.height), [Math]::Ceiling($Entry.y + $Entry.height) + 2)
+    if ($left -lt 0 -or $top -lt 0 -or $right -gt $Image.Width -or $bottom -gt $Image.Height -or ($right-$left) -lt 8 -or ($bottom-$top) -lt 8) { return $null }
+    try {
+        $box = New-Object System.Drawing.Rectangle($left, $top, ($right-$left), ($bottom-$top))
+        $feature = [HexGuide.Desktop.CardTitleIdentity]::Extract($Image, $box)
+        if (-not $script:identityAnchors) {
+            $script:identityAnchors = @{version=1; algorithm=[HexGuide.Desktop.CardTitleIdentity]::Algorithm; frameId=$script:frameId; capturedAt=$script:selectionCapture.capturedAt; anchors=(New-Object System.Collections.ArrayList)}
+        }
+        if ($script:identityAnchors.anchors.Count -ge 36) { return $null }
+        $index = $script:identityAnchors.anchors.Count
+        $anchor = @{index=$index; pass=$Pass; column=$Region.column; box=@{x=$left; y=$top; width=$right-$left; height=$bottom-$top}; feature=@($feature.Feature); quality=@{usable=$feature.Usable; contrast=$feature.Contrast; edgePixels=$feature.EdgePixels; activeCells=$feature.ActiveCells}}
+        [void]$script:identityAnchors.anchors.Add($anchor)
+        $script:identityAnchorCounts[$countKey] = [int]$script:identityAnchorCounts[$countKey] + 1
+        return $index
+    } catch { return $null }
+}
+
 function Get-TitleRegions([int]$Width, [int]$Height) {
     # The three cards occupy the centered 16:9 game viewport, including on an
     # ultrawide display. Keep generous overlapping columns and the whole title
@@ -154,6 +201,8 @@ function Invoke-ImageRegionOcr($Image, $Region, [double]$RequestedScale, [string
                 $entry.region = 'card-title'
                 $entry.column = $Region.column
                 $entry.crop = @{x=$Region.x; y=$Region.y; width=$Region.width; height=$Region.height}
+                $anchorIndex = New-TitleIdentityAnchor $Image $Region $entry $Pass
+                if ($null -ne $anchorIndex) { $entry.identityAnchorIndex = $anchorIndex }
             }
             $entry
         }
