@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.9.4.0")]
-[assembly: AssemblyFileVersion("1.9.4.0")]
-[assembly: AssemblyInformationalVersion("1.9.4")]
+[assembly: AssemblyVersion("1.9.5.0")]
+[assembly: AssemblyFileVersion("1.9.5.0")]
+[assembly: AssemblyInformationalVersion("1.9.5")]
 
 namespace HexGuide.Desktop
 {
@@ -62,23 +62,28 @@ namespace HexGuide.Desktop
         }
     }
 
-    // Automatic display follows the foreground game. Explicit opening remains pinned
-    // until the user closes it, independent of the main window or foreground app.
+    // Other foreground apps temporarily hide the panel without changing its open
+    // intent. Returning to the game or main window restores that same intent.
     internal sealed class SidebarVisibilityState
     {
         internal bool Enabled { get; private set; }
         internal bool Pinned { get; private set; }
+        private bool automaticOpened;
         internal SidebarVisibilityState(bool initiallyPinned)
         {
             Enabled = true; Pinned = initiallyPinned;
         }
-        internal bool ShouldShow(bool gameForeground) { return Enabled && (Pinned || gameForeground); }
-        internal bool HideForMainWindow { get { return !Pinned; } }
+        internal bool ShouldShow(bool gameForeground, bool mainForeground)
+        {
+            if (Enabled && gameForeground) automaticOpened = true;
+            return Enabled && (gameForeground || mainForeground) && (Pinned || automaticOpened);
+        }
+        internal bool HideForMainWindow { get { return !(Pinned || automaticOpened); } }
         internal void OpenPinned() { Enabled = true; Pinned = true; }
-        internal void Close() { Enabled = false; Pinned = false; }
+        internal void Close() { Enabled = false; Pinned = false; automaticOpened = false; }
         internal void Toggle(bool currentlyVisible)
         {
-            if (Pinned || currentlyVisible) Close();
+            if (Pinned || automaticOpened || currentlyVisible) Close();
             else OpenPinned();
         }
         internal static int ValidateFixtures()
@@ -88,32 +93,40 @@ namespace HexGuide.Desktop
             { if (!condition) throw new InvalidOperationException(message); checks++; };
             var automatic = new SidebarVisibilityState(false);
             check(automatic.Enabled && !automatic.Pinned, "Default sidebar intent must remain automatic.");
-            check(automatic.ShouldShow(true), "Automatic sidebar did not follow the foreground game.");
-            check(!automatic.ShouldShow(false), "Automatic sidebar appeared over an unrelated foreground app.");
-            check(automatic.HideForMainWindow, "Automatic sidebar must yield when the main window is opened.");
+            check(!automatic.ShouldShow(false, true) && automatic.HideForMainWindow, "An unopened sidebar appeared on the initial main page.");
+            check(!automatic.ShouldShow(false, false), "Automatic sidebar appeared over an unrelated foreground app.");
+            check(automatic.ShouldShow(true, false), "The first foreground game did not automatically open the sidebar.");
+            check(!automatic.ShouldShow(false, false) && automatic.Enabled, "Leaving the game did not temporarily hide the sidebar while retaining intent.");
+            check(automatic.ShouldShow(false, true) && !automatic.HideForMainWindow, "Returning to the main page did not restore the automatically opened sidebar.");
             // Exercise only policy transitions. Actual message dispatch, hotkey
             // registration and main-window visibility require separate UI verification.
             var requested = new SidebarVisibilityState(false);
             requested.Toggle(false);
             check(requested.Enabled && requested.Pinned, "Explicit opening was not pinned.");
-            foreach (bool gameForeground in new bool[] { true, false, false, true, false })
-                check(requested.ShouldShow(gameForeground), "A foreground transition hid the explicitly opened sidebar.");
+            check(requested.ShouldShow(true, false), "An explicitly opened sidebar was not visible in the game.");
+            check(!requested.ShouldShow(false, false) && requested.Pinned && requested.Enabled, "Other apps did not suspend a pinned sidebar without clearing intent.");
+            check(requested.ShouldShow(false, true), "Returning to the main window did not restore the pinned sidebar.");
+            check(!requested.ShouldShow(false, false) && requested.ShouldShow(true, false), "Repeated away/return cycles lost the open state.");
             check(!requested.HideForMainWindow && requested.Pinned, "The main-window hiding policy would hide a pinned sidebar.");
             requested.Toggle(true);
             check(!requested.Enabled && !requested.Pinned, "Explicit toggling did not close and unpin the sidebar.");
-            check(!requested.ShouldShow(true) && !requested.ShouldShow(false), "A manually closed sidebar reopened on a foreground change.");
+            check(!requested.ShouldShow(true, false) && !requested.ShouldShow(false, true) && !requested.ShouldShow(false, false), "A manually closed sidebar reopened on a foreground change.");
             requested.OpenPinned();
-            check(requested.ShouldShow(false), "Explicit preview opening did not pin the sidebar over a non-game foreground.");
+            check(requested.ShouldShow(false, true) && !requested.ShouldShow(false, false), "Explicit preview escaped the allowed foreground scope.");
             requested.Close();
-            check(!requested.ShouldShow(true), "Closing the visibility policy did not keep the sidebar closed.");
+            check(!requested.ShouldShow(true, false), "Closing the visibility policy did not keep the sidebar closed.");
             var launchPreview = new SidebarVisibilityState(true);
-            check(launchPreview.Pinned && launchPreview.ShouldShow(false), "Sidebar-preview startup did not preserve an explicit open request.");
+            check(launchPreview.Pinned && !launchPreview.ShouldShow(false, false) && launchPreview.ShouldShow(false, true), "Sidebar-preview startup did not preserve intent while outside the allowed scope.");
             launchPreview.Toggle(false);
             check(!launchPreview.Enabled && !launchPreview.Pinned, "A temporarily hidden pinned window could not be closed by the next toggle.");
             automatic.Toggle(true);
-            check(!automatic.ShouldShow(true), "Toggling an automatically visible sidebar did not close it.");
+            check(!automatic.ShouldShow(true, false) && !automatic.ShouldShow(false, true), "Toggling an automatically visible sidebar did not close it.");
             automatic.Toggle(false);
-            check(automatic.Pinned && automatic.ShouldShow(false), "Reopening after a manual close did not pin the sidebar.");
+            check(automatic.Pinned && automatic.ShouldShow(false, true) && !automatic.ShouldShow(false, false), "Reopening after a manual close did not preserve a scoped open state.");
+            var hiddenAutomatic = new SidebarVisibilityState(false);
+            hiddenAutomatic.ShouldShow(true, false); hiddenAutomatic.ShouldShow(false, false);
+            hiddenAutomatic.Toggle(false);
+            check(!hiddenAutomatic.ShouldShow(true, false) && !hiddenAutomatic.ShouldShow(false, true), "Explicitly toggling a temporarily hidden automatic panel did not close its open intent.");
             return checks;
         }
     }
@@ -150,7 +163,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.9.4 · 我的这一局";
+            Text = "海克斯指南 1.9.5 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -232,6 +245,7 @@ namespace HexGuide.Desktop
             tray.DoubleClick += delegate { ShowMain(); };
             shortcut = new SidebarShortcut(delegate { if (!closing) ToggleSidebar(); },
                 delegate { return !closing && GameWindow.IsShortcutForeground(IsHandleCreated ? Handle : IntPtr.Zero); });
+            shortcut.ContextChanged += delegate(bool allowed) { if (!closing) UpdateSidebarVisibility(); };
             refreshTimer = new Timer { Interval = 400 };
             refreshTimer.Tick += async delegate
             {
@@ -340,11 +354,13 @@ namespace HexGuide.Desktop
         private void UpdateSidebarVisibility()
         {
             if (closing || sidebar.IsDisposed) return;
-            IntPtr foreground = GameWindow.ForegroundGame();
-            if (foreground != IntPtr.Zero) lastGame = foreground;
-            desiredSidebarVisible = sidebarVisibility.ShouldShow(foreground != IntPtr.Zero);
+            IntPtr foreground = GameWindow.CurrentForeground();
+            bool gameForeground = GameWindow.IsVerifiedGame(foreground);
+            bool mainForeground = foreground != IntPtr.Zero && IsHandleCreated && foreground == Handle;
+            if (gameForeground) lastGame = foreground;
+            desiredSidebarVisible = sidebarVisibility.ShouldShow(gameForeground, mainForeground);
             if (!desiredSidebarVisible) { if (sidebar.Visible) sidebar.Hide(); UpdateSidebarHint(false); return; }
-            IntPtr target = foreground != IntPtr.Zero ? foreground : lastGame;
+            IntPtr target = gameForeground ? foreground : lastGame;
             Rectangle area = GameWindow.PlacementArea(target);
             sidebar.Place(area);
             if (!sidebar.Visible) sidebar.ShowPassive();
@@ -1838,6 +1854,7 @@ namespace HexGuide.Desktop
             return visible.Width > 0 && visible.Height > 0 ? visible : monitor;
         }
         internal static IntPtr ForegroundGame() { IntPtr window = GetForegroundWindow(); return IsVerifiedGame(window) ? window : IntPtr.Zero; }
+        internal static IntPtr CurrentForeground() { return GetForegroundWindow(); }
         internal static bool IsGameForeground() { return ForegroundGame() != IntPtr.Zero; }
         internal static bool IsShortcutForeground(IntPtr mainWindow)
         {

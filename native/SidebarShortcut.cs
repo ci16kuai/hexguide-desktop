@@ -79,6 +79,7 @@ namespace HexGuide.Desktop
         internal long RegistrationAttempts, BlockedMessageCount;
         internal long ReceivedCount, MessageToggleCount, FallbackToggleCount, UiPulseCount, ConfirmRequests, ConfirmSuccesses;
         internal DateTime LastReceivedAt, LastToggleAt, LastUiPulseAt;
+        internal event Action<bool> ContextChanged;
 
         internal SidebarShortcut(Action toggle, Func<bool> allowedContext) : this(toggle, allowedContext, new WindowsShortcutPlatform(), true) { }
         internal SidebarShortcut(Action toggle, IShortcutPlatform platform, bool startPolling)
@@ -137,6 +138,7 @@ namespace HexGuide.Desktop
                 Registered = platform.Register(Handle);
                 RegistrationError = Registered ? 0 : platform.LastError;
             }
+            if (ContextChanged != null) ContextChanged(allowed);
             return allowed;
         }
         private bool Dispatch()
@@ -298,12 +300,17 @@ namespace HexGuide.Desktop
             int scopedToggles = 0;
             using (var receiver = new SidebarShortcut(delegate { scopedToggles++; }, delegate { return allowed; }, scoped, false))
             {
+                var contextEvents = new List<bool>();
+                var openIntent = new SidebarVisibilityState(true);
+                bool panelShown = false;
+                receiver.ContextChanged += delegate(bool active) { contextEvents.Add(active); panelShown = openIntent.ShouldShow(false, active); };
                 receiver.Poll();
                 check(!receiver.Registered && scoped.Registers == 0 && scoped.KeyReads == 0, "Other apps must not register or sample the shortcut.");
                 receiver.Receive(0x0312, Id, scoped.Now);
                 check(scopedToggles == 0 && receiver.BlockedMessageCount == 1, "Other-app messages must not toggle the sidebar.");
                 allowed = true; scoped.Now += 200; receiver.Poll();
                 check(receiver.Registered && scoped.Registers == 1 && scopedToggles == 0, "Entering an allowed window with held keys triggered the sidebar.");
+                check(panelShown && contextEvents.Count == 1, "Entering the allowed context did not restore the panel's open intent.");
                 scoped.H = false; receiver.Poll(); scoped.Now += 200;
                 receiver.Receive(0x0312, Id, 1000);
                 check(scopedToggles == 0, "A queued message from outside the allowed context was accepted.");
@@ -314,8 +321,10 @@ namespace HexGuide.Desktop
                 int reads = scoped.KeyReads; receiver.Poll();
                 check(scopedToggles == 1 && !receiver.Registered && scoped.Unregisters == 1 && scoped.KeyReads == reads,
                     "Switching to another app did not immediately gate messages, release registration and stop key sampling.");
+                check(!panelShown && openIntent.Pinned && openIntent.Enabled && contextEvents.Count == 2, "Leaving the allowed context changed the panel's saved open intent.");
                 allowed = true; scoped.Now += 200; receiver.Poll();
                 check(scopedToggles == 1 && scoped.Registers == 2, "Returning with H held caused an accidental toggle.");
+                check(panelShown && contextEvents.Count == 3 && contextEvents[0] && !contextEvents[1] && contextEvents[2], "Returning did not restore the panel exactly once per context transition.");
                 scoped.H = false; receiver.Poll(); scoped.Now += 200;
                 scoped.H = true; receiver.Receive(0x0312, Id, scoped.Now); receiver.Poll();
                 check(scopedToggles == 2, "A new message-first press after returning did not toggle exactly once.");
