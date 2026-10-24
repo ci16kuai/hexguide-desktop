@@ -1,4 +1,5 @@
 import {createStatistics,getChampionRows,getAugmentRows,getAugmentBuildAdvice} from './statistics.js';
+import {replacePreservingFocus} from './focus-preservation.js';
 
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const number=value=>Number.isFinite(Number(value))?Number(value).toLocaleString('zh-CN'):'—';
@@ -96,9 +97,7 @@ export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args)}
   function html(){if(!loaded&&!loading&&!error)load();return `<div id="statistics-root" class="statistics-page" ${target('stats-content','英雄胜率统计内容',true)}>${content()}</div>`;}
   function redraw(){
     const root=document.getElementById('statistics-root');if(!root)return;
-    const active=document.activeElement,focusId=root.contains(active)?active?.id:'',start=active?.selectionStart,end=active?.selectionEnd;
-    root.innerHTML=content();
-    if(focusId){const input=document.getElementById(focusId);input?.focus({preventScroll:true});if(typeof start==='number'&&/^(search|text)$/.test(input?.type))input.setSelectionRange(start,end);}
+    replacePreservingFocus(root,()=>{root.innerHTML=content();});
   }
   document.addEventListener('click',event=>{
     const button=event.target.closest('[data-stats-action]');if(!button||!button.closest('#statistics-root'))return;

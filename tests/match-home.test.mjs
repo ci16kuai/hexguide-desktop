@@ -4,6 +4,8 @@ import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 import {enrichData,recommend,getSynergy,getChampionTags,TAG_LABELS} from '../dist/engine.js';
 import {getVersionInfo} from '../dist/version.js';
+import {replacePreservingFocus} from '../dist/focus-preservation.js';
+import {focusDocument,focusElement} from './fixtures/focus-dom.mjs';
 
 const source=await readFile(new URL('../dist/app.js',import.meta.url),'utf8');
 const catalog=JSON.parse(await readFile(new URL('../dist/data.json',import.meta.url),'utf8'));
@@ -11,18 +13,19 @@ const active=catalog.augments.filter(a=>!a.isInternalTemplate&&a.availability===
 
 async function appHarness(hash=''){
   const storage=new Map(),nodes=new Map(),clicks=[],hashListeners=[];
+  const document=focusDocument();
   let liveContext,syncContext,manualChanges=0;
-  const node=selector=>{if(!nodes.has(selector))nodes.set(selector,{innerHTML:'',textContent:'',hidden:false,value:'',open:false,scrolls:0,focuses:0,classList:{add(){},remove(){},toggle(){}},dataset:{},addEventListener(){},setAttribute(){},removeAttribute(){},showModal(){this.open=true;},close(){this.open=false;},focus(){this.focuses++;},querySelector(){return null;},insertAdjacentHTML(_position,html){this.innerHTML+=html;},scrollIntoView(){this.scrolls++;}});return nodes.get(selector);};
+  const node=selector=>{if(!nodes.has(selector))nodes.set(selector,focusElement(document,{id:selector.startsWith('#')?selector.slice(1):'',textContent:'',hidden:false,value:'',open:false,scrolls:0,classList:{add(){},remove(){},toggle(){}},addEventListener(){},setAttribute(){},removeAttribute(){},showModal(){this.open=true;},close(){this.open=false;},querySelector(){return null;},insertAdjacentHTML(_position,html){this.innerHTML+=html;},scrollIntoView(){this.scrolls++;}}));return nodes.get(selector);};
   const nav=['live','library','champions','stats','synergy','compare'].map(tab=>({...node(`nav-${tab}`),dataset:{nav:tab}}));
   const location={hash};
   const context=vm.createContext({
-    enrichData,recommend,getSynergy,getChampionTags,TAG_LABELS,getVersionInfo,
+    enrichData,recommend,getSynergy,getChampionTags,TAG_LABELS,getVersionInfo,replacePreservingFocus,
     createStatisticsView:()=>({html:()=>'<div class="statistics-fixture">英雄胜率</div>'}),
     createLiveController:options=>{liveContext=options;return {html:()=>`<div class="live-fixture">已确认 ${options.getOwned().length} 个海克斯 · ${options.getChampion()?.name}</div>`,manualChampion(){manualChanges++;}};},
     createSessionSync:options=>{syncContext=options;return {publish(){},close(){}};},
     localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},
     sessionStorage:{getItem:()=>null},location,
-    document:{title:'',querySelector:node,querySelectorAll:selector=>selector==='[data-nav]'?nav:selector==='dialog'?[node('#detail-dialog'),node('#picker-dialog')]:[],addEventListener:(name,callback)=>{if(name==='click')clicks.push(callback);}},
+    document:Object.assign(document,{title:'',querySelector:node,querySelectorAll:selector=>selector==='[data-nav]'?nav:selector==='dialog'?[node('#detail-dialog'),node('#picker-dialog')]:[],addEventListener:(name,callback)=>{if(name==='click')clicks.push(callback);}}),
     window:{addEventListener:(name,callback)=>{if(name==='hashchange')hashListeners.push(callback);},scrollTo(){}},
     fetch:async url=>{assert.equal(url,'./data.json');return {ok:true,json:async()=>structuredClone(catalog)};},
     setTimeout:()=>1,clearTimeout(){},matchMedia:()=>({matches:true}),console
@@ -32,13 +35,14 @@ async function appHarness(hash=''){
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(node('#loading').hidden,true,node('#loading').innerHTML);
   return {
-    node,location,storage,nav,
+    node,location,storage,nav,document,
     html:()=>node('#app').innerHTML,
     navigate(tab){location.hash=`#${tab}`;hashListeners.forEach(callback=>callback());},
     click(action,extra={}){const event={preventDefault(){},target:{closest:()=>({dataset:{action,...extra}})}};clicks.forEach(callback=>callback(event));},
     offers(ids){liveContext.onOffers(ids);},
     expireOffers(){liveContext.onOffersExpired();},
     sync(value){syncContext.applyState(value);},
+    refreshLive(){liveContext.renderLive();},
     get buildExpanded(){return liveContext.getBuildExpanded();},
     get selectedAugment(){return liveContext.getSelectedAugment();},
     get manualChanges(){return manualChanges;}
@@ -78,6 +82,7 @@ test('home comparison and adoption share candidates with the independent compari
   assert.equal(app.location.hash,'#live');
   assert.equal(app.buildExpanded,true);
   assert.equal(app.node('#live-build').scrolls,1);
+  assert.equal(app.node('#live-build').focuses,1,'explicit adoption still focuses the expanded build');
   app.navigate('live');
   assert.match(app.html(),/已确认 1 个海克斯/);
   assert.doesNotMatch(app.html(),/data-ui-id="home-compare-results"/);
@@ -139,4 +144,35 @@ test('reference-page champion switch remains manual and updates the shared home 
   assert.equal(app.manualChanges,1);
   app.navigate('live');
   assert.ok(app.html().includes(champion.name));
+});
+
+test('automatic live polling restores only foreground controls replaced inside live content',async()=>{
+  for(const mode of ['foreground','background','hidden','topbar']){
+    const app=await appHarness('#live'),root=app.node('#live-content');
+    const old=focusElement(app.document,{dataset:{liveAction:'pause'}}),next=focusElement(app.document,{dataset:{liveAction:'pause'}});
+    root.replaceChildren(old);root.nextChildren=[next];app.document.activeElement=old;
+    if(mode==='background')app.document.focused=false;
+    if(mode==='hidden')app.document.visibilityState='hidden';
+    if(mode==='topbar')app.document.activeElement=focusElement(app.document,{dataset:{liveAction:'pause'}});
+    app.refreshLive();
+    assert.equal(next.focuses,mode==='foreground'?1:0,mode);
+    assert.equal(old.focuses,0,mode);
+  }
+});
+
+test('offers and sidebar sync keep foreground controls usable without focusing background or dialogs',async()=>{
+  for(const trigger of ['offers','session-sync'])for(const mode of ['foreground','background','hidden','dialog']){
+    const app=await appHarness('#live'),root=app.node('#app');
+    const old=focusElement(app.document,{id:'route'}),next=focusElement(app.document,{id:'route'});
+    root.replaceChildren(old);root.nextChildren=[next];app.document.activeElement=old;
+    if(mode==='background')app.document.focused=false;
+    if(mode==='hidden')app.document.visibilityState='hidden';
+    const dialog=app.node('#picker-search');
+    if(mode==='dialog')app.document.activeElement=dialog;
+    if(trigger==='offers')app.offers(active.slice(0,3).map(a=>String(a.id)));
+    else app.sync({owned:[],route:'auto',gameId:'fixture-game'});
+    assert.equal(next.focuses,mode==='foreground'?1:0,`${trigger}: ${mode}`);
+    assert.equal(dialog.focuses,0,`${trigger}: ${mode}`);
+    assert.equal(old.focuses,0,`${trigger}: ${mode}`);
+  }
 });

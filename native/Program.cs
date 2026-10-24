@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.9.6.0")]
-[assembly: AssemblyFileVersion("1.9.6.0")]
-[assembly: AssemblyInformationalVersion("1.9.6")]
+[assembly: AssemblyVersion("1.9.7.0")]
+[assembly: AssemblyFileVersion("1.9.7.0")]
+[assembly: AssemblyInformationalVersion("1.9.7")]
 
 namespace HexGuide.Desktop
 {
@@ -174,7 +174,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.9.6 · 我的这一局";
+            Text = "海克斯指南 1.9.7 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -733,6 +733,13 @@ namespace HexGuide.Desktop
     // The painted sidebar has no text controls or WebView that can take keyboard focus.
     internal sealed class SidebarWindow : Form
     {
+        // Keep WinForms' managed TopMost state false. Framework Form.Show()
+        // otherwise calls FocusActiveControlInternal even with
+        // ShowWithoutActivation=true, and CreateHandle reapplies TopMost using
+        // SetWindowPos without SWP_NOACTIVATE. Native styles provide the same
+        // stacking policy without entering either managed activation path.
+        private const int PassiveWindowStyles = 0x00000008 | 0x00000080 | 0x08000000; // TOPMOST | TOOLWINDOW | NOACTIVATE
+        private const uint PassiveShowFlags = 0x0010 | 0x0200 | 0x0040; // NOACTIVATE | NOOWNERZORDER | SHOWWINDOW
         private Font headingFont, normalFont, smallFont;
         private SidebarAppearance appearance = new SidebarAppearance();
         private Dictionary<string, object> model = ModelValue.Failure("正在连接本地助手…");
@@ -838,7 +845,6 @@ namespace HexGuide.Desktop
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
             ShowInTaskbar = false;
-            TopMost = true;
             BackColor = Color.FromArgb(14, 22, 32);
             ForeColor = Color.FromArgb(229, 236, 245);
             UpdateFonts();
@@ -849,7 +855,7 @@ namespace HexGuide.Desktop
         protected override bool ShowWithoutActivation { get { return true; } }
         protected override CreateParams CreateParams
         {
-            get { var value = base.CreateParams; value.ExStyle |= 0x00000080 | 0x08000000; return value; }
+            get { var value = base.CreateParams; value.ExStyle |= PassiveWindowStyles; return value; }
         }
         protected override void WndProc(ref Message message)
         {
@@ -930,7 +936,7 @@ namespace HexGuide.Desktop
         internal void ShowPassive()
         {
             if (!Visible) Show();
-            SetWindowPos(Handle, new IntPtr(-1), Left, Top, Width, Height, 0x0010 | 0x0040); // NOACTIVATE | SHOWWINDOW
+            SetWindowPos(Handle, new IntPtr(-1), Left, Top, Width, Height, PassiveShowFlags);
         }
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -1370,8 +1376,8 @@ namespace HexGuide.Desktop
             {
                 window.remoteIcons = false;
                 int flags = window.CreateParams.ExStyle;
-                bool safe = window.ShowWithoutActivation && (flags & 0x08000000) != 0 && (flags & 0x00000080) != 0
-                    && !window.ShowInTaskbar && window.TopMost && window.FormBorderStyle == FormBorderStyle.None && !window.Visible;
+                bool safe = window.ShowWithoutActivation && (flags & PassiveWindowStyles) == PassiveWindowStyles
+                    && !window.ShowInTaskbar && !window.TopMost && window.FormBorderStyle == FormBorderStyle.None && !window.Visible;
                 if (!safe) throw new InvalidOperationException("Sidebar nonactivation self-test failed.");
                 window.Model = new Dictionary<string, object> {
                     { "connection", new Dictionary<string, object> { { "status", "waiting" }, { "message", "离屏布局预览 · 下方均为示例数据" } } },
@@ -1398,6 +1404,7 @@ namespace HexGuide.Desktop
                 };
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png); }
                 if (window.Visible) throw new InvalidOperationException("Off-screen test unexpectedly displayed a window.");
+                int passiveActivationChecks = ValidatePassiveActivationFixtures(window);
                 window.ExpandBuild();
                 string buildPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-build.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(buildPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
@@ -1421,8 +1428,30 @@ namespace HexGuide.Desktop
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
             }
+        }
+        private static int ValidatePassiveActivationFixtures(SidebarWindow window)
+        {
+            // This fixture never calls Show/ShowPassive or sends real input.
+            // Its hidden HWND was created solely for off-screen rendering.
+            Require(!window.TopMost && window.WindowState == FormWindowState.Normal,
+                "Sidebar entered a managed TopMost/maximized focus path.");
+            Require((window.CreateParams.ExStyle & PassiveWindowStyles) == PassiveWindowStyles,
+                "Sidebar creation styles omitted its passive topmost policy.");
+            Require(window.IsHandleCreated && (GetWindowLongPtr(window.Handle, -20).ToInt64() & PassiveWindowStyles) == PassiveWindowStyles,
+                "The hidden sidebar HWND did not carry native TOPMOST/TOOLWINDOW/NOACTIVATE styles.");
+            Require((PassiveShowFlags & (0x0010 | 0x0200 | 0x0040)) == (0x0010 | 0x0200 | 0x0040),
+                "Passive showing could activate a window or reorder its owner.");
+            Message activation = Message.Create(window.Handle, 0x0021, IntPtr.Zero, IntPtr.Zero);
+            window.WndProc(ref activation);
+            Require(activation.Result == new IntPtr(3) && !window.Visible,
+                "The synthetic mouse-activation message did not remain passive.");
+            window.RecreateHandle();
+            Require(!window.Visible && !window.TopMost && window.ShowWithoutActivation
+                && (GetWindowLongPtr(window.Handle, -20).ToInt64() & PassiveWindowStyles) == PassiveWindowStyles,
+                "Recreating the hidden sidebar lost its passive native policy.");
+            return 6;
         }
         private static int ValidateAugmentIconFixtures(string previewPath)
         {
@@ -1835,7 +1864,10 @@ namespace HexGuide.Desktop
                 { "sections", new object[] { "plan", "offers", "owned", "hero" } }
             } } };
             window.Model = custom; window.Place(monitor); window.ScrollTo(0);
-            Require(!window.Visible && window.ShowWithoutActivation && (window.CreateParams.ExStyle & 0x08000000) != 0 && (window.CreateParams.ExStyle & 0x00000080) != 0, "Appearance changes affected passive sidebar behavior.");
+            Require(!window.Visible && !window.TopMost && window.ShowWithoutActivation
+                && (window.CreateParams.ExStyle & PassiveWindowStyles) == PassiveWindowStyles
+                && (GetWindowLongPtr(window.Handle, -20).ToInt64() & PassiveWindowStyles) == PassiveWindowStyles,
+                "Appearance changes affected passive sidebar behavior.");
             return 15;
         }
         private static int ValidatePositionFixtures(string directory, out string placementPreviewPath)
@@ -1905,6 +1937,7 @@ namespace HexGuide.Desktop
             if (!condition) throw new InvalidOperationException(message);
         }
         [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr handle, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
         [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
     }
 
