@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.9.7.0")]
-[assembly: AssemblyFileVersion("1.9.7.0")]
-[assembly: AssemblyInformationalVersion("1.9.7")]
+[assembly: AssemblyVersion("1.9.8.0")]
+[assembly: AssemblyFileVersion("1.9.8.0")]
+[assembly: AssemblyInformationalVersion("1.9.8")]
 
 namespace HexGuide.Desktop
 {
@@ -174,7 +174,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.9.7 · 我的这一局";
+            Text = "海克斯指南 1.9.8 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -753,6 +753,7 @@ namespace HexGuide.Desktop
         private readonly ToolTip augmentHint = new ToolTip { ShowAlways = true, InitialDelay = 450, ReshowDelay = 100, AutoPopDelay = 5000 };
         private string activeAugmentHint = "";
         private readonly Dictionary<string, Image> buildIcons = new Dictionary<string, Image>();
+        private readonly Dictionary<string, Image> augmentIcons = new Dictionary<string, Image>();
         private readonly HashSet<string> requestedIcons = new HashSet<string>();
         private Rectangle buildToggle;
         private bool buildExpanded, remoteIcons = true;
@@ -1084,31 +1085,78 @@ namespace HexGuide.Desktop
         private int OwnedIconColumns(int width) { return Math.Max(1, (width + S(7)) / (S(39) + S(7))); }
         private void DrawAugmentIcon(Graphics g, Dictionary<string, object> augment, Rectangle rectangle)
         {
-            DrawBuildIcon(g, ModelValue.Text(augment, "icon"), rectangle);
-            DrawRarityFrame(g, rectangle, ModelValue.Text(augment, "rarity"));
+            string url = ModelValue.Text(augment, "icon");
+            Image icon = GetAugmentIcon(url, ModelValue.Text(augment, "rarity"));
+            if (icon != null) g.DrawImage(icon, rectangle);
+            else DrawBuildIcon(g, url, rectangle);
             Rectangle visible = Rectangle.Intersect(viewport, rectangle);
             if (visible.Width > 0 && visible.Height > 0) augmentTargets[visible] = augment;
         }
-        private void DrawRarityFrame(Graphics g, Rectangle rectangle, string rarity)
+        private Image GetAugmentIcon(string url, string rarity)
         {
-            int stroke = Math.Max(1, S(2)), inset = Math.Max(1, stroke / 2);
-            Rectangle frame = Rectangle.Inflate(rectangle, -inset, -inset);
-            if (frame.Width < 1 || frame.Height < 1) return;
-            if (rarity == "prismatic")
+            Image original;
+            if (!buildIcons.TryGetValue(url, out original)) return null;
+            if (rarity != "silver" && rarity != "gold" && rarity != "prismatic") return original;
+            string key = url + "\n" + rarity;
+            Image colored;
+            if (!augmentIcons.TryGetValue(key, out colored))
             {
-                int midX = frame.Left + frame.Width / 2, midY = frame.Top + frame.Height / 2;
-                using (var violet = new Pen(Color.FromArgb(181, 122, 238), stroke))
-                using (var cyan = new Pen(Color.FromArgb(110, 210, 219), stroke))
-                {
-                    g.DrawLine(violet, frame.Left, frame.Top, midX, frame.Top); g.DrawLine(cyan, midX, frame.Top, frame.Right, frame.Top);
-                    g.DrawLine(cyan, frame.Right, frame.Top, frame.Right, midY); g.DrawLine(violet, frame.Right, midY, frame.Right, frame.Bottom);
-                    g.DrawLine(violet, frame.Right, frame.Bottom, midX, frame.Bottom); g.DrawLine(cyan, midX, frame.Bottom, frame.Left, frame.Bottom);
-                    g.DrawLine(cyan, frame.Left, frame.Bottom, frame.Left, midY); g.DrawLine(violet, frame.Left, midY, frame.Left, frame.Top);
-                }
-                return;
+                colored = CreateRarityIcon(original, rarity);
+                augmentIcons[key] = colored;
             }
-            Color color = rarity == "gold" ? Color.FromArgb(216, 181, 101) : rarity == "silver" ? Color.FromArgb(179, 192, 207) : Color.FromArgb(55, 77, 97);
-            using (var pen = new Pen(color, stroke)) g.DrawRectangle(pen, frame);
+            return colored;
+        }
+        private static Bitmap CreateRarityIcon(Image original, string rarity)
+        {
+            var rectangle = new Rectangle(0, 0, original.Width, original.Height);
+            var colored = new Bitmap(rectangle.Width, rectangle.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var source = new Bitmap(rectangle.Width, rectangle.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+            {
+                using (var graphics = Graphics.FromImage(source))
+                {
+                    graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                    graphics.DrawImageUnscaled(original, 0, 0);
+                }
+                Color light = rarity == "gold" ? Color.FromArgb(255, 233, 171) : Color.FromArgb(242, 247, 255);
+                Color dark = rarity == "gold" ? Color.FromArgb(188, 139, 62) : Color.FromArgb(155, 175, 197);
+                using (var graphics = Graphics.FromImage(colored))
+                using (var brush = new System.Drawing.Drawing2D.LinearGradientBrush(rectangle, light, dark, 45F))
+                {
+                    if (rarity == "prismatic") brush.InterpolationColors = new System.Drawing.Drawing2D.ColorBlend {
+                        Colors = new Color[] { Color.FromArgb(205, 177, 255), Color.FromArgb(143, 235, 243), Color.FromArgb(247, 181, 224), Color.FromArgb(178, 203, 255) },
+                        Positions = new float[] { 0F, 0.35F, 0.7F, 1F }
+                    };
+                    graphics.FillRectangle(brush, rectangle);
+                }
+                var mask = source.LockBits(rectangle, System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                var pixels = colored.LockBits(rectangle, System.Drawing.Imaging.ImageLockMode.ReadWrite, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                try
+                {
+                    var maskRow = new byte[rectangle.Width * 4]; var colorRow = new byte[maskRow.Length];
+                    for (int y = 0; y < rectangle.Height; y++)
+                    {
+                        Marshal.Copy(IntPtr.Add(mask.Scan0, y * mask.Stride), maskRow, 0, maskRow.Length);
+                        IntPtr destination = IntPtr.Add(pixels.Scan0, y * pixels.Stride);
+                        Marshal.Copy(destination, colorRow, 0, colorRow.Length);
+                        for (int x = 0; x < colorRow.Length; x += 4)
+                        {
+                            // Remove any source gold tone while retaining its shading and exact alpha.
+                            int brightness = (77 * maskRow[x + 2] + 150 * maskRow[x + 1] + 29 * maskRow[x] + 128) >> 8;
+                            for (int channel = 0; channel < 3; channel++) colorRow[x + channel] = maskRow[x + 3] == 0 ? (byte)0 : (byte)((colorRow[x + channel] * brightness + 127) / 255);
+                            colorRow[x + 3] = maskRow[x + 3];
+                        }
+                        Marshal.Copy(colorRow, 0, destination, colorRow.Length);
+                    }
+                }
+                finally { source.UnlockBits(mask); colored.UnlockBits(pixels); }
+            }
+            return colored;
+        }
+        private void DrawOfferFrame(Graphics g, Rectangle rectangle, string rank)
+        {
+            Color color = rank == "1" ? Color.FromArgb(216, 181, 101) : Color.FromArgb(55, 77, 97);
+            using (var pen = new Pen(color, Math.Max(1, S(1))))
+                g.DrawRectangle(pen, rectangle.Left, rectangle.Top, Math.Max(1, rectangle.Width - 1), Math.Max(1, rectangle.Height - 1));
         }
         private Font FitOfferNameFont(Graphics g, string name, Rectangle area)
         {
@@ -1210,7 +1258,7 @@ namespace HexGuide.Desktop
         {
             ArrayList offers = ModelValue.Array(Model, "offers");
             Write(g, "三选一参考", normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(27);
-            Write(g, "先在游戏选好，再点确认\n边框表品质，角标为推荐顺序", smallFont, muted, new Rectangle(x, y, width, S(32))); y += S(34);
+            Write(g, "先在游戏选好，再点确认\n金框为优先推荐，角标为推荐顺序", smallFont, muted, new Rectangle(x, y, width, S(32))); y += S(34);
             if (offers.Count == 0)
             {
                 Write(g, RecognitionSummary(ModelValue.Object(Model, "ocr")), normalFont, muted, new Rectangle(x, y, width, S(30)));
@@ -1227,11 +1275,10 @@ namespace HexGuide.Desktop
                     Rectangle card = new Rectangle(cardX, y, cellWidth, cardHeight);
                     using (var brush = new SolidBrush(Color.FromArgb(23, 36, 48))) g.FillRectangle(brush, card);
                     string rank = ModelValue.Text(offer, "rank");
-                    DrawRarityFrame(g, card, ModelValue.Text(offer, "rarity"));
+                    DrawOfferFrame(g, card, rank);
                     int iconSize = Math.Min(S(44), Math.Max(1, cellWidth - S(12)));
                     Rectangle icon = new Rectangle(cardX + (cellWidth - iconSize) / 2, y + S(6), iconSize, iconSize);
                     DrawAugmentIcon(g, offer, icon);
-                    using (var brush = new SolidBrush(Color.FromArgb(20, 48, 58))) g.FillRectangle(brush, new Rectangle(cardX + S(3), y + S(3), S(17), S(18)));
                     Write(g, rank, smallFont, accent, new Rectangle(cardX + S(5), y + S(3), S(15), S(18)));
                     DrawOfferName(g, ModelValue.Text(offer, "name"), new Rectangle(cardX + S(3), y + S(54), Math.Max(1, cellWidth - S(6)), S(33)));
                     PaintButton(g, new Rectangle(cardX + S(3), y + S(91), Math.Max(1, cellWidth - S(6)), S(21)), "确认");
@@ -1365,7 +1412,7 @@ namespace HexGuide.Desktop
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); foreach (Image image in buildIcons.Values) image.Dispose(); }
+            if (disposing) { augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); foreach (Image image in augmentIcons.Values) image.Dispose(); augmentIcons.Clear(); foreach (Image image in buildIcons.Values) image.Dispose(); }
             base.Dispose(disposing);
         }
         internal static string RunSelfTest(string previewPath)
@@ -1461,14 +1508,13 @@ namespace HexGuide.Desktop
             {
                 window.remoteIcons = false;
                 var owned = new ArrayList(); var offers = new ArrayList(); var next = new ArrayList();
-                var colors = new Dictionary<string, Color>();
                 for (int index = 0; index < 21; index++)
                 {
                     string id = "icon-fixture-" + index, icon = "fixture://" + id;
                     Color color = Color.FromArgb(45 + index * 7, 200 - index * 5, 92 + index * 6);
                     var bitmap = new Bitmap(48, 48);
                     using (var graphics = Graphics.FromImage(bitmap)) graphics.Clear(color);
-                    window.buildIcons[icon] = bitmap; colors[id] = color;
+                    window.buildIcons[icon] = bitmap;
                     var augment = new Dictionary<string, object> { { "id", id }, { "icon", icon }, { "name", "示例海克斯名称 " + index }, { "reason", "保留该海克斯的机制与推荐解释。" }, { "rarity", new string[] { "silver", "gold", "prismatic", "" }[index % 4] } };
                     if (index < 12) owned.Add(augment);
                     else if (index < 15)
@@ -1497,14 +1543,13 @@ namespace HexGuide.Desktop
                     check(window.offerButtons.Count == 3, "Three icon cards did not expose three confirmation targets.");
                     var targets = new List<KeyValuePair<Rectangle, string>>(window.offerButtons);
                     targets.Sort(delegate(KeyValuePair<Rectangle, string> first, KeyValuePair<Rectangle, string> second) { return first.Key.Left.CompareTo(second.Key.Left); });
-                    int frameInset = Math.Max(1, window.S(2) / 2);
                     var frameColors = new List<int[]>();
                     for (int index = 0; index < targets.Count; index++)
                     {
                         Rectangle card = targets[index].Key;
-                        int[] samples = RarityFramePixels(before, card, frameInset); frameColors.Add(samples);
-                        check(samples[0] == (index == 0 ? Color.FromArgb(181, 122, 238) : Color.FromArgb(216, 181, 101)).ToArgb()
-                            && samples[1] == (index == 0 ? Color.FromArgb(110, 210, 219) : Color.FromArgb(216, 181, 101)).ToArgb(), "Candidate borders did not follow the first-prismatic, second-gold, third-gold qualities.");
+                        int[] samples = OfferFramePixels(before, card); frameColors.Add(samples);
+                        Color expectedFrame = index == 1 ? Color.FromArgb(216, 181, 101) : Color.FromArgb(55, 77, 97);
+                        check(samples[0] == expectedFrame.ToArgb() && samples[1] == expectedFrame.ToArgb(), "Candidate recommendation borders followed rarity rather than rank.");
                         Rectangle nameArea = new Rectangle(card.Left + window.S(3), card.Top + window.S(54), Math.Max(1, card.Width - window.S(6)), window.S(33));
                         string name = ModelValue.Text(offers[index] as Dictionary<string, object>, "name");
                         using (var graphics = Graphics.FromImage(before)) using (var font = window.FitOfferNameFont(graphics, name, nameArea))
@@ -1529,8 +1574,12 @@ namespace HexGuide.Desktop
                     {
                         Rectangle area = target.Key;
                         check(area.Left >= fixtureViewport.Left && area.Right <= fixtureViewport.Right, "An augment icon overflowed the narrow viewport.");
-                        string id = ModelValue.Text(target.Value, "id");
-                        check(before.GetPixel(area.Left + area.Width / 2, area.Top + area.Height / 2).ToArgb() == colors[id].ToArgb(), "Augment icon art did not match its identity.");
+                        if (area.Width == area.Height)
+                        {
+                            var expected = (Bitmap)window.GetAugmentIcon(ModelValue.Text(target.Value, "icon"), ModelValue.Text(target.Value, "rarity"));
+                            Color actual = before.GetPixel(area.Left + area.Width / 2, area.Top + area.Height / 2), pixel = expected.GetPixel(expected.Width / 2, expected.Height / 2);
+                            check(Math.Abs(actual.R - pixel.R) <= 3 && Math.Abs(actual.G - pixel.G) <= 3 && Math.Abs(actual.B - pixel.B) <= 3, "Augment icon art or color did not match its identity.");
+                        }
                     }
                     (offers[0] as Dictionary<string, object>)["rank"] = 1;
                     (offers[1] as Dictionary<string, object>)["rank"] = 2;
@@ -1539,12 +1588,27 @@ namespace HexGuide.Desktop
                     {
                         for (int index = 0; index < targets.Count; index++)
                         {
-                            int[] afterRank = RarityFramePixels(ranked, targets[index].Key, frameInset);
-                            check(afterRank[0] == frameColors[index][0] && afterRank[1] == frameColors[index][1], "Changing recommendation rank changed the candidate quality border.");
+                            Rectangle card = targets[index].Key;
+                            int[] afterRank = OfferFramePixels(ranked, card);
+                            Color expectedFrame = index == 0 ? Color.FromArgb(216, 181, 101) : Color.FromArgb(55, 77, 97);
+                            check(afterRank[0] == expectedFrame.ToArgb() && afterRank[1] == expectedFrame.ToArgb(), "Changing recommendation rank did not move the gold recommendation border.");
+                            Point iconCenter = new Point(card.Left + card.Width / 2, card.Top + window.S(28));
+                            check(ranked.GetPixel(iconCenter.X, iconCenter.Y) == before.GetPixel(iconCenter.X, iconCenter.Y), "Changing recommendation rank recolored the augment icon.");
                         }
                     }
                     (offers[0] as Dictionary<string, object>)["rank"] = 2;
                     (offers[1] as Dictionary<string, object>)["rank"] = 1;
+                    (offers[0] as Dictionary<string, object>)["rarity"] = "silver";
+                    window.Model = fixture;
+                    using (var recolored = RenderFixture(window))
+                    {
+                        Rectangle card = targets[0].Key;
+                        int[] samples = OfferFramePixels(recolored, card);
+                        check(samples[0] == frameColors[0][0] && samples[1] == frameColors[0][1], "Changing rarity changed the recommendation border.");
+                        Point center = new Point(card.Left + card.Width / 2, card.Top + window.S(28));
+                        check(recolored.GetPixel(center.X, center.Y) != before.GetPixel(center.X, center.Y), "Changing rarity did not recolor the augment's own art.");
+                    }
+                    (offers[0] as Dictionary<string, object>)["rarity"] = "prismatic";
                     RenameFixtureAugments(owned, next);
                     window.Model = fixture;
                     using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Owned or future augment names were still drawn by default.");
@@ -1570,19 +1634,41 @@ namespace HexGuide.Desktop
                     foreach (var target in window.offerButtons) check(scrolledViewport.Contains(target.Key), "Scrolled confirmation targets escaped the visible viewport.");
                 }
                 check(!window.Visible && window.ShowWithoutActivation && window.activeAugmentHint.Length == 0, "Icon fixtures displayed or activated a real window or tooltip.");
-                using (var palette = new Bitmap(96, 48)) using (var graphics = Graphics.FromImage(palette))
+                // One source URL may legitimately serve different qualities. Test
+                // opaque detail, partial alpha, and a transparent hole in its art.
+                string sharedUrl = "fixture://shared-rarity";
+                var shared = new Bitmap(64, 64, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                using (var graphics = Graphics.FromImage(shared)) graphics.Clear(Color.FromArgb(245, 190, 90));
+                shared.SetPixel(8, 8, Color.FromArgb(0, 0, 0, 0));
+                shared.SetPixel(9, 8, Color.FromArgb(96, 230, 180, 80));
+                shared.SetPixel(20, 20, Color.FromArgb(96, 96, 96));
+                shared.SetPixel(21, 20, Color.White);
+                window.buildIcons[sharedUrl] = shared;
+                var silver = (Bitmap)window.GetAugmentIcon(sharedUrl, "silver");
+                var gold = (Bitmap)window.GetAugmentIcon(sharedUrl, "gold");
+                var prismatic = (Bitmap)window.GetAugmentIcon(sharedUrl, "prismatic");
+                check(!object.ReferenceEquals(silver, gold) && !object.ReferenceEquals(gold, prismatic), "A shared URL reused another rarity's cached icon.");
+                check(object.ReferenceEquals(silver, window.GetAugmentIcon(sharedUrl, "silver")), "Repainting recreated an already cached rarity icon.");
+                check(object.ReferenceEquals(shared, window.GetAugmentIcon(sharedUrl, "unknown")), "Unknown rarity altered the source art.");
+                check(shared.GetPixel(32, 32) == Color.FromArgb(245, 190, 90), "Coloring a rarity mutated the source used by hero or equipment drawing.");
+                foreach (var colored in new Bitmap[] { silver, gold, prismatic })
                 {
-                    window.DrawRarityFrame(graphics, new Rectangle(0, 0, 40, 40), "silver");
-                    window.DrawRarityFrame(graphics, new Rectangle(48, 0, 40, 40), "unknown");
-                    check(palette.GetPixel(20, Math.Max(1, window.S(2) / 2)).ToArgb() == Color.FromArgb(179, 192, 207).ToArgb(), "Silver quality did not render a silver border.");
-                    check(palette.GetPixel(68, Math.Max(1, window.S(2) / 2)).ToArgb() == Color.FromArgb(55, 77, 97).ToArgb(), "Unknown quality was incorrectly styled as a known rarity.");
+                    bool alphaMatches = true;
+                    for (int y = 0; y < shared.Height; y++) for (int x = 0; x < shared.Width; x++)
+                        if (shared.GetPixel(x, y).A != colored.GetPixel(x, y).A) alphaMatches = false;
+                    check(alphaMatches && colored.GetPixel(8, 8).A == 0 && colored.GetPixel(9, 8).A == 96, "Rarity coloring filled a transparent hole or changed edge alpha.");
+                    Color detail = colored.GetPixel(20, 20), light = colored.GetPixel(21, 20);
+                    check(detail.R < light.R / 2 && detail.G < light.G / 2 && detail.B < light.B / 2, "Rarity coloring discarded the source's gray detail.");
                 }
+                Color silverCenter = silver.GetPixel(32, 32), goldCenter = gold.GetPixel(32, 32);
+                check(silverCenter.B >= silverCenter.R && goldCenter.R > goldCenter.G && goldCenter.G > goldCenter.B, "Shared gold source did not become distinct silver and gold art.");
+                check(prismatic.GetPixel(20, 20).ToArgb() != silver.GetPixel(20, 20).ToArgb() && prismatic.GetPixel(45, 45).ToArgb() != gold.GetPixel(45, 45).ToArgb(), "Prismatic art did not receive its own gradient palette.");
             }
             return checks;
         }
-        private static int[] RarityFramePixels(Bitmap bitmap, Rectangle frame, int inset)
+        private static int[] OfferFramePixels(Bitmap bitmap, Rectangle frame)
         {
-            return new int[] { bitmap.GetPixel(frame.Left + frame.Width / 4, frame.Top + inset).ToArgb(), bitmap.GetPixel(frame.Left + frame.Width * 3 / 4, frame.Top + inset).ToArgb() };
+            return new int[] { bitmap.GetPixel(frame.Left + frame.Width / 4, frame.Top).ToArgb(), bitmap.GetPixel(frame.Left + frame.Width * 3 / 4, frame.Top).ToArgb() };
         }
         private static Bitmap RenderFixture(SidebarWindow window)
         {
