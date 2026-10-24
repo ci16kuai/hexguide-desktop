@@ -77,6 +77,7 @@ $compilerArguments = @('/nologo', '/target:winexe', '/platform:x64', '/optimize+
     ('/win32icon:' + (Join-Path $projectRoot 'native\assets\hexguide.ico')))
 foreach ($reference in $references) { $compilerArguments += '/reference:' + $reference }
 $compilerArguments += Join-Path $projectRoot 'native\Program.cs'
+$compilerArguments += Join-Path $projectRoot 'native\SidebarShortcut.cs'
 & $compiler @compilerArguments
 if ($LASTEXITCODE -ne 0) { throw 'Desktop launcher compilation failed.' }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\HexGuide.exe.config') -Destination (Join-Path $stage 'HexGuide.exe.config') -Force

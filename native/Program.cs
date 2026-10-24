@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.9.2.0")]
-[assembly: AssemblyFileVersion("1.9.2.0")]
-[assembly: AssemblyInformationalVersion("1.9.2")]
+[assembly: AssemblyVersion("1.9.3.0")]
+[assembly: AssemblyFileVersion("1.9.3.0")]
+[assembly: AssemblyInformationalVersion("1.9.3")]
 
 namespace HexGuide.Desktop
 {
@@ -136,20 +136,21 @@ namespace HexGuide.Desktop
         private readonly Timer refreshTimer;
         private readonly bool startHidden;
         private readonly SidebarVisibilityState sidebarVisibility;
+        private readonly SidebarShortcut shortcut;
+        private bool desiredSidebarVisible;
         private bool explicitActivation, trayHintShown;
-        private bool fetching, scanChanging, confirmChanging, hotKeyRegistered, appearanceRequested, appearanceOpening, layoutRequested, layoutOpening;
+        private bool fetching, scanChanging, confirmChanging, appearanceRequested, appearanceOpening, layoutRequested, layoutOpening;
         private long sidebarRequestGeneration;
         private string sessionToken;
         private IntPtr lastGame;
         private DateTime nextFetch = DateTime.MinValue;
-        private const int SidebarHotKey = 0x4847;
 
         internal MainWindow(string dataDirectory, bool background, bool preview)
         {
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.9.2 · 我的这一局";
+            Text = "海克斯指南 1.9.3 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -229,10 +230,12 @@ namespace HexGuide.Desktop
             menu.Items.Add("完全退出", null, delegate { closing = true; Close(); });
             tray = new NotifyIcon { Icon = Icon, Text = "海克斯指南 · 后台运行中", ContextMenuStrip = menu, Visible = true };
             tray.DoubleClick += delegate { ShowMain(); };
+            shortcut = new SidebarShortcut(delegate { if (!closing) ToggleSidebar(); });
             refreshTimer = new Timer { Interval = 400 };
             refreshTimer.Tick += async delegate
             {
                 UpdateSidebarVisibility();
+                shortcut.Pulse(dataDirectory, sidebarVisibility.Enabled, sidebarVisibility.Pinned, desiredSidebarVisible, sidebar.Visible);
                 if (DateTime.UtcNow >= nextFetch) { nextFetch = DateTime.UtcNow.AddSeconds(2); await FetchSidebarAsync(); }
                 if (appearanceRequested) await OpenRequestedAppearanceAsync();
                 if (layoutRequested) await OpenRequestedLayoutAsync();
@@ -250,6 +253,7 @@ namespace HexGuide.Desktop
                 if (!closing && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; HideMain(); return; }
                 closing = true;
                 refreshTimer.Stop(); refreshTimer.Dispose();
+                shortcut.Dispose();
                 sidebar.Close();
                 tray.Visible = false; tray.Dispose();
                 StopBackend();
@@ -257,25 +261,6 @@ namespace HexGuide.Desktop
         }
 
         protected override bool ShowWithoutActivation { get { return !explicitActivation; } }
-
-        protected override void OnHandleCreated(EventArgs e)
-        {
-            base.OnHandleCreated(e);
-            hotKeyRegistered = RegisterHotKey(Handle, SidebarHotKey, 0x0001 | 0x0004 | 0x4000, (uint)Keys.H);
-            if (!hotKeyRegistered && shortcutStatus != null) shortcutStatus.Text = "快捷键被占用：请使用托盘或侧栏按钮";
-        }
-
-        protected override void OnHandleDestroyed(EventArgs e)
-        {
-            if (hotKeyRegistered) { UnregisterHotKey(Handle, SidebarHotKey); hotKeyRegistered = false; }
-            base.OnHandleDestroyed(e);
-        }
-
-        protected override void WndProc(ref Message message)
-        {
-            if (message.Msg == 0x0312 && message.WParam.ToInt32() == SidebarHotKey) { ToggleSidebar(); return; }
-            base.WndProc(ref message);
-        }
 
         private void HideMain()
         {
@@ -356,7 +341,8 @@ namespace HexGuide.Desktop
             if (closing || sidebar.IsDisposed) return;
             IntPtr foreground = GameWindow.ForegroundGame();
             if (foreground != IntPtr.Zero) lastGame = foreground;
-            if (!sidebarVisibility.ShouldShow(foreground != IntPtr.Zero)) { if (sidebar.Visible) sidebar.Hide(); UpdateSidebarHint(false); return; }
+            desiredSidebarVisible = sidebarVisibility.ShouldShow(foreground != IntPtr.Zero);
+            if (!desiredSidebarVisible) { if (sidebar.Visible) sidebar.Hide(); UpdateSidebarHint(false); return; }
             IntPtr target = foreground != IntPtr.Zero ? foreground : lastGame;
             Rectangle area = GameWindow.PlacementArea(target);
             sidebar.Place(area);
@@ -366,7 +352,8 @@ namespace HexGuide.Desktop
 
         private void UpdateSidebarHint(bool visible)
         {
-            string hint = hotKeyRegistered ? "Alt + Shift + H：侧栏" + (visible ? "已显示" : "已收起") : "快捷键被占用：请使用托盘或侧栏按钮";
+            string hint = "Alt + Shift + H：侧栏" + (visible ? "已显示" : "已收起");
+            if (!shortcut.Registered) hint += " · 备用检测（" + shortcut.RegistrationError + "）";
             if (shortcutStatus.Text != hint) shortcutStatus.Text = hint;
         }
 
@@ -531,6 +518,7 @@ namespace HexGuide.Desktop
             if (closing || localOrigin == null || confirmChanging || string.IsNullOrEmpty(id)) return;
             sidebarRequestGeneration++;
             confirmChanging = true;
+            shortcut.ConfirmRequests++;
             try
             {
                 var current = await RequestModelAsync("api/sidebar", null);
@@ -561,6 +549,7 @@ namespace HexGuide.Desktop
                 }
                 sidebar.Model = confirmed;
                 sidebar.ExpandBuild();
+                shortcut.ConfirmSuccesses++;
                 sidebar.Notice = "已记录本局选择，推荐已更新";
             }
             catch (WebException error)
@@ -659,8 +648,6 @@ namespace HexGuide.Desktop
             catch (InvalidOperationException) { }
         }
 
-        [DllImport("user32.dll", SetLastError = true)] private static extern bool RegisterHotKey(IntPtr handle, int id, uint modifiers, uint key);
-        [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr handle, int id);
     }
 
     internal sealed class SidebarAppearance
@@ -1272,13 +1259,14 @@ namespace HexGuide.Desktop
                 string earlyLivePreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-early-live.png");
                 int initialPlanChecks = ValidateInitialPlanFixtures(window, earlyLivePreviewPath);
                 int visibilityChecks = SidebarVisibilityState.ValidateFixtures();
+                int shortcutChecks = SidebarShortcut.ValidateFixtures();
                 int defaultWidth = window.Width, defaultHeight = window.Height;
                 int appearanceChecks = ValidateAppearanceFixtures(window);
                 string placementPreviewPath;
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks + initialPlanChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks + initialPlanChecks + shortcutChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath } });
             }
         }
         private static int ValidateInitialPlanFixtures(SidebarWindow window, string earlyLivePreviewPath)
