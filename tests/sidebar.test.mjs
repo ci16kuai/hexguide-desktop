@@ -26,6 +26,16 @@ async function folder(t) {
   return result;
 }
 
+test('sidebar shutdown closes OCR before draining its pending scan', async () => {
+  const events = []; let complete;
+  const scanner = Object.assign(async () => recognized(), {close:async () => { events.push('close'); complete(); }});
+  const {sidebar} = setup({scanner});
+  sidebar.pending = new Promise(resolve => { complete = () => { events.push('scan-settled'); resolve(); }; });
+  await sidebar.stop();
+  assert.deepEqual(events, ['close','scan-settled']);
+  assert.equal(sidebar.stopped, true);
+});
+
 test('shared selections are validated and persist only assistant IDs and route', async t => {
   const directory = await folder(t);
   const {sidebar, collector} = setup({dataDirectory:directory});

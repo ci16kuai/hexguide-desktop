@@ -139,7 +139,9 @@ export async function runTitleIdentityProbe({argv = [], applicationDirectory = r
     const catalog = await (dependencies.readCatalog || (async () => JSON.parse(await readFile(path.join(applicationDirectory, 'dist/data.json'), 'utf8'))))();
     if (!Array.isArray(catalog?.augments)) return reply('rejected', 'catalog-unavailable');
     const scanner = (dependencies.scannerFactory || createOcrScanner)({applicationDirectory, augments:catalog.augments});
-    const scan = await scanner();
+    let scan;
+    try { scan = await scanner(); }
+    finally { await scanner.close?.(); }
     const payload = buildTitleProbeInput(scan, {now:dependencies.now || Date.now, token:dependencies.token || createOfferToken});
     if (!payload) return reply('not-run', 'title-metadata-incomplete');
     const result = await runChild(executable, ['--selection-title-observe'], JSON.stringify(payload));

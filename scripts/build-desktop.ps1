@@ -116,6 +116,7 @@ foreach ($directory in @('dist', 'server', 'docs')) {
 New-Item -ItemType Directory -Path (Join-Path $stage 'native') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\scan-augments.ps1') -Destination (Join-Path $stage 'native\scan-augments.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\CardTitleIdentity.cs') -Destination (Join-Path $stage 'native\CardTitleIdentity.cs') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'native\OcrWorkerProtocol.cs') -Destination (Join-Path $stage 'native\OcrWorkerProtocol.cs') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\ScreenLifeObserver.cs') -Destination (Join-Path $stage 'native\ScreenLifeObserver.cs') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\scan-life.ps1') -Destination (Join-Path $stage 'native\scan-life.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'package.json') -Destination (Join-Path $stage 'package.json') -Force

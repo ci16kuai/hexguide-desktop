@@ -80,10 +80,10 @@ test('confirmation rejects expired, rerolled, foreign-game and stale concurrent 
 });
 
 test('sidebar retains only whitelisted OCR codes and diagnostic counts', async () => {
-  const {sidebar,update} = setup({scanner:async () => ({status:'unavailable',code:'title-name-unmatched',diagnostics:{width:2560,height:1440,lineCount:3,frameId:'private',text:'private screen text',path:'C:/private',layoutCount:0,exactTitleCount:NaN}})});
+  const {sidebar,update} = setup({scanner:async () => ({status:'unavailable',code:'title-name-unmatched',diagnostics:{width:2560,height:1440,lineCount:3,frameId:'private',text:'private screen text',path:'C:/private',layoutCount:0,exactTitleCount:NaN,initializationMs:0,captureMs:20.5,recognitionMs:NaN,totalMs:60001,runtimeReused:true}})});
   await sidebar.scan();
   assert.equal(sidebar.getModel().ocr.code,'title-name-unmatched');
-  assert.deepEqual(sidebar.getModel().ocr.diagnostics,{width:2560,height:1440,lineCount:3,layoutCount:0});
+  assert.deepEqual(sidebar.getModel().ocr.diagnostics,{width:2560,height:1440,lineCount:3,layoutCount:0,initializationMs:0,captureMs:20.5,runtimeReused:true});
   assert.doesNotMatch(JSON.stringify(sidebar.getModel().ocr),/private/);
   sidebar.scanner = async () => ({status:'waiting',code:'private screen text'});
   await sidebar.scan();

@@ -28,6 +28,16 @@ function harness(overrides={}) {
   return {calls,dependencies};
 }
 
+test('the probe closes its OCR worker on success, incomplete metadata and capture failure',async()=>{
+  for (const captureScan of [async()=>scan(),async()=>({status:'waiting'}),async()=>{throw Error('Private');}]) {
+    let closes=0;
+    const scanner=Object.assign(captureScan,{close:async()=>{closes++;}});
+    const h=harness({scannerFactory:()=>scanner});
+    await runTitleIdentityProbe({argv:opts,dependencies:h.dependencies});
+    assert.equal(closes,1);
+  }
+});
+
 test('default and executable-only operation never inspect an executable, capture or spawn',async()=>{
   for(const argv of [[],['--executable','H:/fixture-only/HexGuide.exe']]) {
     const h=harness(); const result=await runTitleIdentityProbe({argv,dependencies:h.dependencies});

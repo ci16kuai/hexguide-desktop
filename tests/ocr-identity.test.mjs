@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {matchOcrProposals} from '../server/ocr.mjs';
+import {matchOcrProposals, createOcrScanner} from '../server/ocr.mjs';
 
 // Contract fixtures only: these numeric descriptors are not game observations.
 const catalog = ['钢化你心','灵魂虹吸','渴血','虹吸'].map((name,index)=>({id:`fixture-${index}`,name,availability:'current',recommendable:true}));
@@ -36,6 +36,62 @@ const recognizedOnly = raw => {
   assert.equal('selectionCapture' in result,false);
   return result;
 };
+
+test('persistent scanner accepts a stage only through the complete title and identity matcher', async () => {
+  let evaluateStage, finish, creations = 0, requests = 0, closes = 0, completed = false;
+  const scanner = createOcrScanner({applicationDirectory:'H:/fixture-application',dataDirectory:'H:/fixture-data',platform:'win32',augments:catalog,
+    workerFactory:options => {
+      creations++; assert.deepEqual(options, {applicationDirectory:'H:/fixture-application',dataDirectory:'H:/fixture-data'});
+      return {scan:evaluate => { requests++; evaluateStage = evaluate; return new Promise(resolve => { finish = resolve; }); },close:async () => { closes++; }};
+    }});
+  assert.equal(creations, 0);
+  const pending = scanner().then(result => { completed = true; return result; });
+  assert.equal(evaluateStage(fixture()), true);
+  for (const mutate of [
+    raw => { raw.lines.pop(); },
+    raw => { delete raw.selectionCapture; },
+    raw => { delete raw.identityAnchors; },
+    raw => { raw.identityAnchors.anchors[0].feature.fill(0); },
+    raw => { raw.lines[1].frameId = 'stale-frame'; },
+    raw => { raw.lines[2].pass = 'card-titles-contrast'; },
+    raw => { raw.lines[0].text += ' player name'; },
+  ]) { const raw = fixture(); mutate(raw); assert.equal(evaluateStage(raw), false); }
+  assert.equal((await scanner()).code, 'scan-busy');
+  await Promise.resolve(); assert.equal(completed, false, 'stage observations never publish candidates');
+  finish({status:'waiting',code:'foreground-changed',stage:'foreground-check'});
+  const cancelled = await pending;
+  assert.equal(cancelled.code, 'foreground-changed'); assert.deepEqual(cancelled.proposals, []);
+  const next = scanner(); finish(fixture());
+  assert.equal((await next).selectionMetadataStatus, 'accepted');
+  assert.equal(creations, 1); assert.equal(requests, 2);
+  await scanner.close(); await scanner.close(); assert.equal(closes, 1);
+});
+
+test('scanner close disposes its worker and rejects a late valid result before publication', async () => {
+  let finish, closes = 0, creations = 0;
+  const scanner = createOcrScanner({applicationDirectory:'H:/fixture',platform:'win32',augments:catalog,workerFactory:() => {
+    creations++;
+    return {scan:() => new Promise(resolve => { finish = resolve; }),close:async () => { closes++; finish(fixture()); }};
+  }});
+  const pending = scanner(); const closing = scanner.close(); assert.equal(scanner.close(), closing); await closing;
+  const result = await pending;
+  assert.equal(result.code, 'scan-execution-failed'); assert.deepEqual(result.proposals, []);
+  assert.equal((await scanner()).code, 'scan-execution-failed'); assert.equal(creations, 1); assert.equal(closes, 1);
+  let unusedCreations = 0;
+  const unused = createOcrScanner({platform:'win32',workerFactory:() => { unusedCreations++; }});
+  await unused.close(); assert.equal(unusedCreations, 0);
+});
+
+test('native worker timings expose only bounded counters and the reuse flag', () => {
+  const raw = fixture(); raw.code = 'ok'; raw.stage = 'result';
+  raw.diagnostics = {...raw.diagnostics,initializationMs:110,captureMs:2,recognitionMs:80,totalMs:200,runtimeReused:true,privateText:'Private'};
+  const result = match(raw);
+  for (const key of ['initializationMs','captureMs','recognitionMs','totalMs','runtimeReused']) assert.equal(result.diagnostics[key], raw.diagnostics[key]);
+  raw.diagnostics.initializationMs = -1; raw.diagnostics.captureMs = Infinity; raw.diagnostics.recognitionMs = 60001; raw.diagnostics.runtimeReused = 'Private';
+  const invalid = match(raw);
+  for (const key of ['initializationMs','captureMs','recognitionMs','runtimeReused']) assert.equal(key in invalid.diagnostics, false);
+  assert.doesNotMatch(JSON.stringify(invalid), /Private/);
+});
 
 test('same-frame complete cropped titles bind three compact identity cards',()=>{
   const raw=fixture(), result=match(raw), identity=result.selectionCapture.identityAnchors;

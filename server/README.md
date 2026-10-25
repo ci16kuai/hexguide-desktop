@@ -4,7 +4,9 @@
 
 `GET /api/health` 和 `GET /api/live` 需要 `X-Hexguide-Session` 请求头。仅接受精确的本机 Host 和同源 Origin；不提供跨域访问或公开监听。静态文件仅来自 `dist/`，不能越界读取或读取隐藏文件。
 
-`POST /api/ocr` 同样需要会话 token，且只接受空 body 或 `{}`，最多 4096 字节。它启动本机 `native/scan-augments.ps1`，15 秒超时、输出上限 1 MB，一次只运行一个扫描。后台自动识别默认开启，仅对局期间尝试读取前台游戏窗口；按阶段、等级、候选状态及扫描完成后的冷却自适应调度，具体默认参数见 [扫描调度](../docs/ocr-scheduling.md)；手动与后台扫描共用同一次在途请求。`POST /api/sidebar/ocr` 仅接受 `{enabled:boolean}`，暂停偏好独立保存在 `recognition.json` 并在重启时恢复。返回完整、唯一匹配的三个候选时自动进入比较，玩家点击实际选择后才通过 `POST /api/session` 写入已确认列表。截图不会保留或上传。识别错误、过期或跨局结果不能写入已选海克斯。
+`POST /api/ocr` 同样需要会话 token，且只接受空 body 或 `{}`，最多 4096 字节。1.13.0 通过按需启动的本地工作进程复用 `native/scan-augments.ps1` 的 Windows OCR 初始化，每个任务 15 秒超时、全部输出上限 1 MiB，一次只运行一个扫描。先执行三列彩色标题识别，完整标题和图像锚点通过既有匹配器后可提前结束；否则继续对比增强和全画面回退。阶段结果不直接发布，最终前台校验与局次、轮次及采集资格守卫仍适用。进程故障后清理自有子进程，只在下一次请求重建，不自动重扫旧帧。详见[识别工作进程](../docs/ocr-performance.md)。
+
+后台自动识别默认开启，仅对局期间尝试读取前台游戏窗口；开局或可信复活启动扫描周期，前一分钟目标 500 毫秒，未确认选择则继续每 5 秒，具体参数见[扫描调度](../docs/ocr-scheduling.md)；手动与后台扫描共用同一次在途请求。`POST /api/sidebar/ocr` 仅接受 `{enabled:boolean}`，暂停偏好独立保存在 `recognition.json` 并在重启时恢复。完整三个候选只进入本轮比较；实际选择必须经过手动确认或六格面板证明的统一确认边界才能更新已选列表。截图不会保留或上传。识别错误、过期或跨局结果不能写入已选海克斯。
 
 本程序只读 Riot 的本机接口：Live Client API (`https://127.0.0.1:2999/liveclientdata/allgamedata`) 和 League Client 的游戏阶段、游戏会话及选人会话。Live Client API 用随附的 Riot 官方根证书验证 TLS。LCU 的自签证书例外仅限从本机 lockfile 取得端口的 `127.0.0.1` HTTPS 连接，使用其临时 Basic 凭据；它不影响系统、外网或 Live Client API 的证书校验。lockfile 内容及玩家身份信息不返回给页面，不写入文件。
 

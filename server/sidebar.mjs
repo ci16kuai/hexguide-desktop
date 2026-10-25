@@ -34,7 +34,10 @@ function publicOcrDetails(raw) {
   for (const key of ['width', 'height', 'lineCount', 'passCount', 'titleRegionCount', 'exactTitleCount', 'layoutCount', 'passesCompleted', 'passesFailed']) {
     if (Number.isSafeInteger(raw?.diagnostics?.[key]) && raw.diagnostics[key] >= 0 && raw.diagnostics[key] <= 100_000) diagnostics[key] = raw.diagnostics[key];
   }
-  if (Number.isFinite(raw?.diagnostics?.elapsedMs) && raw.diagnostics.elapsedMs >= 0 && raw.diagnostics.elapsedMs <= 100_000) diagnostics.elapsedMs = raw.diagnostics.elapsedMs;
+  for (const key of ['elapsedMs', 'initializationMs', 'captureMs', 'recognitionMs', 'totalMs']) {
+    if (Number.isFinite(raw?.diagnostics?.[key]) && raw.diagnostics[key] >= 0 && raw.diagnostics[key] <= 60_000) diagnostics[key] = raw.diagnostics[key];
+  }
+  if (typeof raw?.diagnostics?.runtimeReused === 'boolean') diagnostics.runtimeReused = raw.diagnostics.runtimeReused;
   if (typeof raw?.diagnostics?.budgetReached === 'boolean') diagnostics.budgetReached = raw.diagnostics.budgetReached;
   if (Object.keys(diagnostics).length) details.diagnostics = diagnostics;
   return details;
@@ -565,7 +568,7 @@ export class BackgroundSidebar {
     const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live));
     const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), this.selectionEligible(live));
     return {
-      version:'1.12.1', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      version:'1.13.0', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
       gameEpoch:this.gameEpoch, selection, selectionResult, panelSelection:this.getPanelSelection(live), selectionDiagnostics:this.selectionDiagnostics(selection),
       life:this.lifeSource.resolve(live, this.selectionContext()),
       mode:live.mode || {queueId:null, isMayhem:false, known:false},
@@ -633,6 +636,8 @@ export class BackgroundSidebar {
 
   async stop() {
     this.stopped = true; this.timers.clearTimeout(this.timer);
+    // Stop our own OCR child before draining an in-flight scan.
+    await this.scanner?.close?.();
     // Drain our own scan and latest bounded diagnostics without touching the game.
     await this.pending?.catch(() => {});
     await Promise.all([this.persistTail.catch(() => {}), this.preferencesTail.catch(() => {}), this.recommendationRepository?.close(), this.scanDiagnostics.close()]);

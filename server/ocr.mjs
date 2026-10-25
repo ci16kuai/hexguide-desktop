@@ -1,10 +1,8 @@
-import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
 import path from 'node:path';
 import {sanitizeSelectionCapture} from './selection.mjs';
 import {NATIVE_OCR_STAGES, NATIVE_OCR_CODES} from './scan-diagnostics.mjs';
+import {createOcrWorker} from './ocr-worker.mjs';
 
-const execute = promisify(execFile);
 const normalize = value => String(value || '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
 const result = (status, message, proposals = [], details = {}) => ({status, message, proposals, selectionMetadataStatus:'title-incomplete', ...details});
 const nativeStages = new Set(NATIVE_OCR_STAGES);
@@ -12,9 +10,10 @@ const nativeCodes = new Set(NATIVE_OCR_CODES);
 function nativeDetails(raw) {
   if (!raw?.code && !raw?.stage) return {};
   const diagnostics = {};
-  const limits = {width:8192,height:8192,dpi:960,dpiAwareness:2,ocrMaxDimension:8192,passesCompleted:20,passesFailed:20,elapsedMs:60000,lineCount:10000};
+  const limits = {width:8192,height:8192,dpi:960,dpiAwareness:2,ocrMaxDimension:8192,passesCompleted:20,passesFailed:20,elapsedMs:60000,lineCount:10000,initializationMs:60000,captureMs:60000,recognitionMs:60000,totalMs:60000};
   for (const [key, max] of Object.entries(limits)) if (Number.isFinite(raw.diagnostics?.[key]) && raw.diagnostics[key] >= 0 && raw.diagnostics[key] <= max) diagnostics[key] = raw.diagnostics[key];
   if (typeof raw.diagnostics?.budgetReached === 'boolean') diagnostics.budgetReached = raw.diagnostics.budgetReached;
+  if (typeof raw.diagnostics?.runtimeReused === 'boolean') diagnostics.runtimeReused = raw.diagnostics.runtimeReused;
   return {code:nativeCodes.has(raw.code) ? raw.code : 'ocr-unavailable',stage:nativeStages.has(raw.stage) ? raw.stage : 'native',diagnostics};
 }
 
@@ -258,7 +257,7 @@ export function matchOcrProposals(raw, augments) {
   if (native.code) {
     diagnostics.nativeCode = native.code;
     diagnostics.nativeStage = native.stage;
-    for (const key of ['passesCompleted','passesFailed','elapsedMs','budgetReached']) if (key in native.diagnostics) diagnostics[key] = native.diagnostics[key];
+    for (const key of ['passesCompleted','passesFailed','elapsedMs','budgetReached','initializationMs','captureMs','recognitionMs','totalMs','runtimeReused']) if (key in native.diagnostics) diagnostics[key] = native.diagnostics[key];
   }
   if (Number.isFinite(width) && width >= 0 && width <= 8192) diagnostics.width = width;
   if (Number.isFinite(height) && height >= 0 && height <= 8192) diagnostics.height = height;
@@ -333,13 +332,23 @@ export function matchOcrProposals(raw, augments) {
     {...details('title-layout-confirmed'), selectionMetadataStatus:automaticStatus, ...(automaticCapture ? {selectionCapture:automaticCapture} : {})});
 }
 
-export function createOcrScanner({applicationDirectory, dataDirectory, augments = [], executeScript = execute, platform = process.platform} = {}) {
-  let busy = false;
-  return async function scan() {
+export function createOcrScanner({applicationDirectory, dataDirectory, augments = [], executeScript, workerFactory = createOcrWorker, platform = process.platform} = {}) {
+  let busy = false, closed = false, worker = null, closing = null;
+  const scan = async function scan() {
+    if (closed) return result('unavailable', '屏幕识别已停止。', [], {code:'scan-execution-failed'});
     if (busy) return result('waiting', '上一次识别尚未完成，请稍候。', [], {code:'scan-busy'});
     if (platform !== 'win32') return result('unavailable', '屏幕识别目前仅支持 Windows，可手动选择海克斯。', [], {code:'scan-platform-unsupported'});
     busy = true;
     try {
+      if (!executeScript) {
+        worker ||= workerFactory({applicationDirectory,dataDirectory});
+        const raw = await worker.scan(payload => {
+          const matched = matchOcrProposals(payload, augments);
+          return matched.status === 'recognized' && matched.proposals.length === 3 && matched.selectionMetadataStatus === 'accepted';
+        });
+        if (closed) return result('unavailable', '屏幕识别已停止。', [], {code:'scan-execution-failed'});
+        return matchOcrProposals(raw, augments);
+      }
       const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(applicationDirectory, 'native/scan-augments.ps1')];
       if (dataDirectory) args.push('-DataDir', dataDirectory);
       const {stdout} = await executeScript('powershell.exe', args, {windowsHide:true, timeout:15000, maxBuffer:1024 * 1024, encoding:'utf8'});
@@ -349,12 +358,20 @@ export function createOcrScanner({applicationDirectory, dataDirectory, augments 
         if (Buffer.byteLength(text) > 1024 * 1024) return result('unavailable', '识别结果过长，请手动选择。', [], {code:'scan-output-too-large'});
         const parsed = JSON.parse(text);
         if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new TypeError('Invalid capture result.');
-        return matchOcrProposals(parsed, augments);
+        return closed ? result('unavailable', '屏幕识别已停止。', [], {code:'scan-execution-failed'}) : matchOcrProposals(parsed, augments);
       } catch {
         return result('unavailable', '本次屏幕识别结果无效，可手动选择。', [], {code:'scan-output-invalid'});
       }
-    } catch {
-      return result('unavailable', '本次屏幕识别未完成，可检查游戏窗口或手动选择。', [], {code:'scan-execution-failed'});
+    } catch (error) {
+      const code = ['scan-output-invalid','scan-output-too-large','scan-busy'].includes(error?.code) ? error.code : 'scan-execution-failed';
+      return result('unavailable', '本次屏幕识别未完成，可检查游戏窗口或手动选择。', [], {code});
     } finally { busy = false; }
   };
+  scan.close = () => {
+    if (closing) return closing;
+    closed = true;
+    closing = Promise.resolve(worker?.close());
+    return closing;
+  };
+  return scan;
 }

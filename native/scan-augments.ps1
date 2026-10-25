@@ -1,31 +1,39 @@
 ﻿param(
     [string]$DataDir,
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [switch]$Worker
 )
 # Windows PowerShell 5.1 hosts the built-in WinRT OCR engine. No model or screenshot is uploaded.
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
-$bitmap = $null
-$stage = 'initializing'
-$diagnostics = @{}
-$frameId = [Guid]::NewGuid().ToString('N')
-$scanClock = [Diagnostics.Stopwatch]::StartNew()
-$scanDeadlineMs = 10000
-$selectionCapture = $null
-$identityAnchors = $null
-$identityAnchorCounts = @{}
 $identityFeatureReady = $null
-$previousDpiContext = [IntPtr]::Zero
+$runtimeReady = $false
+$workerPoisoned = $false
+$requestId = 0
 
-function Write-Result([string]$Status, [string]$Message, [object[]]$Lines = @(), [string]$Text = '', [string]$Code = 'ok') {
+function Update-TimingDiagnostics {
+    $script:diagnostics.initializationMs = [int]$script:initializationMs
+    $script:diagnostics.captureMs = [int]$script:captureMs
+    $script:diagnostics.recognitionMs = [int]$script:recognitionMs
+    $script:diagnostics.totalMs = [int]$script:scanClock.ElapsedMilliseconds
+}
+
+function New-ResultPayload([string]$Status, [string]$Message, [object[]]$Lines = @(), [string]$Text = '', [string]$Code = 'ok') {
+    Update-TimingDiagnostics
     $payload = @{status=$Status; code=$Code; stage=$script:stage; diagnostics=$script:diagnostics; frameId=$script:frameId; message=$Message; text=$Text; lines=@($Lines)}
     if ($script:selectionCapture -and $Status -eq 'recognized') { $payload.selectionCapture = $script:selectionCapture }
     if ($script:identityAnchors -and $Status -eq 'recognized') {
         $anchorJson = $script:identityAnchors | ConvertTo-Json -Compress -Depth 6
         if ([Text.Encoding]::UTF8.GetByteCount($anchorJson) -le 32768) { $payload.identityAnchors = $script:identityAnchors }
     }
-    [Console]::WriteLine(($payload | ConvertTo-Json -Compress -Depth 7))
+    return $payload
+}
+
+function Write-Result([string]$Status, [string]$Message, [object[]]$Lines = @(), [string]$Text = '', [string]$Code = 'ok') {
+    $payload = New-ResultPayload $Status $Message $Lines $Text $Code
+    if ($Worker) { [Console]::WriteLine((@{version=1; type='result'; id=$script:requestId; payload=$payload} | ConvertTo-Json -Compress -Depth 9)) }
+    else { [Console]::WriteLine(($payload | ConvertTo-Json -Compress -Depth 8)) }
 }
 
 # A small RGB thumbnail is a temporary visual baseline, not a screenshot file.
@@ -121,13 +129,29 @@ function Await-WinRT($Operation, [Type]$ResultType) {
     # The parent process also has a 15 second timeout. A single slow recognition
     # must not consume that entire budget and discard already completed passes.
     $remaining = [int]($script:scanDeadlineMs - $script:scanClock.ElapsedMilliseconds)
-    if ($remaining -lt 100) { throw 'OCR operation timed out.' }
-    $task = $script:asTaskMethod.MakeGenericMethod($ResultType).Invoke($null, @($Operation))
-    if (-not $task.Wait([Math]::Min(4000, $remaining))) { throw 'OCR operation timed out.' }
+    if ($remaining -lt 100) {
+        $script:workerPoisoned = $true
+        try { $Operation.Cancel() } catch {}
+        throw (New-Object System.TimeoutException('OCR operation timed out.'))
+    }
+    try { $task = $script:asTaskMethod.MakeGenericMethod($ResultType).Invoke($null, @($Operation)) }
+    catch {
+        # The operation has already started. If conversion failed its lifetime
+        # is unknown, so this process cannot safely reuse the OCR engine.
+        $script:workerPoisoned = $true
+        try { $Operation.Cancel() } catch {}
+        throw
+    }
+    if (-not $task.Wait([Math]::Min(4000, $remaining))) {
+        $script:workerPoisoned = $true
+        try { $Operation.Cancel() } catch {}
+        throw (New-Object System.TimeoutException('OCR operation timed out.'))
+    }
     return $task.Result
 }
 
 function Invoke-ImageRegionOcr($Image, $Region, [double]$RequestedScale, [string]$Pass, [bool]$Contrast = $false) {
+    $recognitionClock = [Diagnostics.Stopwatch]::StartNew()
     $regionBitmap = $null
     $regionMemory = $null
     $regionStream = $null
@@ -207,6 +231,7 @@ function Invoke-ImageRegionOcr($Image, $Region, [double]$RequestedScale, [string
             $entry
         }
     } finally {
+        $script:recognitionMs += $recognitionClock.ElapsedMilliseconds
         if ($regionSoftwareBitmap) { $regionSoftwareBitmap.Dispose() }
         if ($regionWriter) { $regionWriter.Dispose() }
         if ($regionStream) { $regionStream.Dispose() }
@@ -216,9 +241,10 @@ function Invoke-ImageRegionOcr($Image, $Region, [double]$RequestedScale, [string
 }
 # OCR_REGION_HELPERS_END
 
-try {
-    $stage = 'native-window'
-    Add-Type -TypeDefinition @'
+function Initialize-OcrRuntime {
+    if ($script:runtimeReady) { return 'ok' }
+    $script:stage = 'native-window'
+    if (-not ('HexGuideGameWindow' -as [type])) { Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class HexGuideGameWindow {
@@ -233,20 +259,9 @@ public static class HexGuideGameWindow {
     [DllImport("user32.dll")] public static extern int GetAwarenessFromDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
 }
-'@
-    $stage = 'foreground-check'
-    if (-not $CheckOnly) {
-        $window = [HexGuideGameWindow]::GetForegroundWindow()
-        [uint32]$gameProcessId = 0
-        [void][HexGuideGameWindow]::GetWindowThreadProcessId($window, [ref]$gameProcessId)
-        $gameProcess = Get-Process -Id $gameProcessId -ErrorAction SilentlyContinue
-        if (-not $gameProcess -or $gameProcess.ProcessName -ne 'League of Legends') {
-            Write-Result 'waiting' '请先将英雄联盟游戏窗口切到前台，再扫描三选一。' @() '' 'game-not-foreground'
-            exit 0
-        }
-    }
+'@ }
 
-    $stage = 'winrt-runtime'
+    $script:stage = 'winrt-runtime'
     Add-Type -AssemblyName System.Runtime.WindowsRuntime
     Add-Type -AssemblyName System.Drawing
     $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
@@ -254,31 +269,143 @@ public static class HexGuideGameWindow {
     $null = [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Foundation, ContentType=WindowsRuntime]
     $null = [Windows.Storage.Streams.InMemoryRandomAccessStream, Windows.Storage.Streams, ContentType=WindowsRuntime]
     $null = [Windows.Storage.Streams.DataWriter, Windows.Storage.Streams, ContentType=WindowsRuntime]
-    $stage = 'ocr-language'
-    $languages = @([Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages)
+    $script:stage = 'ocr-language'
+    $script:languages = @([Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages)
     # Favor Chinese when installed; all returned proposals still require the player's confirmation.
-    $language = $languages | Where-Object {$_.LanguageTag -like 'zh-Hans*' -or $_.LanguageTag -eq 'zh-CN'} | Select-Object -First 1
-    if (-not $language) { $language = $languages | Where-Object {$_.LanguageTag -like 'zh*'} | Select-Object -First 1 }
-    if (-not $language) { $language = $languages | Where-Object {$_.LanguageTag -like 'en*'} | Select-Object -First 1 }
-    if (-not $language) { $language = $languages | Select-Object -First 1 }
-    if (-not $language) {
-        Write-Result 'unavailable' 'Windows 未安装文字识别语言。可在系统语言设置添加中文，或手动选择海克斯。' @() '' 'ocr-language-missing'
-        exit 0
-    }
-    $diagnostics.language = $language.LanguageTag
-    $diagnostics.availableLanguages = @($languages | ForEach-Object {$_.LanguageTag})
-    $stage = 'ocr-engine'
-    $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($language)
-    if (-not $engine) {
-        Write-Result 'unavailable' 'Windows 文字识别暂不可用，请手动选择海克斯。' @() '' 'ocr-engine-unavailable'
-        exit 0
-    }
-    if ($CheckOnly) {
-        Write-Result 'recognized' ('Windows OCR 可用：' + $language.LanguageTag + '。本次未读取屏幕。')
-        exit 0
-    }
+    $script:language = $script:languages | Where-Object {$_.LanguageTag -like 'zh-Hans*' -or $_.LanguageTag -eq 'zh-CN'} | Select-Object -First 1
+    if (-not $script:language) { $script:language = $script:languages | Where-Object {$_.LanguageTag -like 'zh*'} | Select-Object -First 1 }
+    if (-not $script:language) { $script:language = $script:languages | Where-Object {$_.LanguageTag -like 'en*'} | Select-Object -First 1 }
+    if (-not $script:language) { $script:language = $script:languages | Select-Object -First 1 }
+    if (-not $script:language) { return 'ocr-language-missing' }
+    $script:stage = 'ocr-engine'
+    $script:engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($script:language)
+    if (-not $script:engine) { return 'ocr-engine-unavailable' }
+    $script:maxDimension = [Windows.Media.Ocr.OcrEngine]::MaxImageDimension
+    $script:asTaskMethod = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+        $_.Name -eq 'AsTask' -and $_.IsGenericMethod -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+    } | Select-Object -First 1
+    if (-not $script:asTaskMethod) { throw 'WinRT task conversion is unavailable.' }
+    $null = Initialize-TitleIdentityFeature
+    $script:runtimeReady = $true
+    return 'ok'
+}
 
-    $stage = 'window-bounds'
+function Read-WorkerRecord([int]$TimeoutMs = -1) {
+    $line = [HexGuideOcrWorkerProtocol]::ReadLine($TimeoutMs)
+    if ($null -eq $line) { return $null }
+    $record = $line | ConvertFrom-Json -ErrorAction Stop
+    if ($null -eq $record -or $record -is [array] -or $record -is [string]) { throw 'Invalid OCR protocol record.' }
+    $keys = @($record.PSObject.Properties.Name)
+    if ($keys.Count -ne 3 -or -not ($keys -ccontains 'version') -or -not ($keys -ccontains 'type') -or -not ($keys -ccontains 'id')) { throw 'Invalid OCR protocol fields.' }
+    if ($record.version -isnot [int] -or $record.version -ne 1 -or $record.type -isnot [string]) { throw 'Invalid OCR protocol version.' }
+    if (($record.id -isnot [int] -and $record.id -isnot [long]) -or $record.id -lt 1 -or $record.id -gt 9007199254740991) { throw 'Invalid OCR protocol id.' }
+    return $record
+}
+
+function Test-StageAccepted([string]$Name, [object[]]$Lines) {
+    if (-not $Worker) { return $false }
+    $script:stage = 'stage-' + $Name
+    $payload = New-ResultPayload 'recognized' '文字匹配仅识别候选，实际选择另由屏幕证据核对。' $Lines (($Lines | ForEach-Object {$_.text}) -join "`n")
+    [Console]::WriteLine((@{version=1; type='stage'; id=$script:requestId; stage=$Name; payload=$payload} | ConvertTo-Json -Compress -Depth 9))
+    try {
+        $remaining = [int]($script:scanDeadlineMs - $script:scanClock.ElapsedMilliseconds)
+        if ($remaining -le 0) { throw 'OCR scan budget was exhausted.' }
+        $ack = Read-WorkerRecord ([Math]::Min(5000, $remaining))
+        if ($null -eq $ack -or $ack.id -ne $script:requestId -or $ack.type -cnotin @('accept','continue')) { throw 'Invalid OCR stage acknowledgement.' }
+        return $ack.type -ceq 'accept'
+    } catch {
+        # Invalid/late/EOF acknowledgements make frame ownership ambiguous.
+        # The outer finally releases the frame before this process exits.
+        $script:workerPoisoned = $true
+        throw
+    }
+}
+
+function Invoke-StagedOcr($Image, [int]$Width, [int]$Height) {
+    $script:diagnostics.passesCompleted = 0
+    $script:diagnostics.passesFailed = 0
+    $script:diagnostics.passCodes = @()
+    $regions = @(Get-TitleRegions $Width $Height)
+    $groups = @(
+        @{name='card-titles-color'; stage='color'; scale=3.0; contrast=$false; regions=$regions},
+        @{name='card-titles-contrast'; stage='contrast'; scale=3.0; contrast=$true; regions=$regions},
+        @{name='full-window'; stage=''; scale=1.0; contrast=$false; regions=@(@{x=0; y=0; width=$Width; height=$Height})}
+    )
+    $lines = @()
+    foreach ($group in $groups) {
+        $completed = 0
+        foreach ($region in $group.regions) {
+            if ($script:scanClock.ElapsedMilliseconds -gt ($script:scanDeadlineMs - 700)) {
+                $script:diagnostics.budgetReached = $true
+                return $lines
+            }
+            try {
+                # Every crop belongs to the one captured frame. Variants keep
+                # separate pass ids and cannot manufacture a mixed triple.
+                $lines += @(Invoke-ImageRegionOcr $Image $region $group.scale $group.name $group.contrast)
+                $completed++
+                $script:diagnostics.passesCompleted++
+                $script:diagnostics.passCodes += ($group.name + $(if ($region.ContainsKey('column')) { ':' + $region.column } else { '' }))
+            } catch {
+                $script:diagnostics.passesFailed++
+                if ($script:workerPoisoned) { throw }
+                $passException = $_.Exception
+                while ($passException.InnerException) { $passException = $passException.InnerException }
+                $script:diagnostics.lastPassErrorType = $passException.GetType().FullName
+            }
+        }
+        # Only Node's existing matcher can accept a stage after verifying the
+        # complete triple and its identity proof. Native never guesses success.
+        if ($group.stage -and $completed -eq 3 -and (Test-StageAccepted $group.stage $lines)) { return $lines }
+    }
+    return $lines
+}
+
+function Invoke-OcrScan {
+    # Nothing derived from a previous frame survives this boundary. Only the
+    # immutable runtime/engine/language/reflection setup is kept by the host.
+    $script:bitmap = $null
+    $script:stage = 'initializing'
+    $script:diagnostics = @{runtimeReused=[bool]$script:runtimeReady}
+    $script:frameId = [Guid]::NewGuid().ToString('N')
+    $script:scanClock = [Diagnostics.Stopwatch]::StartNew()
+    $script:scanDeadlineMs = 10000
+    $script:selectionCapture = $null
+    $script:identityAnchors = $null
+    $script:identityAnchorCounts = @{}
+    $script:initializationMs = 0
+    $script:captureMs = 0
+    $script:recognitionMs = 0
+    $previousDpiContext = [IntPtr]::Zero
+    try {
+        if (-not $script:runtimeReady) {
+            $initializationClock = [Diagnostics.Stopwatch]::StartNew()
+            try { $runtimeCode = Initialize-OcrRuntime }
+            finally { $script:initializationMs = $initializationClock.ElapsedMilliseconds }
+            if ($runtimeCode -ne 'ok') {
+                $message = if ($runtimeCode -eq 'ocr-language-missing') { 'Windows 未安装文字识别语言。可在系统语言设置添加中文，或手动选择海克斯。' } else { 'Windows 文字识别暂不可用，请手动选择海克斯。' }
+                Write-Result 'unavailable' $message @() '' $runtimeCode
+                return
+            }
+        }
+        $script:diagnostics.language = $script:language.LanguageTag
+        $script:diagnostics.availableLanguages = @($script:languages | ForEach-Object {$_.LanguageTag})
+        $script:diagnostics.ocrMaxDimension = $script:maxDimension
+        if ($CheckOnly) {
+            Write-Result 'recognized' ('Windows OCR 可用：' + $script:language.LanguageTag + '。本次未读取屏幕。')
+            return
+        }
+        $script:stage = 'foreground-check'
+        $window = [HexGuideGameWindow]::GetForegroundWindow()
+        [uint32]$gameProcessId = 0
+        [void][HexGuideGameWindow]::GetWindowThreadProcessId($window, [ref]$gameProcessId)
+        $gameProcess = Get-Process -Id $gameProcessId -ErrorAction SilentlyContinue
+        if (-not $gameProcess -or $gameProcess.ProcessName -ne 'League of Legends') {
+            Write-Result 'waiting' '请先将英雄联盟游戏窗口切到前台，再扫描三选一。' @() '' 'game-not-foreground'
+            return
+        }
+
+    $script:stage = 'window-bounds'
     # Capture metadata and native mouse observations share physical pixels.
     $previousDpiContext = [HexGuideGameWindow]::SetThreadDpiAwarenessContext([IntPtr](-4))
     if ($previousDpiContext -eq [IntPtr]::Zero) { $previousDpiContext = [HexGuideGameWindow]::SetThreadDpiAwarenessContext([IntPtr](-3)) }
@@ -286,7 +413,7 @@ public static class HexGuideGameWindow {
     $point = New-Object HexGuideGameWindow+Point
     if (-not [HexGuideGameWindow]::GetClientRect($window, [ref]$rect) -or -not [HexGuideGameWindow]::ClientToScreen($window, [ref]$point)) {
         Write-Result 'unavailable' '无法读取游戏窗口区域，请使用无边框或窗口模式后重试。' @() '' 'window-bounds-unavailable'
-        exit 0
+        return
     }
     $width = $rect.Right - $rect.Left
     $height = $rect.Bottom - $rect.Top
@@ -296,15 +423,16 @@ public static class HexGuideGameWindow {
     $diagnostics.dpiAwareness = [HexGuideGameWindow]::GetAwarenessFromDpiAwarenessContext([HexGuideGameWindow]::GetThreadDpiAwarenessContext())
     if ($width -lt 640 -or $height -lt 360 -or $width -gt 8192 -or $height -gt 8192) {
         Write-Result 'unavailable' '游戏窗口尺寸暂不支持，请使用正常大小的游戏窗口。' @() '' 'window-size-unsupported'
-        exit 0
+        return
     }
     if ([HexGuideGameWindow]::GetForegroundWindow() -ne $window) {
         Write-Result 'waiting' '前台窗口已切换，本次扫描已取消。' @() '' 'foreground-changed'
-        exit 0
+        return
     }
-    $stage = 'capture'
+    $script:stage = 'capture'
+    $captureClock = [Diagnostics.Stopwatch]::StartNew()
     $capturedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $bitmap = New-Object System.Drawing.Bitmap($width, $height)
+    $script:bitmap = New-Object System.Drawing.Bitmap($width, $height)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     try {
         # Capture only the confirmed foreground game's client rectangle, never the entire desktop.
@@ -312,54 +440,23 @@ public static class HexGuideGameWindow {
     } finally { $graphics.Dispose() }
     if ([HexGuideGameWindow]::GetForegroundWindow() -ne $window) {
         Write-Result 'waiting' '前台窗口已切换，本次扫描已取消。' @() '' 'foreground-changed'
-        exit 0
+        return
     }
     if ($previousDpiContext -ne [IntPtr]::Zero) {
-        $selectionCapture = @{capturedAt=$capturedAt; width=$width; height=$height; originX=$point.X; originY=$point.Y; windowHandle=$window.ToInt64().ToString([Globalization.CultureInfo]::InvariantCulture); regions=@(Get-SelectionRegions $bitmap $width $height)}
+        $script:selectionCapture = @{capturedAt=$capturedAt; width=$width; height=$height; originX=$point.X; originY=$point.Y; windowHandle=$window.ToInt64().ToString([Globalization.CultureInfo]::InvariantCulture); regions=@(Get-SelectionRegions $bitmap $width $height)}
         [void][HexGuideGameWindow]::SetThreadDpiAwarenessContext($previousDpiContext)
         $previousDpiContext = [IntPtr]::Zero
     }
-    $maxDimension = [Windows.Media.Ocr.OcrEngine]::MaxImageDimension
-    $asTaskMethod = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
-        $_.Name -eq 'AsTask' -and $_.IsGenericMethod -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
-    } | Select-Object -First 1
-    $diagnostics.ocrMaxDimension = $maxDimension
-    $diagnostics.passesCompleted = 0
-    $diagnostics.passesFailed = 0
-    $diagnostics.passCodes = @()
-    $regions = @(Get-TitleRegions $width $height)
-    $passes = @()
-    foreach ($region in $regions) { $passes += @{region=$region; name='card-titles-color'; scale=3.0; contrast=$false} }
-    foreach ($region in $regions) { $passes += @{region=$region; name='card-titles-contrast'; scale=3.0; contrast=$true} }
-    $passes += @{region=@{x=0; y=0; width=$width; height=$height}; name='full-window'; scale=1.0; contrast=$false}
-    $lines = @()
-    foreach ($pass in $passes) {
-        if ($scanClock.ElapsedMilliseconds -gt ($scanDeadlineMs - 700)) {
-            $diagnostics.budgetReached = $true
-            break
-        }
-        try {
-            # All crops are derived from the one captured frame. Coordinates are
-            # mapped back to that frame; different recognition variants never
-            # share a pass identifier and therefore cannot fabricate a triple.
-            $lines += @(Invoke-ImageRegionOcr $bitmap $pass.region $pass.scale $pass.name $pass.contrast)
-            $diagnostics.passesCompleted++
-            $diagnostics.passCodes += ($pass.name + $(if ($pass.region.ContainsKey('column')) { ':' + $pass.region.column } else { '' }))
-        } catch {
-            $diagnostics.passesFailed++
-            $passException = $_.Exception
-            while ($passException.InnerException) { $passException = $passException.InnerException }
-            $diagnostics.lastPassErrorType = $passException.GetType().FullName
-        }
-    }
+    $script:captureMs = $captureClock.ElapsedMilliseconds
+    $lines = @(Invoke-StagedOcr $bitmap $width $height)
     # Do not publish observations if the player switched away during OCR.
     if ([HexGuideGameWindow]::GetForegroundWindow() -ne $window) {
         Write-Result 'waiting' '前台窗口已切换，本次扫描已取消。' @() '' 'foreground-changed'
-        exit 0
+        return
     }
     $diagnostics.elapsedMs = $scanClock.ElapsedMilliseconds
     $diagnostics.lineCount = $lines.Count
-    $stage = 'result'
+    $script:stage = 'result'
     if (-not $lines.Count -and $diagnostics.passesFailed) {
         Write-Result 'unavailable' '本机文字识别未完成，请在三选一画面保持稳定后重试。' @() '' 'ocr-passes-incomplete'
     } elseif (-not $lines.Count) {
@@ -385,5 +482,30 @@ public static class HexGuideGameWindow {
 } finally {
     if ($previousDpiContext -ne [IntPtr]::Zero) { try { [void][HexGuideGameWindow]::SetThreadDpiAwarenessContext($previousDpiContext) } catch {} }
     if ($bitmap) { $bitmap.Dispose() }
+    $script:bitmap = $null
+    $script:selectionCapture = $null
+    $script:identityAnchors = $null
+    $script:identityAnchorCounts = @{}
     # Images are held in memory only. DataDir is accepted for compatibility; no files are created.
 }
+}
+
+if ($Worker) {
+    try {
+        Add-Type -Path (Join-Path $PSScriptRoot 'OcrWorkerProtocol.cs') -ErrorAction Stop
+        $lastRequestId = 0
+        while (-not $script:workerPoisoned) {
+            $request = Read-WorkerRecord
+            if ($null -eq $request) { break }
+            if ($request.type -cne 'scan' -or $request.id -le $lastRequestId) { throw 'Invalid OCR scan request.' }
+            $script:requestId = $request.id
+            $lastRequestId = $request.id
+            Invoke-OcrScan
+        }
+    } catch {
+        # Protocol failures terminate silently: never echo input or keep a
+        # potentially pending stdin/WinRT operation available to future scans.
+        exit 1
+    }
+    if ($script:workerPoisoned) { exit 1 }
+} else { Invoke-OcrScan }
