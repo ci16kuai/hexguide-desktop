@@ -38,5 +38,5 @@ try {
     if ($process.ExitCode -ne 0) { throw ('Instance fixtures failed: ' + $errors) }
 } finally { $process.Dispose() }
 $result = $output | ConvertFrom-Json
-if ($result.mode -ne 'offline-instance-no-ui' -or $result.liveGameVerified -ne $false -or $result.checks -lt 9) { throw 'Unexpected instance fixture contract.' }
+if ($result.mode -ne 'offline-instance-no-ui' -or $result.liveGameVerified -ne $false -or $result.checks -lt 13) { throw 'Unexpected instance fixture contract.' }
 $result | ConvertTo-Json -Compress

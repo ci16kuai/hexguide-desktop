@@ -56,12 +56,28 @@ namespace HexGuide.Desktop
         }
 
         internal static bool NotifyExisting(string directory)
+        { return NotifyExisting(directory, delegate(uint processId) { return AllowSetForegroundWindow(processId); }); }
+
+        // The launching process receives the user's foreground permission,
+        // not the background owner. Transfer it before the owner handles the
+        // message; Show/Activate alone cannot reliably perform that transfer.
+        internal static bool NotifyExisting(string directory, Func<uint, bool> grantForeground)
         {
+            if (grantForeground == null) throw new ArgumentNullException("grantForeground");
             string caption = WindowName(directory);
             for (int attempt = 0; attempt < 10; attempt++)
             {
                 IntPtr existing = FindWindowEx(new IntPtr(-3), IntPtr.Zero, null, caption);
-                if (existing != IntPtr.Zero) return PostMessage(existing, ActivateMessage, IntPtr.Zero, IntPtr.Zero);
+                if (existing != IntPtr.Zero)
+                {
+                    uint owner;
+                    bool permitted = GetWindowThreadProcessId(existing, out owner) != 0 && owner != 0 && grantForeground(owner);
+                    // Even when Windows refuses foreground permission, asking
+                    // the owner to restore is useful; return false so the
+                    // launcher offers its explicit tray fallback.
+                    bool posted = PostMessage(existing, ActivateMessage, IntPtr.Zero, IntPtr.Zero);
+                    return posted && permitted;
+                }
                 Thread.Sleep(50); // Allow the first owner to create its receiver.
             }
             return false;
@@ -105,11 +121,19 @@ namespace HexGuide.Desktop
                     using (var separate = TryAcquire(other)) check(separate != null, "different data directories remain independent");
                     int activations = 0;
                     first.ActivationRequested += delegate { activations++; };
-                    check(NotifyExisting(directory), "existing receiver notified");
+                    int permissions = 0;
+                    check(NotifyExisting(directory, delegate(uint owner) {
+                        check(owner == (uint)Process.GetCurrentProcess().Id, "permission addresses the actual receiver PID");
+                        check(activations == 0, "permission transfers before notification dispatch");
+                        permissions++; return true;
+                    }), "existing receiver notified after permission transfer");
                     // Only our fixture's empty message-only receiver runs. It
                     // has no form, backend, shortcut or activation callback.
                     Application.DoEvents();
-                    check(activations == 1, "one notification dispatches once");
+                    check(activations == 1 && permissions == 1, "one notification and one permission transfer dispatch once");
+                    check(!NotifyExisting(directory, delegate(uint owner) { return false; }), "permission refusal is not reported as successful activation");
+                    Application.DoEvents();
+                    check(activations == 2, "restore notification remains available when permission is denied");
                     check(ProbeChild(directory) == "already-running", "second process cannot acquire shared data");
                 }
                 using (var afterExit = TryAcquire(directory)) check(afterExit != null, "released/stale lock file can be reopened");
@@ -152,6 +176,8 @@ namespace HexGuide.Desktop
         }
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string caption);
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+        [DllImport("user32.dll")] private static extern bool AllowSetForegroundWindow(uint processId);
         [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
     }
 }
