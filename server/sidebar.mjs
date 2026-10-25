@@ -6,6 +6,8 @@ import {selectBuildEvidence} from '../dist/build-evidence.js';
 import {rankAugmentCandidates} from '../dist/recommendation-policy.js';
 import {SelectionObserver, SelectionValidationError, SelectionConflictError, createOfferToken, sanitizeSelectionCapture} from './selection.mjs';
 import {OCR_SCAN_CODES, sanitizeScanCode} from './scan-diagnostics.mjs';
+import {OcrScanSchedule} from './ocr-schedule.mjs';
+import {OcrScheduleDiagnostics} from './ocr-schedule-diagnostics.mjs';
 
 const ROUTES = new Set(['auto', 'attack', 'spell', 'tank', 'support', 'crit']);
 const END_PHASES = new Set(['ChampSelect', 'Lobby', 'Matchmaking', 'ReadyCheck', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
@@ -38,9 +40,14 @@ function publicOcrDetails(raw) {
 
 /** Confirmed choices and public game observations, shared by both app windows. */
 export class BackgroundSidebar {
-  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, recommendationRepository, recommendationPolicy = {}, now = () => Date.now(), scanInterval = 2500, offerLifetime = 60000} = {}) {
+  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, recommendationRepository, recommendationPolicy = {}, scanPolicy = {}, now = () => Date.now(), offerLifetime = 60000} = {}) {
     if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
-    Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, recommendationRepository, recommendationPolicy, now, scanInterval, offerLifetime});
+    Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, recommendationRepository, recommendationPolicy, now, offerLifetime});
+    this.scanSchedule = new OcrScanSchedule({now, policy:scanPolicy});
+    this.scanDiagnostics = new OcrScheduleDiagnostics({dataDirectory, now});
+    this.scanCount = 0;
+    this.scanFailureCount = 0;
+    this.lastScanDuration = null;
     this.champions = new Map((data.champions || []).map(champion => [champion.id, champion]));
     this.augments = new Map(enrichData({augments:(data.augments || []).filter(eligible)}).augments.map(augment => [augment.id, augment]));
     this.session = {owned:[], route:'auto', gameId:null, revision:0};
@@ -52,7 +59,6 @@ export class BackgroundSidebar {
     this.selectionObserver = new SelectionObserver({now});
     this.selectionAttempt = {metadataStatus:'not-scanned', scanCode:'not-scanned', capturedAt:null, completedAt:null};
     this.offerTime = 0;
-    this.lastScan = -Infinity;
     this.generation = 0;
     this.gameEpoch = 0;
     this.persistTail = Promise.resolve();
@@ -153,6 +159,9 @@ export class BackgroundSidebar {
       this.session.revision++;
       changed = true;
     }
+    // Consume a new level before any selected-ID confirmation from this same
+    // snapshot. A confirmed choice must end, rather than reopen, that window.
+    this.scanSchedule.observe({live, gameEpoch:this.gameEpoch});
     // Only explicit, completely mapped selected IDs from the collector qualify.
     // OCR proposals never enter this path. Empty/unreadable snapshots do not
     // erase choices, and a manual correction blocks future snapshot additions.
@@ -233,6 +242,7 @@ export class BackgroundSidebar {
     // the opening preset. Return authoritative state so clients can reconcile.
     if (live.stage === 'loading') return this.getSession();
     if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) || selected.route !== this.session.route) {
+      if (selected.owned.some(id => !this.session.owned.includes(id))) this.scanSchedule.confirmed();
       if (this.session.owned.some(id => !selected.owned.includes(id))
         || selected.owned.length === this.session.owned.length && JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned)) this.snapshotBlocked = true;
       if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) && this.offers.length === 3) this.consumedOfferKey = JSON.stringify(this.offers.map(offer => offer.id));
@@ -285,6 +295,7 @@ export class BackgroundSidebar {
   }
 
   recordChoice(id, provider) {
+    this.scanSchedule.confirmed();
     this.generation++;
     this.selectionObserver.invalidate();
     this.consumedOfferKey = JSON.stringify(this.offers.map(offer => offer.id));
@@ -319,13 +330,17 @@ export class BackgroundSidebar {
       return {status:'waiting', message:'等待进入海克斯大乱斗对局后识别。', proposals:[]};
     }
     const generation = this.generation;
-    this.lastScan = this.now();
+    const startedAt = this.now();
+    this.scanSchedule.started();
+    this.scanCount++;
+    let completion = {status:'unavailable', code:'scan-execution-failed'};
     this.pending = (async () => {
       let raw;
       try { raw = this.scanner ? await this.scanner() : null; }
       catch { raw = {code:'scan-execution-failed'}; }
       const current = this.observe();
       if (generation !== this.generation || current.phase !== 'InProgress' || current.stage === 'loading') {
+        completion = {status:'waiting', code:'scan-context-changed'};
         this.recordSelectionAttempt(raw, false, current, false, 'scan-context-changed');
         this.selectionObserver.invalidate(); return {status:'waiting', message:'本局已变化，请等待新一轮三选一卡片。', proposals:[]};
       }
@@ -338,6 +353,7 @@ export class BackgroundSidebar {
       const rejectionCode = status !== 'recognized' ? undefined : !triplet ? 'scan-proposals-incomplete' : alreadyOwned ? 'scan-offer-owned' : consumed ? 'scan-offer-consumed' : undefined;
       const scannedAt = new Date(this.now()).toISOString();
       this.recordSelectionAttempt(raw, complete, current, true, rejectionCode);
+      completion = {status:complete ? 'recognized' : status, code:this.selectionAttempt.scanCode};
       if (complete) {
         const changedOffers = JSON.stringify(this.offers.map(offer => offer.id)) !== JSON.stringify(proposals.map(offer => offer.id));
         if (changedOffers || !this.offerToken) this.offerToken = createOfferToken();
@@ -359,7 +375,15 @@ export class BackgroundSidebar {
       }
       // Empty battle frames do not replace the most recent valid three-card frame.
       return {status:complete ? 'recognized' : status === 'recognized' ? 'unavailable' : status, message:text(raw?.message) || this.ocr.message, proposals:complete ? proposals : [], observedAt:scannedAt};
-    })().finally(() => { this.pending = null; });
+    })().finally(() => {
+      this.pending = null;
+      this.lastScanDuration = Math.max(0, Math.min(100000, this.now() - startedAt));
+      if (completion.status === 'unavailable') this.scanFailureCount++;
+      // The scheduler discards an old epoch's cooldown, while releasing its task.
+      this.scanSchedule.completed(completion);
+      void this.publishScanDiagnostics();
+    });
+    void this.publishScanDiagnostics(live);
     return this.pending;
   }
 
@@ -391,14 +415,14 @@ export class BackgroundSidebar {
     const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live));
     const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), this.selectionEligible(live));
     return {
-      version:'1.11.0', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      version:'1.11.1', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
       gameEpoch:this.gameEpoch, selection, selectionResult, selectionDiagnostics:this.selectionDiagnostics(selection),
       mode:live.mode || {queueId:null, isMayhem:false, known:false},
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
       level:live.level ?? null, gameTime:live.gameTime ?? null, currentGold:live.currentGold ?? null, items:live.items || [],
       teams:live.teams || {status:'unavailable', ownTeam:null, allies:[], enemies:[], observedAt:live.observedAt || null},
       owned:owned.map(augment => ({id:augment.id, name:augment.name, icon:text(augment.icon, 400), rarity:text(augment.rarity, 40), summary:text(String(augment.summary || augment.description || '').replace(/<[^>]*>/g, ''), 300)})), offers,
-      ocr:{...this.ocr, proposals:this.offers.map(offer => ({...offer}))}, route:this.session.route, updatedAt:live.observedAt || new Date(this.now()).toISOString(),
+      ocr:{...this.ocr, schedule:this.scanScheduleState(live), proposals:this.offers.map(offer => ({...offer}))}, route:this.session.route, updatedAt:live.observedAt || new Date(this.now()).toISOString(),
       plan,
       ...(this.appearance ? {appearance:this.appearance.get()} : {}),
     };
@@ -406,7 +430,24 @@ export class BackgroundSidebar {
 
   async pollOnce() {
     const live = this.observe();
-    if (this.ocr.enabled && live.phase === 'InProgress' && live.stage !== 'loading' && this.now() - this.lastScan >= this.scanInterval) await this.scan();
+    const schedule = this.scanScheduleState(live);
+    // Diagnostics are observational; filesystem latency must not gate capture.
+    void this.publishScanDiagnostics(live);
+    if (schedule.due) await this.scan();
+  }
+
+  scanScheduleState(live) {
+    const current = live || this.collector.getSnapshot();
+    const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(current));
+    return this.scanSchedule.decision({live:current, gameEpoch:this.gameEpoch, enabled:this.ocr.enabled,
+      hasOffers:this.offers.length === 3, armed:selection.status === 'armed', inFlight:Boolean(this.pending)});
+  }
+
+  publishScanDiagnostics(live) {
+    try {
+      return this.scanDiagnostics.publish({...this.scanScheduleState(live), scanCount:this.scanCount,
+        failureCount:this.scanFailureCount, lastDurationMs:this.lastScanDuration});
+    } catch { return Promise.resolve(); }
   }
 
   start() {
@@ -427,5 +468,10 @@ export class BackgroundSidebar {
     void tick();
   }
 
-  async stop() { this.stopped = true; clearTimeout(this.timer); await Promise.all([this.persistTail.catch(() => {}), this.preferencesTail.catch(() => {}), this.recommendationRepository?.close()]); }
+  async stop() {
+    this.stopped = true; clearTimeout(this.timer);
+    // Drain our own scan and latest bounded diagnostics without touching the game.
+    await this.pending?.catch(() => {});
+    await Promise.all([this.persistTail.catch(() => {}), this.preferencesTail.catch(() => {}), this.recommendationRepository?.close(), this.scanDiagnostics.close()]);
+  }
 }
