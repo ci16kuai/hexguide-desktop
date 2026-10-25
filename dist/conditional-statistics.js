@@ -139,6 +139,10 @@ function validatePayload(championId, detail, single) {
   }
 }
 
+// Shared with the desktop's bounded, local recommendation cache. Exporting the
+// existing validator does not change the browser client's request or validation.
+export { validatePayload as validateConditionalStatisticsPayload };
+
 function validateManifest(value) {
   object(value, '版本清单', 'invalid-manifest');
   if (!Array.isArray(value.versions)) fail('invalid-manifest', '来源版本清单无效。');

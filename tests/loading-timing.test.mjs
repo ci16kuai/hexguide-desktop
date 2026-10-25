@@ -75,7 +75,8 @@ test('isolated ready-API zero-clock loading remains observable for forty simulat
     assert.equal(model.plan.enemyContext.status, 'detected');
     assert.equal(model.plan.enemyContext.source, 'loading-roster');
     assert.deepEqual(model.plan.enemyContext.champions.map(enemy => enemy.id), ['Soraka', 'Ornn']);
-    assert.ok(model.plan.buildItems.length > 0 && model.plan.nextAugments.length > 0);
+    assert.ok(model.plan.buildItems.length > 0);
+    assert.deepEqual(model.plan.nextAugments, []);
     assert.deepEqual(model.owned, []);
     assert.equal(model.route, 'auto');
     if (revision === undefined) revision = model.sessionRevision;

@@ -1,4 +1,6 @@
 import {enrichData, getChampionTags, getSynergy, recommend, TAG_LABELS} from './engine.js';
+import {selectBuildEvidence, mixBuildItemEvidence} from './build-evidence.js';
+import {rankAugmentCandidates} from './recommendation-policy.js';
 
 const unique = values => [...new Set(values.filter(Boolean))];
 const list = value => Array.isArray(value) ? value : [];
@@ -139,9 +141,9 @@ function enemyAugmentAdjustment(augment, enemyContext, {physical, spell}) {
  * Live visible observations plus static mechanism explanations. No hidden
  * opponent stats, inferred cooldowns, win rates, or unconfirmed OCR selections.
  */
-export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, augments = [], itemsCatalog = {}, champions = [], now = Date.now()} = {}) {
+export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, augments = [], itemsCatalog = {}, champions = [], recommendationData = null, policy = {}, now = Date.now()} = {}) {
   const context = [];
-  const noPlan = {stage: 'waiting', buildItems: [], nextAugments: [], enemyContext: {status: 'unavailable', source: '', summary: '等待当前海克斯大乱斗对局。', signals: [], champions: [], observedAt: ''}};
+  const noPlan = {stage: 'waiting', buildItems: [], nextAugments: [], allyContext:{status:'unavailable',source:'',champions:[]}, enemyContext: {status: 'unavailable', source: '', summary: '等待当前海克斯大乱斗对局。', signals: [], champions: [], observedAt: ''}};
   if (live.mode?.known && live.mode.isMayhem === false) return {
     ...noPlan,
     title: '当前模式不是海克斯大乱斗', summary: '切换到海克斯大乱斗后再生成当局玩法选项。', choices: [],
@@ -155,6 +157,12 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
   const hasLive = live.connection?.status === 'connected' && live.championId === champion.id;
   const isLoading = loadingRequested(live);
   const enemyContext = describeEnemies({champion, live, champions, itemsCatalog, now});
+  const allyDefinitions = new Map(champions.map(hero => [hero.id, hero]));
+  const allyChampions = enemyContext.status === 'detected' ? list(live.teams?.allies).slice(0, 5).flatMap(player => {
+    const hero = allyDefinitions.get(player.championId);
+    return hero ? [{id:hero.id,name:hero.name || hero.title || hero.id,icon:hero.icon || ''}] : [];
+  }) : [];
+  const allyContext = {status:allyChampions.length ? 'detected' : 'unavailable', source:enemyContext.source || '', champions:allyChampions};
   if (isLoading && (!loadingRoster(live) || !hasLive || enemyContext.status !== 'detected')) return {
     ...noPlan, enemyContext,
     title: '等待本局加载阵容', summary: enemyContext.summary, choices: [], context: [enemyContext.summary],
@@ -198,15 +206,15 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
   if (summaryStats(stats)) context.push(`自身面板：${summaryStats(stats)}。`);
   if (ownedItems.length) context.push(`已读取装备：${ownedItems.map(item => item.definition?.name || text(item.name) || `装备 ${item.id ?? item.itemID}`).join('、')}。`);
   if (definitions.length) context.push(`已确认海克斯：${definitions.map(augment => augment.name || augment.id).join('、')}。`);
-  else context.push(isLoading ? '开局前按本局英雄与敌方阵容预设；不沿用上一局海克斯或玩法方向。' : '尚未确认已选海克斯；当前仅按英雄机制和可用面板提供选项。');
+  else context.push(isLoading ? '开局前仅按本局英雄与双方阵容推荐装备。' : '尚未确认已选海克斯；当前仅按英雄机制和可用面板提供选项。');
   if (noAttacks) context.push('已确认效果包含无法普攻的限制，普攻路线已暂停。');
   if (noCrit) context.push('已确认效果包含无法暴击的限制，不再列出暴击装备选项。');
-  if (live.augments?.status !== 'detected') context.push('海克斯以你确认的列表为准；未把普通符文或识别草稿加入建议。');
+  if (!isLoading && live.augments?.status !== 'detected') context.push('海克斯以已确认的列表为准；未把普通符文或识别草稿加入建议。');
   if (currentRoute !== 'auto' && ROUTE_NAMES[currentRoute]) context.push(`你选择的路线：${ROUTE_NAMES[currentRoute]}；保留其他玩法供比较。`);
 
   const stage = Number(observed.gameTime) >= 900 || Number(observed.level) >= 16 ? 'late'
     : Number(observed.gameTime) >= 480 || Number(observed.level) >= 11 ? 'mid' : 'early';
-  const stageWhy = isLoading ? '加载阶段先按英雄与敌方阵容比较开局方向；进入对局后再结合已选海克斯和实际装备更新。'
+  const stageWhy = isLoading ? '加载阶段先按双方阵容推荐开局装备；进入对局后再结合实际装备更新。'
     : !hasLive ? '在真实对局开始前，先比较英雄机制对应的玩法方向。'
     : stage === 'late' ? '当前已到较高等级或较长对局阶段，优先延续已有装备和海克斯，避免无依据地推翻整套出装。'
       : stage === 'mid' ? '当前进入中段，把已有装备对应的输出方式与海克斯触发条件接起来。'
@@ -349,14 +357,44 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
     const reason = `已读取的敌方英雄${isLoading ? '机制' : '机制/装备'}偏物理方向，可比较护甲生存选项；这是机制倾向，未测量本局物理伤害占比。`;
     if (spellRoute) target('3157', reason);
     else if (tankRoute) target('3143', `${reason} 兰顿减暴击的部分仍需敌方实际造成暴击伤害。`);
+    else if (physicalRoute) target('3047', `${reason} 铁板靴的额外减伤需要敌方普通攻击实际命中。`);
   }
   const seenItems = new Set();
-  const buildItems = [...targeted.map(([id, reason]) => itemCard(id, reason)), ...choices.flatMap(choice => choice.items)].filter(item => {
+  const buildEvidence = selectBuildEvidence(recommendationData, {champion, owned:definitions, augments, patch:recommendationData?.patch || '16.21'});
+  const freshReference = recommendationData?.referenceStatus == null || recommendationData.referenceStatus === 'ready';
+  const mixed = mixBuildItemEvidence(buildEvidence, {ordinaryAram:freshReference ? recommendationData?.ordinaryAram : null,
+    summonersRift:freshReference ? recommendationData?.summonersRift : null, patch:recommendationData?.patch || '16.21'});
+  const reference = mixed.secondaryMode === 'aram' ? recommendationData?.ordinaryAram : mixed.secondaryMode === 'summoners-rift' ? recommendationData?.summonersRift : null;
+  const referenceMetadata = reference ? Object.fromEntries(['mode','source','sourceUrl','patch','region','tier','position','observedAt']
+    .filter(key => reference[key] != null).map(key => [key,reference[key]])) : null;
+  const statisticalItems = mixed.items.flatMap(row => {
+    const sourceReason = isLoading ? '当前英雄的本模式装备统计。' : buildEvidence.conditionAugmentId
+      ? `根据最近确认的「${definitions.at(-1)?.name || '当前选择'}」条件装备样本；其余已选另做机制兼容检查。`
+      : '当前英雄的本模式装备统计。';
+    const card = itemCard(row.id, sourceReason);
+    return card ? [{...card, evidence:row.evidence, winRate:row.winRate, sampleCount:row.sampleCount,
+      recommendationScore:row.recommendationScore, effectiveWeights:row.effectiveWeights, evidenceKind:'aggregate-statistics'}] : [];
+  });
+  const targetedItems = targeted.map(([id, reason]) => itemCard(id, reason)).filter(Boolean)
+    .map(item => ({...item, evidenceKind:'lineup-mechanism'}));
+  const statisticalById = new Map(statisticalItems.map(item => [item.id, item]));
+  const scoresById = new Map(mixed.items.map(item => [item.id, item.recommendationScore]));
+  const compatibleBuilds = buildEvidence.builds.filter(build => build.items.every(id =>
+    itemIds.has(id) || statisticalById.has(id))).map(build => ({...build,
+    recommendationScore:build.items.reduce((score,id) => score + (scoresById.get(id) ?? 0),0) / build.items.length
+  })).sort((a,b) => b.recommendationScore - a.recommendationScore || b.winRate - a.winRate || b.sampleCount-a.sampleCount);
+  const coreBuild = compatibleBuilds[0] || null;
+  const coreItems = coreBuild ? (coreBuild.route?.items || coreBuild.items).map(id => statisticalById.get(id)).filter(Boolean)
+    .map(item => ({...item, buildReference:{items:coreBuild.items,winRate:coreBuild.winRate,sampleCount:coreBuild.sampleCount,
+      scope:buildEvidence.scope,conditionAugmentId:buildEvidence.conditionAugmentId}})) : [];
+  // Missing conditional samples remain explicit; static mechanism options are
+  // never relabelled as a hero+augment observed build.
+  const buildItems = [...targetedItems.slice(0, 4), ...(statisticalItems.length ? [...coreItems,...statisticalItems] : choices.flatMap(choice => choice.items))].filter(item => {
     if (!item || seenItems.has(item.id)) return false;
     seenItems.add(item.id); return true;
   }).slice(0, 6);
   const ownedIds = new Set(definitions.map(augment => String(augment.id)));
-  const nextAugments = enrichData({augments}).augments.filter(augment => {
+  const nextCandidates = isLoading ? [] : enrichData({augments}).augments.filter(augment => {
     if (ownedIds.has(String(augment.id)) || augment.retiredPatch || augment.recommendable === false || augment.isInternalTemplate || !text(augment.description)) return false;
     if (Object.prototype.hasOwnProperty.call(augment, 'availability') && augment.availability !== 'current') return false;
     if (noAttacks && (augment.tags.includes('attack') || augment.tags.includes('attackSpeed') || augment.triggers.includes('attack'))) return false;
@@ -366,13 +404,30 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
     const result = recommend(augment, champion, definitions, currentRoute);
     const adjustment = enemyAugmentAdjustment(augment, enemyContext, {physical: physicalRoute, spell: spellRoute});
     const reasons = unique([...adjustment.reasons, ...result.reasons.filter(reason => !/适配分不代表胜率/.test(reason))]);
-    return {id: augment.id, name: augment.name, icon: augment.icon || '', rarity: augment.rarity, description: augment.description, mechanismLabel: isLoading ? '开局海克斯方向' : '后续机制参考', reason: reasons[0], reasons, cautions: unique([...result.cautions, '仅为后续遇到时的机制参考；不预测下轮出现，也不代表胜率。']), sourceUrl: augment.sourceUrl || '', confidence: result.confidence, rankingScore: result.score + adjustment.bonus};
-  }).sort((a, b) => b.rankingScore - a.rankingScore || String(a.id).localeCompare(String(b.id))).slice(0, 6).map(({rankingScore, ...augment}, index) => ({...augment, rank: index + 1}));
+    const pair = buildEvidence.pairs.filter(row => row.augmentId === augment.id).sort((a,b) => b.sampleCount-a.sampleCount)[0];
+    if (pair) reasons.unshift(`公开组合样本中与「${definitions.find(a=>a.id===pair.withAugmentId)?.name || '已选'}」共同出现，组合胜率 ${(pair.winRate*100).toFixed(1)}%；仅覆盖来源已发布组合。`);
+    return {augment, mechanismScore:result.score + adjustment.bonus + (pair ? 5 : 0), conflicts:result.conflicts,
+      id: augment.id, name: augment.name, icon: augment.icon || '', rarity: augment.rarity, description: augment.description,
+      mechanismLabel:'后续适配与联动', reason:reasons[0], reasons, cautions:unique([...result.cautions, '后续遇到时的参考，不预测下轮出现；样本胜率不是本局收益保证。']),
+      sourceUrl:augment.sourceUrl || '', confidence:result.confidence};
+  });
+  const nextAugments = rankAugmentCandidates(nextCandidates, {champion, owned:definitions,
+    statistics:buildEvidence.augmentStatistics, policy:{...policy, statisticsPatch:recommendationData?.patch || policy.statisticsPatch || '16.21'}})
+    .slice(0, 6).map(({augment, mechanismScore, conflicts, ...entry}) => {
+      const observed = entry.rankingEvidence;
+      return {...entry, reason:observed?.trusted ? `该英雄持有胜率 ${(observed.winRate*100).toFixed(1)}%；${entry.reason}` : entry.reason};
+    });
   return {
     stage: isLoading ? 'loading-preview' : hasLive ? 'live' : 'reference',
     title: isLoading ? `${championName}的开局预设` : `${championName}的可选玩法`,
-    summary: isLoading ? '已结合本局英雄与敌方阵容生成开局预设；尚未读取实战装备与面板。进入游戏后会随装备和确认的海克斯继续调整。' : `${hasLive ? '已结合当前英雄、自身面板与装备' : '当前基于英雄静态机制'}${definitions.length ? `，以及 ${definitions.length} 个已确认海克斯` : ''}${enemyContext.status === 'detected' ? '；已加入可见敌方阵容与装备条件' : ''}。以下路线供你比较，随状态和确认列表更新。`,
-    choices, context, buildItems, nextAugments, enemyContext,
+    summary: isLoading ? '已结合本局双方阵容生成开局出装；尚未读取实战装备与面板，进入游戏后继续更新。' : `${hasLive ? '已结合当前英雄、自身面板与装备' : '当前基于英雄静态机制'}${definitions.length ? `，以及 ${definitions.length} 个已确认海克斯` : ''}${enemyContext.status === 'detected' ? '；已加入可见敌方阵容与装备条件' : ''}。以下路线供你比较，随状态和确认列表更新。`,
+    choices, context, buildItems, nextAugments, enemyContext, allyContext,
+    statistics:{...mixed, items:undefined, status:buildEvidence.status, source:buildEvidence.source,
+      patch:buildEvidence.patch, dataDate:buildEvidence.dataDate || '', cacheStatus:buildEvidence.cacheStatus || buildEvidence.status,
+      sourceUrl:buildEvidence.sourceUrl || '', reference:referenceMetadata,
+      conditionAugmentId:buildEvidence.conditionAugmentId, conditionNote:buildEvidence.conditionNote || '',
+      summary:statisticalItems.length ? `${mixed.summary} · ARAMKit${reference ? ' / OP.GG' : ''} · ${buildEvidence.patch}${buildEvidence.dataDate ? ` / ${buildEvidence.dataDate}` : ''}` : buildEvidence.status === 'condition-missing'
+        ? '当前选择的条件装备样本暂缺，暂用机制参考' : buildEvidence.status === 'stale' ? '装备统计缓存已过期，等待刷新；暂用机制参考' : '装备统计尚未就绪，暂用机制参考'},
     confidence: isLoading ? 'mechanism-with-roster' : hasLive ? 'mechanism-with-live' : 'mechanism',
     label: isLoading ? '开局前预览' : hasLive ? '机制建议 · 已读取本局数据' : '机制建议 · 等待本局数据'
   };

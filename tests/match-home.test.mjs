@@ -5,29 +5,31 @@ import {readFile} from 'node:fs/promises';
 import {enrichData,recommend,getSynergy,getChampionTags,TAG_LABELS} from '../dist/engine.js';
 import {getVersionInfo} from '../dist/version.js';
 import {replacePreservingFocus} from '../dist/focus-preservation.js';
+import {getStaticAugmentStatistics} from '../dist/build-evidence.js';
+import {rankAugmentCandidates} from '../dist/recommendation-policy.js';
 import {focusDocument,focusElement} from './fixtures/focus-dom.mjs';
 
 const source=await readFile(new URL('../dist/app.js',import.meta.url),'utf8');
 const catalog=JSON.parse(await readFile(new URL('../dist/data.json',import.meta.url),'utf8'));
 const active=catalog.augments.filter(a=>!a.isInternalTemplate&&a.availability==='current'&&!a.retiredPatch&&a.recommendable!==false);
 
-async function appHarness(hash=''){
-  const storage=new Map(),nodes=new Map(),clicks=[],hashListeners=[];
+async function appHarness(hash='',options={}){
+  const storage=new Map(),nodes=new Map(),clicks=[],changes=[],hashListeners=[];
   const document=focusDocument();
-  let liveContext,syncContext,manualChanges=0;
+  let liveContext,syncContext,manualChanges=0,loading=false;
   const node=selector=>{if(!nodes.has(selector))nodes.set(selector,focusElement(document,{id:selector.startsWith('#')?selector.slice(1):'',textContent:'',hidden:false,value:'',open:false,scrolls:0,classList:{add(){},remove(){},toggle(){}},addEventListener(){},setAttribute(){},removeAttribute(){},showModal(){this.open=true;},close(){this.open=false;},querySelector(){return null;},insertAdjacentHTML(_position,html){this.innerHTML+=html;},scrollIntoView(){this.scrolls++;}}));return nodes.get(selector);};
   const nav=['live','library','champions','stats','synergy','compare'].map(tab=>({...node(`nav-${tab}`),dataset:{nav:tab}}));
   const location={hash};
   const context=vm.createContext({
-    enrichData,recommend,getSynergy,getChampionTags,TAG_LABELS,getVersionInfo,replacePreservingFocus,
+    enrichData,recommend,getSynergy,getChampionTags,TAG_LABELS,getVersionInfo,replacePreservingFocus,getStaticAugmentStatistics,rankAugmentCandidates,
     createStatisticsView:()=>({html:()=>'<div class="statistics-fixture">英雄胜率</div>'}),
-    createLiveController:options=>{liveContext=options;return {html:()=>`<div class="live-fixture">已确认 ${options.getOwned().length} 个海克斯 · ${options.getChampion()?.name}</div>`,manualChampion(){manualChanges++;}};},
+    createLiveController:options=>{liveContext=options;return {isLoadingPreview:()=>loading,html:()=>`<div class="live-fixture">已确认 ${options.getOwned().length} 个海克斯 · ${options.getChampion()?.name}</div>`,manualChampion(){manualChanges++;}};},
     createSessionSync:options=>{syncContext=options;return {publish(){},close(){}};},
     localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},
     sessionStorage:{getItem:()=>null},location,
-    document:Object.assign(document,{title:'',querySelector:node,querySelectorAll:selector=>selector==='[data-nav]'?nav:selector==='dialog'?[node('#detail-dialog'),node('#picker-dialog')]:[],addEventListener:(name,callback)=>{if(name==='click')clicks.push(callback);}}),
+    document:Object.assign(document,{title:'',querySelector:node,querySelectorAll:selector=>selector==='[data-nav]'?nav:selector==='dialog'?[node('#detail-dialog'),node('#picker-dialog')]:[],addEventListener:(name,callback)=>{if(name==='click')clicks.push(callback);if(name==='change')changes.push(callback);}}),
     window:{addEventListener:(name,callback)=>{if(name==='hashchange')hashListeners.push(callback);},scrollTo(){}},
-    fetch:async url=>{assert.equal(url,'./data.json');return {ok:true,json:async()=>structuredClone(catalog)};},
+    fetch:async url=>{if(url==='./statistics.json'){if(options.statistics instanceof Error)throw options.statistics;return {ok:Boolean(options.statistics),json:async()=>structuredClone(options.statistics)};}assert.equal(url,'./data.json');return {ok:true,json:async()=>structuredClone(options.catalog||catalog)};},
     setTimeout:()=>1,clearTimeout(){},matchMedia:()=>({matches:true}),console
   });
   vm.runInContext(source.replace(/^import .*;\r?\n/gm,''),context);
@@ -37,12 +39,14 @@ async function appHarness(hash=''){
   return {
     node,location,storage,nav,document,
     html:()=>node('#app').innerHTML,
+    change(id,value){changes.forEach(callback=>callback({target:{id,value}}));},
     navigate(tab){location.hash=`#${tab}`;hashListeners.forEach(callback=>callback());},
     click(action,extra={}){const event={preventDefault(){},target:{closest:()=>({dataset:{action,...extra}})}};clicks.forEach(callback=>callback(event));},
     offers(ids){liveContext.onOffers(ids);},
     expireOffers(){liveContext.onOffersExpired();},
     sync(value){syncContext.applyState(value);},
     refreshLive(){liveContext.renderLive();},
+    stage(value){loading=value;liveContext.onStageChange();},
     get buildExpanded(){return liveContext.getBuildExpanded();},
     get selectedAugment(){return liveContext.getSelectedAugment();},
     get manualChanges(){return manualChanges;}
@@ -175,4 +179,72 @@ test('offers and sidebar sync keep foreground controls usable without focusing b
     assert.equal(dialog.focuses,0,`${trigger}: ${mode}`);
     assert.equal(old.focuses,0,`${trigger}: ${mode}`);
   }
+});
+
+test('loading stage hides outer session and comparison controls and restores them on live entry',async()=>{
+  const app=await appHarness('#live');
+  app.stage(true);
+  assert.match(app.html(),/workspace-tool/);
+  assert.doesNotMatch(app.html(),/class="session-panel"|id="home-compare"/);
+  app.refreshLive();
+  assert.doesNotMatch(app.html(),/class="session-panel"|id="home-compare"/);
+  app.stage(false);
+  assert.match(app.html(),/workspace-home/);
+  assert.match(app.html(),/class="session-panel"/);
+  assert.match(app.html(),/id="home-compare"/);
+  app.navigate('stats');
+  app.stage(true);
+  assert.equal(app.location.hash,'#stats');
+  assert.match(app.html(),/statistics-fixture/);
+});
+
+
+const rankingCatalog={...catalog,combos:[],augments:[
+  {id:'fixture_health',name:'测试生命',rarity:'silver',description:'获得100点生命值。',availability:'current',recommendable:true},
+  {id:'fixture_vamp',name:'测试全能吸血',rarity:'silver',description:'获得10%全能吸血。',availability:'current',recommendable:true},
+  {id:'fixture_crit',name:'测试技能暴击',rarity:'gold',description:'你的技能可以造成暴击。',availability:'current',recommendable:true}
+]};
+const rankingStatistics={meta:{mode:'aram-mayhem',patch:'16.21',cohortId:'fixture',lowSampleThreshold:200,source:{name:'Fixture'}},champions:[{championId:'Ahri',cohortId:'fixture',augments:rankingCatalog.augments.map((augment,index)=>({augmentId:augment.id,cohortId:'fixture',games:1000,wins:[520,900,700][index],lowSample:false,provisional:false}))}]};
+
+test('shared policy ranks library, champion and comparison views by actual statistics while home keeps game order',async()=>{
+  const app=await appHarness('#live',{catalog:rankingCatalog,statistics:rankingStatistics});
+  const ids=rankingCatalog.augments.map(a=>a.id);
+  app.offers(ids);
+  let html=app.html(),home=html.slice(html.indexOf('data-ui-id="home-compare-slots"'),html.indexOf('data-ui-id="home-compare-actions"'));
+  assert.ok(home.indexOf('测试生命')<home.indexOf('测试全能吸血'));
+  assert.ok(home.indexOf('测试全能吸血')<home.indexOf('测试技能暴击'));
+  assert.match(home,/游戏选项 2 · 推荐 1/);
+  assert.match(home,/持有胜率 90.00%/);
+  const results=html.slice(html.indexOf('data-ui-id="home-compare-results"'));
+  assert.match(results,/<article class="recommendation top-choice" data-augment-id="fixture_vamp"/);
+  app.navigate('compare');
+  assert.match(app.html(),/<article class="recommendation top-choice" data-augment-id="fixture_vamp"/);
+  app.navigate('champions');
+  html=app.html();
+  assert.ok(html.indexOf('<h3>测试全能吸血')<html.indexOf('<h3>测试技能暴击'));
+  assert.ok(html.indexOf('<h3>测试技能暴击')<html.indexOf('<h3>测试生命'));
+  app.navigate('library');app.change('sort-filter','fit');
+  html=app.node('#library-results').innerHTML;
+  assert.ok(html.indexOf('<h3>测试全能吸血')<html.indexOf('<h3>测试技能暴击'));
+  assert.ok(html.indexOf('<h3>测试技能暴击')<html.indexOf('<h3>测试生命'));
+  assert.match(html,/持有胜率 90.00%/);
+});
+
+test('missing statistics do not block app startup or fabricate win rates',async()=>{
+  for(const statistics of [null,new Error('fixture fetch failed'),{meta:{},champions:[]}]){
+    const app=await appHarness('#live',{catalog:rankingCatalog,statistics});
+    app.offers(rankingCatalog.augments.map(a=>a.id));
+    assert.equal(app.node('#loading').hidden,true);
+    assert.match(app.html(),/机制参考 · 暂无可靠胜率/);
+    assert.doesNotMatch(app.html(),/持有胜率 \d/);
+  }
+});
+
+test('low-sample observations remain labelled and never outrank a trusted rate by their displayed percentage',async()=>{
+  const statistics=structuredClone(rankingStatistics);
+  Object.assign(statistics.champions[0].augments[0],{games:10,wins:10,lowSample:true});
+  const app=await appHarness('#live',{catalog:rankingCatalog,statistics});
+  app.offers(rankingCatalog.augments.map(a=>a.id));
+  assert.match(app.html(),/持有胜率 100.00%[^<]+样本或口径不足/);
+  assert.match(app.html(),/<article class="recommendation top-choice" data-augment-id="fixture_vamp"/);
 });

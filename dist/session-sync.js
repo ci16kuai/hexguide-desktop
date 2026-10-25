@@ -94,5 +94,5 @@ export function createSessionSync({token,getState,applyState,request=fetch,onErr
   }
   const timer=setInterval(()=>{if(pending&&ready)void flush();else void pull();},2200);
   void pull();
-  return {publish,pull,close(){closed=true;clearInterval(timer);}};
+  return {publish,pull,getAuthoritativeSession(){return !closed&&authoritative?{gameId:authoritative.gameId,gameEpoch:authoritative.gameEpoch,revision:authoritative.revision,owned:[...authoritative.owned],route:authoritative.route}:null;},close(){closed=true;clearInterval(timer);}};
 }

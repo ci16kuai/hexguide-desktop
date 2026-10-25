@@ -35,7 +35,9 @@ test('shared selections are validated and persist only assistant IDs and route',
   assert.deepEqual(saved.owned,[ids[0]]);
   assert.equal(saved.gameId,'123');
   const disk = JSON.parse(await readFile(path.join(directory,'session.json'),'utf8'));
-  assert.deepEqual(Object.keys(disk).sort(),['gameId','owned','revision','route']);
+  assert.deepEqual(Object.keys(disk).sort(),['gameId','owned','revision','route','selectionSources']);
+  assert.deepEqual(Object.keys(disk.selectionSources),['manualBarrier']);
+  assert.equal(typeof disk.selectionSources.manualBarrier,'boolean');
   assert.ok(!JSON.stringify(disk).includes('Do not trust remote name'));
   const restored = await new BackgroundSidebar({collector,data,dataDirectory:directory}).load();
   assert.deepEqual(restored.getSession().owned,[ids[0]]);

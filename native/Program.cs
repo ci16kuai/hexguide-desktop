@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.10.3.0")]
-[assembly: AssemblyFileVersion("1.10.3.0")]
-[assembly: AssemblyInformationalVersion("1.10.3")]
+[assembly: AssemblyVersion("1.11.0.0")]
+[assembly: AssemblyFileVersion("1.11.0.0")]
+[assembly: AssemblyInformationalVersion("1.11.0")]
 
 namespace HexGuide.Desktop
 {
@@ -50,7 +50,7 @@ namespace HexGuide.Desktop
                     int ownedChecks = Convert.ToInt32(OwnedAugmentVerificationFixtures.Run()["checks"]);
                     int checks = ScreenSelectionWatcher.ValidateFixtures() + MainWindow.ValidateSelectionDiagnosticFixtures() + ownedChecks;
                     Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                        { "version", "1.10.3" }, { "checks", checks },
+                        { "version", "1.11.0" }, { "checks", checks },
                         { "titleProbeVersion", 1 },
                         { "nativeDiagnosticMaxBytes", ScreenSelectionWatcher.LargestDiagnosticFixtureBytes },
                         { "mode", "offline-no-ui" }, { "liveGameVerified", false }
@@ -205,7 +205,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.10.3 · 我的这一局";
+            Text = "海克斯指南 1.11.0 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -610,7 +610,7 @@ namespace HexGuide.Desktop
         internal static string SelectionDiagnosticsJson(ScreenSelectionWatcher watcher, Dictionary<string, object> model, DateTime now)
         {
             var snapshot = new Dictionary<string, object> {
-                { "version", "1.10.3" }, { "schemaVersion", 2 },
+                { "version", "1.11.0" }, { "schemaVersion", 2 },
                 { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
                 { "native", watcher.Diagnostics() },
                 { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
@@ -636,7 +636,7 @@ namespace HexGuide.Desktop
                 string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
                 var snapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
                 if (snapshot.Count != 5 || Encoding.UTF8.GetByteCount(json) > 4096
-                    || ModelValue.Text(snapshot, "version") != "1.10.3" || ModelValue.Text(snapshot, "schemaVersion") != "2")
+                    || ModelValue.Text(snapshot, "version") != "1.11.0" || ModelValue.Text(snapshot, "schemaVersion") != "2")
                     throw new InvalidOperationException("The persisted selection diagnostic snapshot exceeded its schema or byte bound.");
                 if (json.Contains("PRIVATE-MARKER") || json.Contains("\"ids\"") || json.Contains("windowHandle")
                     || json.Contains("\"signature\"") || json.Contains("\"signatures\"") || json.Contains("\"delta\""))
@@ -959,6 +959,7 @@ namespace HexGuide.Desktop
         }
         internal string Notice = "";
         internal bool IsLoadingPreview { get { return ModelValue.Text(ModelValue.Object(model, "plan"), "stage") == "loading-preview"; } }
+        private bool IsLoadingStage { get { return ModelValue.Text(model, "stage") == "loading" || IsLoadingPreview; } }
         private static bool TryGameTime(Dictionary<string, object> value, out double time)
         {
             return double.TryParse(ModelValue.Text(value, "gameTime"), NumberStyles.Float, CultureInfo.InvariantCulture, out time)
@@ -976,8 +977,7 @@ namespace HexGuide.Desktop
                 && ModelValue.Text(ModelValue.Object(value, "champion"), "id").Length > 0 && TryGameTime(value, out time) && time <= 30
                 && ModelValue.Array(value, "owned").Count == 0 && ModelValue.Text(plan, "stage") == "live"
                 && ModelValue.Text(enemy, "status") == "detected" && ModelValue.Text(enemy, "source") == "live-client"
-                && ModelValue.Array(enemy, "champions").Count > 0 && ModelValue.Array(plan, "buildItems").Count > 0
-                && ModelValue.Array(plan, "nextAugments").Count > 0;
+                && ModelValue.Array(enemy, "champions").Count > 0 && ModelValue.Array(plan, "buildItems").Count > 0;
         }
         internal event EventHandler HideRequested, DetailsRequested, GameRequested;
         internal event Action<string> OfferConfirmed;
@@ -991,6 +991,8 @@ namespace HexGuide.Desktop
         private List<string> DisplaySections()
         {
             var result = new List<string>(appearance.Sections);
+            // Keep the saved order intact: loading temporarily presents equipment only.
+            if (IsLoadingStage) { result.Remove("owned"); result.Remove("offers"); }
             if (buildExpanded) { result.Remove("plan"); result.Insert(0, "plan"); }
             return result;
         }
@@ -1133,7 +1135,7 @@ namespace HexGuide.Desktop
             detailsButton = new Rectangle(x + buttonWidth + gap, buttonY, buttonWidth, S(31));
             gameButton = new Rectangle(x + (buttonWidth + gap) * 2, buttonY, buttonWidth, S(31));
             PaintButton(g, hideButton, "收起"); PaintButton(g, detailsButton, "打开详细"); PaintButton(g, gameButton, "返回游戏");
-            string footer = Notice.Length > 0 ? Notice : contentHeight > viewport.Height ? "滚轮或右侧滚动条可查看全部内容" : "只读游戏 · 不替你点击或操作";
+            string footer = !IsLoadingStage && Notice.Length > 0 ? Notice : contentHeight > viewport.Height ? "滚轮或右侧滚动条可查看全部内容" : "只读游戏 · 不替你点击或操作";
             Write(g, footer, smallFont, muted, new Rectangle(x, Height - S(28), width, S(18)));
         }
         private int SectionHeight(string section)
@@ -1152,10 +1154,10 @@ namespace HexGuide.Desktop
             }
             if (!buildExpanded) return S(126);
             var plan = ModelValue.Object(Model, "plan");
-            if (IsLoadingPreview) return S(197) + ((Math.Min(6, ModelValue.Array(plan, "buildItems").Count) + 1) / 2) * S(77)
-                + S(46) + Math.Min(6, ModelValue.Array(plan, "nextAugments").Count) * S(56) + S(22);
+            int statisticsHeight = BuildStatisticsHeight(plan, Math.Max(1, Width - 34));
+            if (IsLoadingStage) return S(297) + statisticsHeight + ((Math.Min(6, ModelValue.Array(plan, "buildItems").Count) + 1) / 2) * S(77) + S(22);
             return S(ModelValue.Array(Model, "owned").Count > 0 ? 163 : 151) + Math.Min(6, ModelValue.Array(plan, "buildItems").Count) * S(96)
-                + S(46) + Math.Min(6, ModelValue.Array(plan, "nextAugments").Count) * S(56) + S(22);
+                + statisticsHeight + S(46) + Math.Min(6, ModelValue.Array(plan, "nextAugments").Count) * S(56) + S(22);
         }
         private void DrawSection(Graphics g, string section, int x, int y, int width)
         {
@@ -1168,14 +1170,14 @@ namespace HexGuide.Desktop
         {
             var plan = ModelValue.Object(Model, "plan");
             string title = ModelValue.Text(plan, "title"), summary = ModelValue.Text(plan, "summary");
-            bool loading = IsLoadingPreview;
+            bool loading = IsLoadingStage;
             Write(g, loading ? "开局前预览" : buildExpanded ? "本局构筑" : (title.Length > 0 ? title : "本局玩法参考"), normalFont, accent, new Rectangle(x, y, Math.Max(1, width - S(75)), S(23)));
             Rectangle toggle = new Rectangle(x + width - S(72), y, S(72), S(24));
             if (viewport.Contains(toggle)) { buildToggle = toggle; PaintButton(g, toggle, buildExpanded ? "收起构筑" : "展开构筑"); }
             y += S(29);
             if (!buildExpanded)
             {
-                Write(g, summary.Length > 0 ? summary : "等待英雄与本局选择，推荐将自动更新。", smallFont, muted, new Rectangle(x, y, width, S(78)));
+                Write(g, loading ? "根据当前英雄与双方阵容准备开局装备，入场后自动更新。" : summary.Length > 0 ? summary : "等待英雄与本局选择，推荐将自动更新。", smallFont, muted, new Rectangle(x, y, width, S(78)));
                 return;
             }
             ArrayList owned = ModelValue.Array(Model, "owned");
@@ -1186,24 +1188,25 @@ namespace HexGuide.Desktop
                 Write(g, "最近确认", normalFont, ForeColor, new Rectangle(x + S(40), y + S(5), Math.Max(1, width - S(40)), S(23)));
                 y += S(39);
             }
-            else { Write(g, loading ? "对方阵容 · 加载中" : "等待确认本局海克斯", normalFont, ForeColor, new Rectangle(x, y, width, S(23))); y += S(27); }
+            else { Write(g, loading ? "我方阵容" : "等待确认本局海克斯", normalFont, ForeColor, new Rectangle(x, y, width, S(23))); y += S(27); }
             var enemy = ModelValue.Object(plan, "enemyContext");
             if (loading)
             {
-                int enemyIndex = 0, cellWidth = Math.Max(1, width / 5);
-                foreach (object entry in ModelValue.Array(enemy, "champions"))
-                {
-                    if (enemyIndex >= 5) break;
-                    var champion = entry as Dictionary<string, object>;
-                    int cellX = x + enemyIndex++ * cellWidth;
-                    DrawBuildIcon(g, ModelValue.Text(champion, "icon"), new Rectangle(cellX, y, S(34), S(34)));
-                    Write(g, ModelValue.Text(champion, "name"), smallFont, ForeColor, new Rectangle(cellX, y + S(38), Math.Max(1, cellWidth - S(3)), S(30)));
-                }
+                DrawLoadingRoster(g, ModelValue.Object(plan, "allyContext"), x, y, width);
+                y += S(73);
+                Write(g, "敌方阵容", normalFont, ForeColor, new Rectangle(x, y, width, S(23))); y += S(27);
+                DrawLoadingRoster(g, enemy, x, y, width);
                 y += S(73);
             }
             string enemySummary = ModelValue.Text(enemy, "summary");
             Write(g, loading ? "根据英雄与对方阵容准备，入场后自动更新。" : enemySummary.Length > 0 ? enemySummary : "等待读取敌方阵容与装备，暂按自身构筑提供选项。", smallFont, muted, new Rectangle(x, y, width, S(loading ? 30 : 57))); y += S(loading ? 35 : 62);
             Write(g, loading ? "开局出装预设" : "本局装备选择", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(33);
+            int statisticsHeight = BuildStatisticsHeight(plan, width);
+            if (statisticsHeight > 0)
+            {
+                Write(g, BuildStatisticsSummary(plan), smallFont, muted, new Rectangle(x, y, width, Math.Max(1, statisticsHeight - S(7))));
+                y += statisticsHeight;
+            }
             ArrayList equipment = ModelValue.Array(plan, "buildItems");
             int index = 0;
             foreach (object entry in equipment)
@@ -1225,7 +1228,8 @@ namespace HexGuide.Desktop
                 Write(g, ModelValue.Text(item, "reason"), smallFont, accent, new Rectangle(x, y + S(60), width, S(29)));
                 y += S(96);
             }
-            Write(g, loading ? "开局关注的海克斯" : "后续遇到可考虑", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(25);
+            if (loading) return;
+            Write(g, "后续遇到可考虑", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(25);
             Write(g, "机制方向，以游戏实际选项为准", smallFont, muted, new Rectangle(x, y, width, S(18))); y += S(21);
             index = 0;
             foreach (object entry in ModelValue.Array(plan, "nextAugments"))
@@ -1235,6 +1239,36 @@ namespace HexGuide.Desktop
                 DrawAugmentIcon(g, augment, new Rectangle(x, y + S(2), S(32), S(32)));
                 Write(g, ModelValue.Text(augment, "reason"), smallFont, muted, new Rectangle(x + S(43), y + S(2), Math.Max(1, width - S(43)), S(43)));
                 y += S(56);
+            }
+        }
+        private static string BuildStatisticsSummary(Dictionary<string, object> plan)
+        {
+            string summary = ModelValue.Text(ModelValue.Object(plan, "statistics"), "summary").Replace('\r', ' ').Replace('\n', ' ').Trim();
+            return summary.Length > 160 ? summary.Substring(0, 160) : summary;
+        }
+        private int BuildStatisticsHeight(Dictionary<string, object> plan, int width)
+        {
+            string summary = BuildStatisticsSummary(plan);
+            if (summary.Length == 0) return 0;
+            Size size = TextRenderer.MeasureText(summary, smallFont, new Size(Math.Max(1, width), int.MaxValue), TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+            return size.Height + S(7);
+        }
+        private void DrawLoadingRoster(Graphics g, Dictionary<string, object> context, int x, int y, int width)
+        {
+            ArrayList champions = ModelValue.Array(context, "champions");
+            if (ModelValue.Text(context, "status") != "detected" || champions.Count == 0)
+            {
+                Write(g, "等待读取本局阵容", smallFont, muted, new Rectangle(x, y, width, S(30)));
+                return;
+            }
+            int index = 0, cellWidth = Math.Max(1, width / 5);
+            foreach (object entry in champions)
+            {
+                if (index >= 5) break;
+                var champion = entry as Dictionary<string, object>;
+                int cellX = x + index++ * cellWidth;
+                DrawBuildIcon(g, ModelValue.Text(champion, "icon"), new Rectangle(cellX, y, S(34), S(34)));
+                Write(g, ModelValue.Text(champion, "name"), smallFont, ForeColor, new Rectangle(cellX, y + S(38), Math.Max(1, cellWidth - S(3)), S(30)));
             }
         }
         private int OwnedIconColumns(int width) { return Math.Max(1, (width + S(7)) / (S(39) + S(7))); }
@@ -1393,7 +1427,7 @@ namespace HexGuide.Desktop
             Write(g, hero + (level.Length > 0 && level != "0" ? "  ·  " + level + " 级" : ""), headingFont, accent, new Rectangle(x, y, width, S(27))); y += S(29);
             string connection = ModelValue.Text(ModelValue.Object(Model, "connection"), "message");
             Write(g, connection.Length > 0 ? connection : "只读本机数据 · 不操作游戏", smallFont, muted, new Rectangle(x, y, width, S(34))); y += S(39);
-            string ocrText = ModelValue.Boolean(ModelValue.Object(Model, "ocr"), "enabled") ? "后台识别已开启 · 结果需核对" : "后台识别未开启 · 可在托盘开启";
+            string ocrText = IsLoadingStage ? "开局出装推荐 · 入场后自动更新" : ModelValue.Boolean(ModelValue.Object(Model, "ocr"), "enabled") ? "后台识别已开启 · 结果需核对" : "后台识别未开启 · 可在托盘开启";
             Write(g, ocrText, smallFont, muted, new Rectangle(x, y, width, S(20)));
         }
         private void DrawOwned(Graphics g, int x, int y, int width)
@@ -1618,6 +1652,7 @@ namespace HexGuide.Desktop
                 int liveStateChecks = ValidateLiveStateFixtures(window, statusPreviewPath);
                 string loadingPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-loading.png");
                 int loadingPreviewChecks = ValidateLoadingPreviewFixtures(window, loadingPreviewPath);
+                int buildStatisticsChecks = ValidateBuildStatisticsFixtures(window);
                 string earlyLivePreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-early-live.png");
                 int initialPlanChecks = ValidateInitialPlanFixtures(window, earlyLivePreviewPath);
                 int visibilityChecks = SidebarVisibilityState.ValidateFixtures();
@@ -1632,7 +1667,7 @@ namespace HexGuide.Desktop
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks + selectionChecks }, { "selectionChecks", selectionChecks }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + buildStatisticsChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks + selectionChecks }, { "selectionChecks", selectionChecks }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "buildStatisticsChecks", buildStatisticsChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
             }
         }
         private static int ValidatePassiveActivationFixtures(SidebarWindow window)
@@ -1905,7 +1940,7 @@ namespace HexGuide.Desktop
             Require(!HasEarlyLivePlan(selected), "A selected augment was accepted as an empty opening plan.");
             var incomplete = new Dictionary<string, object>(plan); incomplete["nextAugments"] = new object[0];
             var noDirections = new Dictionary<string, object>(early); noDirections["plan"] = incomplete;
-            Require(!HasEarlyLivePlan(noDirections), "A plan without future augment directions was treated as ready.");
+            Require(HasEarlyLivePlan(noDirections), "Opening equipment recommendations incorrectly required future augment directions.");
             var untrusted = new Dictionary<string, object>(early); untrusted["championSource"] = "champ-select";
             Require(!HasEarlyLivePlan(untrusted), "A non-live champion source qualified for live fallback.");
             var unknownMode = new Dictionary<string, object>(early); unknownMode["mode"] = new Dictionary<string, object> { { "known", false }, { "isMayhem", false } };
@@ -1933,6 +1968,7 @@ namespace HexGuide.Desktop
             var plan = new Dictionary<string, object>(ModelValue.Object(original, "plan"));
             plan["stage"] = "loading-preview"; plan["label"] = "开局前预览";
             plan["enemyContext"] = new Dictionary<string, object> { { "status", "detected" }, { "source", "loading-roster" }, { "champions", roster } };
+            plan["allyContext"] = new Dictionary<string, object> { { "status", "detected" }, { "source", "loading-roster" }, { "champions", roster } };
             // Static catalogue names and concise effects; this is an isolated layout fixture,
             // not a claim that these six items or augments were observed in a real match.
             string[] equipmentNames = { "莫雷洛秘典", "兰德里的折磨", "瑞莱的冰晶节杖", "灭世者的死亡之帽", "中娅沙漏", "虚空之杖" };
@@ -1959,6 +1995,22 @@ namespace HexGuide.Desktop
             using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png); }
             window.Notice = "";
             Require(window.paintedSections[0] == "plan" && window.buildToggle != Rectangle.Empty, "Loading plan did not move to the first visible section.");
+            Require(!window.paintedSections.Contains("owned") && !window.paintedSections.Contains("offers") && window.augmentTargets.Count == 0, "Loading displayed augment sections or kept augment hit targets.");
+            int equipmentOnlyHeight = window.contentHeight;
+            using (var before = RenderFixture(window))
+            {
+                plan["nextAugments"] = new object[0];
+                window.Model = loading;
+                using (var after = RenderFixture(window)) Require(EqualFixturePixels(before, after), "Loading presentation changed when invisible future augment data was removed.");
+                Require(window.contentHeight == equipmentOnlyHeight, "Invisible loading augments reserved scrolling space.");
+                var unavailableAlly = new Dictionary<string, object> { { "status", "unavailable" }, { "champions", roster } };
+                plan["allyContext"] = unavailableAlly;
+                window.Model = loading;
+                using (var unavailable = RenderFixture(window)) Require(!EqualFixturePixels(before, unavailable), "An unavailable ally context still displayed the supplied roster.");
+                plan["allyContext"] = new Dictionary<string, object> { { "status", "detected" }, { "source", "loading-roster" }, { "champions", roster } };
+                window.Model = loading;
+                using (var restored = RenderFixture(window)) Require(EqualFixturePixels(before, restored), "Restoring a verified ally roster did not restore its loading presentation.");
+            }
             Rectangle toggle = window.buildToggle;
             window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, toggle.Left + 2, toggle.Top + 2, 0));
             Require(!window.buildExpanded, "Loading preview could not be collapsed by the user.");
@@ -1972,13 +2024,51 @@ namespace HexGuide.Desktop
             live["plan"] = new Dictionary<string, object> { { "stage", "live" }, { "summary", "入场后的本局推荐" } };
             window.Model = live;
             Require(!window.IsLoadingPreview && window.buildExpanded, "Entering live play did not preserve the expanded recommendation view.");
+            Require(window.DisplaySections().Contains("owned") && window.DisplaySections().Contains("offers"), "Live entry did not restore the saved augment section order.");
             Require(!window.Visible && window.ShowWithoutActivation, "Loading fixtures displayed or activated a real window.");
             var ended = new Dictionary<string, object>(live); ended["phase"] = "EndOfGame";
             window.Model = ended;
             Require(!window.buildExpanded, "The ended game kept its previous preview expanded.");
             window.Model = original; window.buildExpanded = false; window.scrollOffset = 0;
             window.initialPlanHandled = false; window.initialPlanGame = "";
-            return 8;
+            return 14;
+        }
+        private static int ValidateBuildStatisticsFixtures(SidebarWindow window)
+        {
+            var original = window.Model;
+            SidebarAppearance originalAppearance = window.appearance;
+            int originalWidth = window.Width, checks = 0;
+            Action<bool, string> check = delegate(bool valid, string reason) { Require(valid, reason); checks++; };
+            window.ApplyAppearance(new SidebarAppearance { Scale = 130, Width = 280 });
+            window.Width = 280;
+            foreach (string stage in new string[] { "loading", "live" })
+            {
+                var plan = new Dictionary<string, object>(ModelValue.Object(original, "plan"));
+                plan["stage"] = stage == "loading" ? "loading-preview" : "live";
+                plan.Remove("statistics");
+                var fixture = new Dictionary<string, object>(original);
+                fixture["gameId"] = "statistics-layout-" + stage;
+                fixture["phase"] = stage == "loading" ? "GameStart" : "InProgress";
+                fixture["stage"] = stage; fixture["plan"] = plan;
+                window.Model = fixture; window.ExpandBuild();
+                using (var before = RenderFixture(window))
+                {
+                    int beforeHeight = window.SectionHeight("plan");
+                    check(window.BuildStatisticsHeight(plan, window.Width - 34) == 0, "A missing statistics source reserved blank sidebar space.");
+                    plan["statistics"] = new Dictionary<string, object> { { "summary", "海克斯大乱斗 80%＋普通 ARAM 20%（仅按实际可用来源；权重不表示混合胜率）" } };
+                    window.Model = fixture;
+                    int sourceHeight = window.BuildStatisticsHeight(plan, window.Width - 34);
+                    check(sourceHeight > window.S(23) && window.SectionHeight("plan") == beforeHeight + sourceHeight, "Wrapped source copy did not reserve its full scaled height before equipment.");
+                    using (var after = RenderFixture(window)) check(!EqualFixturePixels(before, after), "The actual build source was not painted in the sidebar.");
+                    plan.Remove("statistics"); window.Model = fixture;
+                    using (var restored = RenderFixture(window)) check(EqualFixturePixels(before, restored), "Removing source copy did not restore the original equipment layout.");
+                }
+            }
+            check(!window.Visible && window.ShowWithoutActivation, "Source layout fixtures displayed or activated a real window.");
+            window.ApplyAppearance(originalAppearance); window.Width = originalWidth;
+            window.Model = original; window.buildExpanded = false; window.scrollOffset = 0;
+            window.initialPlanHandled = false; window.initialPlanGame = "";
+            return checks;
         }
         private static int ValidateLiveStateFixtures(SidebarWindow window, string statusPreviewPath)
         {

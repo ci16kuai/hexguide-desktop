@@ -164,3 +164,18 @@ test('a temporary failed write retains an earlier owned edit when a route edit i
   assert.equal(writes.length,2);assert.deepEqual(writes[1].owned,['firebrand']);assert.equal(writes[1].route,'tank');
   assert.deepEqual(state.owned,['firebrand']);assert.equal(state.route,'tank');
 });
+
+
+test('authoritative accessor exposes fresh metadata without requiring a selection change or allowing mutation',async t=>{
+  let state={owned:['firebrand'],route:'auto'},release;
+  const remote=session({owned:['firebrand'],route:'auto',revision:7,gameEpoch:3});
+  const sync=createSessionSync({token:'test',getState:()=>state,applyState(){throw Error('Unchanged selection must not be reapplied');},request:async()=>{await new Promise(resolve=>{release=resolve;});return response(remote);}});
+  t.after(()=>sync.close());
+  assert.equal(sync.getAuthoritativeSession(),null);
+  release();await settle();
+  assert.deepEqual(sync.getAuthoritativeSession(),{gameId:remote.gameId,gameEpoch:3,revision:7,owned:['firebrand'],route:'auto'});
+  const copy=sync.getAuthoritativeSession();copy.owned.push('recursion');copy.revision=1;
+  assert.equal(sync.getAuthoritativeSession().revision,7);
+  assert.deepEqual(sync.getAuthoritativeSession().owned,['firebrand']);
+  sync.close();assert.equal(sync.getAuthoritativeSession(),null);
+});

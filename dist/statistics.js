@@ -228,7 +228,7 @@ export function getAugmentBuildAdvice({champion, augment, augments = [], itemsCa
     if (suggested.has(String(item.id))) return false;
     suggested.add(String(item.id));return true;
   })}));
-  return {...plan, choices, label:'机制出装建议 · 无该组合出装胜率', evidence:'mechanism',
+  return {...plan, choices, nextAugments:asArray(plan.nextAugments).map(({rankingEvidence, ...entry}) => entry), label:'机制出装建议 · 无该组合出装胜率', evidence:'mechanism',
     summary:`结合${champion.title || champion.name || champion.id}与「${confirmed.name || confirmed.id}」的效果解释玩法和装备方向。以下没有英雄 × 海克斯 × 装备的实测胜率。`,
     context};
 }

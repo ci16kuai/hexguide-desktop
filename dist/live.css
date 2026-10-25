@@ -27,7 +27,7 @@
 .loading-preview .loading-roster{grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
 .loading-preview .loading-roster .live-enemy{padding:10px 8px;background:transparent;border:0;border-bottom:1px solid #34534f;border-radius:0}
 .loading-preview .loading-roster .live-enemy-name{margin:0;gap:8px}
-.loading-preview .loading-roster .live-enemy-avatar{width:39px;height:39px}
+.loading-preview .loading-roster .live-enemy-avatar,.loading-preview .loading-roster .live-ally-avatar{width:39px;height:39px}
 .loading-preview .loading-roster strong{line-height:1.6;overflow-wrap:anywhere}
 .live-plan .live-build-toggle{white-space:nowrap}
 .live-build-details{display:grid;gap:25px;padding:6px 0 12px}
@@ -41,7 +41,7 @@
 .live-enemy-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,175px),1fr));gap:10px}
 .live-enemy{padding:12px;background:#11212e;border:1px solid #293e4e;border-radius:4px;min-width:0}
 .live-enemy-name{display:flex;gap:9px;align-items:center;margin-bottom:10px}
-.live-enemy-avatar{width:35px;height:35px;border-radius:4px;object-fit:cover}
+.live-enemy-avatar,.live-ally-avatar{width:35px;height:35px;border-radius:4px;object-fit:cover}
 .live-enemy-name strong{display:block;font-size:12px;font-weight:500}
 .live-enemy-name small{display:block;font-size:10px;color:var(--muted);margin-top:3px}
 .live-enemy-items{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
@@ -75,4 +75,4 @@
 .home-manual-fallback .triple-grid{margin:14px 0}
 .home-manual-fallback .triple-slot{min-height:200px}
 @media(max-width:760px){.live-offer-card{min-height:220px}.live-enemy-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.live-item-card{padding:13px}.live-build-details{gap:22px}.live-plan>.section-heading>div{min-width:100%}.live-plan>.section-heading .subtle-tag{margin-right:auto}.live-build-toggle{padding:8px 0}}
-@media(max-width:760px){.loading-preview .loading-roster{grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}.loading-preview .loading-roster .live-enemy{padding:9px 2px}.loading-preview .loading-roster .live-enemy-name{display:block}.loading-preview .loading-roster .live-enemy-avatar{width:34px;height:34px;margin-bottom:5px}.loading-preview .loading-roster strong{font-size:10px}.loading-preview .live-item-grid{grid-template-columns:1fr}}
+@media(max-width:760px){.loading-preview .loading-roster{grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}.loading-preview .loading-roster .live-enemy{padding:9px 2px}.loading-preview .loading-roster .live-enemy-name{display:block}.loading-preview .loading-roster .live-enemy-avatar,.loading-preview .loading-roster .live-ally-avatar{width:34px;height:34px;margin-bottom:5px}.loading-preview .loading-roster strong{font-size:10px}.loading-preview .live-item-grid{grid-template-columns:1fr}}

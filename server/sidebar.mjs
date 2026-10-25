@@ -2,6 +2,8 @@ import {readFile, mkdir, rename, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {enrichData, recommend} from '../dist/engine.js';
 import {buildLivePlan} from '../dist/adaptive.js';
+import {selectBuildEvidence} from '../dist/build-evidence.js';
+import {rankAugmentCandidates} from '../dist/recommendation-policy.js';
 import {SelectionObserver, SelectionValidationError, SelectionConflictError, createOfferToken, sanitizeSelectionCapture} from './selection.mjs';
 import {OCR_SCAN_CODES, sanitizeScanCode} from './scan-diagnostics.mjs';
 
@@ -36,12 +38,13 @@ function publicOcrDetails(raw) {
 
 /** Confirmed choices and public game observations, shared by both app windows. */
 export class BackgroundSidebar {
-  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, now = () => Date.now(), scanInterval = 2500, offerLifetime = 60000} = {}) {
+  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, recommendationRepository, recommendationPolicy = {}, now = () => Date.now(), scanInterval = 2500, offerLifetime = 60000} = {}) {
     if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
-    Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, now, scanInterval, offerLifetime});
+    Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, recommendationRepository, recommendationPolicy, now, scanInterval, offerLifetime});
     this.champions = new Map((data.champions || []).map(champion => [champion.id, champion]));
     this.augments = new Map(enrichData({augments:(data.augments || []).filter(eligible)}).augments.map(augment => [augment.id, augment]));
     this.session = {owned:[], route:'auto', gameId:null, revision:0};
+    this.snapshotBlocked = false;
     this.ocr = {enabled:true, status:'waiting', message:'自动识别已开启；游戏在前台并出现三选一卡片时检查。', observedAt:null};
     this.offers = [];
     this.offerToken = null;
@@ -64,6 +67,7 @@ export class BackgroundSidebar {
       const saved = JSON.parse(await readFile(file, 'utf8'));
       const selected = this.validateSession({owned:saved.owned, route:saved.route});
       this.session = {...selected, gameId:gameId(saved.gameId), revision:Number.isSafeInteger(saved.revision) && saved.revision >= 0 ? saved.revision : 0};
+      this.snapshotBlocked = saved.selectionSources?.manualBarrier === true;
     } catch { /* Missing or corrupt assistant state is safe to start afresh. */ }
     try {
       const saved = JSON.parse(await readFile(path.join(this.dataDirectory, 'recognition.json'), 'utf8'));
@@ -87,7 +91,7 @@ export class BackgroundSidebar {
   persist() {
     if (!this.dataDirectory) return Promise.resolve();
     // Serialize writes so a slower previous write cannot restore old selections.
-    const payload = JSON.stringify(this.session, null, 2) + '\n';
+    const payload = JSON.stringify({...this.session, selectionSources:{manualBarrier:this.snapshotBlocked}}, null, 2) + '\n';
     this.persistTail = this.persistTail.catch(() => {}).then(async () => {
       await mkdir(this.dataDirectory, {recursive:true});
       const file = path.join(this.dataDirectory, 'session.json');
@@ -115,6 +119,7 @@ export class BackgroundSidebar {
   }
 
   clearGame() {
+    this.snapshotBlocked = false;
     this.session = {owned:[], route:'auto', gameId:null, revision:this.session.revision + 1};
     this.offers = [];
     this.offerToken = null;
@@ -148,9 +153,29 @@ export class BackgroundSidebar {
       this.session.revision++;
       changed = true;
     }
+    // Only explicit, completely mapped selected IDs from the collector qualify.
+    // OCR proposals never enter this path. Empty/unreadable snapshots do not
+    // erase choices, and a manual correction blocks future snapshot additions.
+    const observedTime = Date.parse(live.observedAt || '');
+    const selectedIds = live.augments?.ids;
+    if (!this.snapshotBlocked && currentId && currentId === this.session.gameId && live.phase === 'InProgress'
+      && live.stage === 'live' && live.connection?.status === 'connected' && live.mode?.known === true && live.mode.isMayhem === true
+      && this.champions.has(live.championId) && live.augments?.status === 'detected'
+      && Number.isFinite(observedTime) && this.now() - observedTime <= 10000 && observedTime - this.now() <= 1000
+      && Array.isArray(selectedIds) && selectedIds.length > 0 && selectedIds.length <= 12
+      && new Set(selectedIds).size === selectedIds.length && selectedIds.every(id => typeof id === 'string' && this.augments.has(id))
+      && this.session.owned.every((id, index) => selectedIds[index] === id)) {
+      for (const id of selectedIds) if (!this.session.owned.includes(id) && this.session.owned.length < 12) {
+        this.recordChoice(id, 'live-client'); changed = true;
+      }
+    }
     // A transient API disconnection must not look like a new game or erase clock history.
     if (inGame || END_PHASES.has(live.phase)) this.previous = {inGame, stage:live.stage, time:finite(live.gameTime) && (live.gameTime > 0 || !finite(last?.time) || boundary) ? live.gameTime : inGame && !boundary ? last?.time ?? null : null};
     if (changed) void this.persist();
+    if (this.recommendationRepository && inGame && currentId && live.connection?.status === 'connected'
+      && live.mode?.known === true && live.mode.isMayhem === true && this.champions.has(live.championId)) {
+      void this.recommendationRepository.ensure(live.championId).catch(() => {});
+    }
     if (live.phase !== 'InProgress' || live.stage === 'loading' || live.mode?.known && !live.mode.isMayhem) this.selectionObserver.invalidate();
     if (this.offers.length && this.now() - this.offerTime >= this.offerLifetime) {
       this.offers = [];
@@ -208,6 +233,8 @@ export class BackgroundSidebar {
     // the opening preset. Return authoritative state so clients can reconcile.
     if (live.stage === 'loading') return this.getSession();
     if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) || selected.route !== this.session.route) {
+      if (this.session.owned.some(id => !selected.owned.includes(id))
+        || selected.owned.length === this.session.owned.length && JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned)) this.snapshotBlocked = true;
       if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) && this.offers.length === 3) this.consumedOfferKey = JSON.stringify(this.offers.map(offer => offer.id));
       this.generation++;
       this.selectionObserver.invalidate();
@@ -250,6 +277,14 @@ export class BackgroundSidebar {
 
   async commitChoice(id, provider) {
     const epoch = this.gameEpoch;
+    this.recordChoice(id, provider);
+    await this.persist();
+    const model = this.getModel();
+    if (epoch !== this.gameEpoch || model.phase !== 'InProgress' || !model.owned.some(augment => augment.id === id)) throw new SessionConflictError('The game changed while saving the choice.');
+    return model;
+  }
+
+  recordChoice(id, provider) {
     this.generation++;
     this.selectionObserver.invalidate();
     this.consumedOfferKey = JSON.stringify(this.offers.map(offer => offer.id));
@@ -258,13 +293,10 @@ export class BackgroundSidebar {
     this.offerToken = null;
     this.offerTime = 0;
     this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
-    this.ocr.message = provider === 'screen' ? '实验性屏幕确认已记录；可手动纠正，等待下一轮三选一卡片。' : '已确认选择；等待下一轮三选一卡片。';
+    this.ocr.message = provider === 'screen' ? '实验性屏幕确认已记录；可手动纠正，等待下一轮三选一卡片。' : provider === 'live-client'
+      ? '游戏接口的明确已选结果已记录；推荐已更新，可手动纠正。' : '已确认选择；等待下一轮三选一卡片。';
     delete this.ocr.code;
     delete this.ocr.diagnostics;
-    await this.persist();
-    const model = this.getModel();
-    if (epoch !== this.gameEpoch || model.phase !== 'InProgress' || !model.owned.some(augment => augment.id === id)) throw new SessionConflictError('The game changed while saving the choice.');
-    return model;
   }
 
   setOcr(value) {
@@ -335,18 +367,31 @@ export class BackgroundSidebar {
     const live = this.observe();
     const champion = this.champions.get(live.championId) || null;
     const owned = this.session.owned.map(id => this.augments.get(id)).filter(Boolean);
-    const ranked = this.offers.map(offer => ({offer, result:recommend(this.augments.get(offer.id), champion, owned, this.session.route)})).sort((a, b) => b.result.score - a.result.score);
+    const recommendationData = champion ? this.recommendationRepository?.get(champion.id) : null;
+    const evidence = selectBuildEvidence(recommendationData, {champion, owned, augments:[...this.augments.values()], patch:recommendationData?.patch || '16.21'});
+    const ranked = rankAugmentCandidates(this.offers.map(offer => {
+      const augment = this.augments.get(offer.id), result = recommend(augment, champion, owned, this.session.route);
+      return {offer, augment, result, mechanismScore:result.score, conflicts:result.conflicts};
+    }), {champion, owned, statistics:evidence.augmentStatistics, policy:{...this.recommendationPolicy, statisticsPatch:recommendationData?.patch || '16.21'}});
     const rank = new Map(ranked.map((entry, index) => [entry.offer.id, index + 1]));
     const offers = this.offers.map(offer => {
-      const result = ranked.find(entry => entry.offer.id === offer.id).result;
+      const ranking = ranked.find(entry => entry.offer.id === offer.id);
+      const result = ranking?.result || recommend(this.augments.get(offer.id), champion, owned, this.session.route);
       const definition = this.augments.get(offer.id);
-      return {id:offer.id, name:offer.name, icon:text(definition.icon, 400), rarity:text(definition.rarity, 40), rank:rank.get(offer.id), reason:result.reasons[0] || '结合英雄机制与已确认海克斯比较；以游戏内实际效果为准。', cautions:result.cautions.slice(0, 2)};
+      const statistic = ranking?.rankingEvidence;
+      const reason = result.reasons[0] || '结合英雄机制与已确认海克斯比较；以游戏内实际效果为准。';
+      return {id:offer.id, name:offer.name, icon:text(definition.icon, 400), rarity:text(definition.rarity, 40), rank:rank.get(offer.id) || null,
+        reason:statistic?.trusted ? `该英雄持有胜率 ${(statistic.winRate*100).toFixed(1)}%；${reason}` : reason,
+        rankingEvidence:statistic || null, cautions:result.cautions.slice(0, 2)};
     });
-    const plan = buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], champions:[...this.champions.values()], itemsCatalog:this.itemsCatalog, now:this.now()});
+    const plan = {...buildLivePlan({champion, owned, route:this.session.route, live, augments:[...this.augments.values()], champions:[...this.champions.values()], itemsCatalog:this.itemsCatalog,
+      recommendationData, policy:this.recommendationPolicy, now:this.now()}),
+      gameId:this.session.gameId, gameEpoch:this.gameEpoch, sessionRevision:this.session.revision, championId:champion?.id || null,
+      ownedIds:[...this.session.owned], route:this.session.route, generatedAt:new Date(this.now()).toISOString()};
     const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live));
     const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), this.selectionEligible(live));
     return {
-      version:'1.10.3', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      version:'1.11.0', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
       gameEpoch:this.gameEpoch, selection, selectionResult, selectionDiagnostics:this.selectionDiagnostics(selection),
       mode:live.mode || {queueId:null, isMayhem:false, known:false},
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
@@ -382,5 +427,5 @@ export class BackgroundSidebar {
     void tick();
   }
 
-  async stop() { this.stopped = true; clearTimeout(this.timer); await Promise.all([this.persistTail.catch(() => {}), this.preferencesTail.catch(() => {})]); }
+  async stop() { this.stopped = true; clearTimeout(this.timer); await Promise.all([this.persistTail.catch(() => {}), this.preferencesTail.catch(() => {}), this.recommendationRepository?.close()]); }
 }

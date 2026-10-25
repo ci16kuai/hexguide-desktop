@@ -77,7 +77,8 @@ test('isolated sidebar loading-to-live flow clears old choices, previews the ros
   assert.equal(loading.plan.stage, 'loading-preview');
   assert.equal(loading.plan.label, '开局前预览');
   assert.equal(loading.plan.enemyContext.source, 'loading-roster');
-  assert.ok(loading.plan.buildItems.length > 0 && loading.plan.nextAugments.length > 0);
+  assert.ok(loading.plan.buildItems.length > 0);
+  assert.deepEqual(loading.plan.nextAugments, []);
   assert.ok(loading.plan.enemyContext.champions.every(enemy => enemy.level === null && enemy.items.length === 0));
   assert.doesNotMatch(loading.plan.context.join(' '), /已确认海克斯：|当前 12 级|面板：/);
   assert.ok(loading.sessionRevision > old.sessionRevision);

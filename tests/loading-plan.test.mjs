@@ -31,9 +31,8 @@ test('a fresh real loading roster provides a labelled hero-and-lineup preset bef
   assert.match(result.enemyContext.summary, /仅依据阵容机制预设.*尚未读取装备、等级或实战面板/);
   assert.equal(result.buildItems[0].id, '3165', 'known healing mechanisms are useful before purchases');
   assert.ok(result.buildItems.some(item => item.id === '6653'), 'frontline mechanisms provide an opening sustained-damage option');
-  assert.ok(result.nextAugments.length > 0);
-  assert.ok(result.nextAugments.every(augment => augment.mechanismLabel === '开局海克斯方向'));
-  assert.ok(result.nextAugments.every(augment => augment.cautions.some(note => /不预测下轮出现/.test(note))));
+  assert.deepEqual(result.nextAugments, [], 'loading is equipment-only');
+  assert.doesNotMatch(result.context.join(' '), /海克斯/);
   assert.ok(result.enemyContext.champions.every(enemy => enemy.icon && enemy.level === null && enemy.items.length === 0));
   const otherPhase = plan(loading('Ahri', {phase: 'InProgress'}));
   assert.equal(otherPhase.stage, 'loading-preview', 'LCU may enter InProgress before Live Client Data is ready');
@@ -52,7 +51,7 @@ test('loading presets discard previous-game augments route inventory levels gold
   assert.ok(!result.enemyContext.signals.some(signal => ['armor', 'magic-resist'].includes(signal.id)));
   assert.ok(result.enemyContext.champions.every(enemy => enemy.items.length === 0 && enemy.level === null));
   assert.doesNotMatch(JSON.stringify(result), /987654|999999|18 级|30:00|已确认海克斯：|振奋盔甲|日炎圣盾|你选择的路线/);
-  assert.match(result.context.join(' '), /不沿用上一局海克斯或玩法方向/);
+  assert.match(result.context.join(' '), /仅按本局英雄与双方阵容推荐装备/);
 });
 
 test('entering the game resumes confirmed augments current items and visible enemy equipment', () => {
