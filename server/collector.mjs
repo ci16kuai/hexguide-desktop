@@ -75,6 +75,25 @@ function unavailableTeams(now) {
   return {status:'unavailable', ownTeam:null, allies:[], enemies:[], observedAt:now.toISOString()};
 }
 
+function unavailableLife() {
+  return {status:'unavailable', isDead:null};
+}
+
+function ownLife(data, own) {
+  // Riot's public Live Client player record exposes an explicit isDead flag.
+  // Keep missing/invalid values unknown; zero health and another player's
+  // death state are never a substitute for this local player's observation.
+  if (typeof own?.isDead !== 'boolean') return unavailableLife();
+  const activeId = riotId(data?.activePlayer);
+  const ownId = riotId(own);
+  const players = Array.isArray(data?.allPlayers) ? data.allPlayers : [];
+  // The existing legacy-name fallback stays unchanged for other fields, but
+  // must not create a respawn trigger from conflicting or ambiguous Riot IDs.
+  if (activeId && ownId && activeId !== ownId) return unavailableLife();
+  if (activeId && players.filter(player => riotId(player) === activeId).length > 1) return unavailableLife();
+  return {status:'detected', isDead:own.isDead};
+}
+
 function teamsFromPlayers(players, own, index, now) {
   const unavailable = unavailableTeams(now);
   // A missing team must never make another player an assumed opponent.
@@ -142,6 +161,7 @@ export function emptySnapshot(now = new Date()) {
     phase: 'None', stage:'waiting', gameId: null, championId: null, championSource: null,
     level: null, gameTime: null, currentGold:null, stats: {}, items: [],
     augments: {status: 'unavailable', ids: []},
+    life:unavailableLife(),
     teams:unavailableTeams(now),
     observedAt: now.toISOString(), mode: {queueId: null, isMayhem: false, known: false},
   };
@@ -188,6 +208,7 @@ export function snapshotFromLive(data, {index, augmentIndex = new Map(), lcu = n
   if (typeof data.activePlayer.championStats?.resourceType === 'string') result.stats.resourceType = data.activePlayer.championStats.resourceType.slice(0, 40);
   result.items = publicItems(own);
   result.augments = knownAugments(data.activePlayer, own, augmentIndex);
+  result.life = ownLife(data, own);
   result.teams = teamsFromPlayers(data.allPlayers, own, index, now);
   return result;
 }

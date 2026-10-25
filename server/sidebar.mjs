@@ -8,6 +8,7 @@ import {SelectionObserver, SelectionValidationError, SelectionConflictError, cre
 import {OCR_SCAN_CODES, sanitizeScanCode} from './scan-diagnostics.mjs';
 import {OcrScanSchedule} from './ocr-schedule.mjs';
 import {OcrScheduleDiagnostics} from './ocr-schedule-diagnostics.mjs';
+import {ScreenLifeSource, ScreenLifeValidationError, ScreenLifeConflictError} from './screen-life.mjs';
 
 const ROUTES = new Set(['auto', 'attack', 'spell', 'tank', 'support', 'crit']);
 const END_PHASES = new Set(['ChampSelect', 'Lobby', 'Matchmaking', 'ReadyCheck', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
@@ -44,6 +45,7 @@ export class BackgroundSidebar {
     if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
     Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, recommendationRepository, recommendationPolicy, now, offerLifetime});
     this.scanSchedule = new OcrScanSchedule({now, policy:scanPolicy});
+    this.lifeSource = new ScreenLifeSource({now});
     this.scanDiagnostics = new OcrScheduleDiagnostics({dataDirectory, now});
     this.timers = {setTimeout:typeof timers?.setTimeout === 'function' ? timers.setTimeout : setTimeout,
       clearTimeout:typeof timers?.clearTimeout === 'function' ? timers.clearTimeout : clearTimeout};
@@ -54,7 +56,7 @@ export class BackgroundSidebar {
     this.augments = new Map(enrichData({augments:(data.augments || []).filter(eligible)}).augments.map(augment => [augment.id, augment]));
     this.session = {owned:[], route:'auto', gameId:null, revision:0};
     this.snapshotBlocked = false;
-    this.ocr = {enabled:true, status:'waiting', message:'自动识别已开启；游戏在前台并出现三选一卡片时检查。', observedAt:null};
+    this.ocr = {enabled:true, status:'waiting', message:'自动识别已开启；等待开局或复活后的识别窗口。', observedAt:null};
     this.offers = [];
     this.offerToken = null;
     this.consumedOfferKey = null;
@@ -127,6 +129,7 @@ export class BackgroundSidebar {
   }
 
   clearGame() {
+    this.lifeSource.reset();
     this.snapshotBlocked = false;
     this.session = {owned:[], route:'auto', gameId:null, revision:this.session.revision + 1};
     this.offers = [];
@@ -161,9 +164,9 @@ export class BackgroundSidebar {
       this.session.revision++;
       changed = true;
     }
-    // Consume a new level before any selected-ID confirmation from this same
+    // Observe a new game/respawn before selected-ID confirmation from this
     // snapshot. A confirmed choice must end, rather than reopen, that window.
-    this.scanSchedule.observe({live, gameEpoch:this.gameEpoch});
+    this.scanSchedule.observe({live:this.schedulingSnapshot(live), gameEpoch:this.gameEpoch});
     // Only explicit, completely mapped selected IDs from the collector qualify.
     // OCR proposals never enter this path. Empty/unreadable snapshots do not
     // erase choices, and a manual correction blocks future snapshot additions.
@@ -201,6 +204,29 @@ export class BackgroundSidebar {
   getSession() { this.observe(); return {...structuredClone(this.session), gameEpoch:this.gameEpoch}; }
 
   selectionContext() { return {gameId:this.session.gameId, gameEpoch:this.gameEpoch, revision:this.session.revision}; }
+  schedulingSnapshot(live) {
+    const life = this.lifeSource.resolve(live, this.selectionContext());
+    // A screen proof can arrive between collector ticks. Its own timestamp
+    // advances only the scheduler, never the raw game snapshot or team data.
+    const observedAt = life.source === 'screen' && life.observedAt > Date.parse(live.observedAt || '')
+      ? new Date(life.observedAt).toISOString() : live.observedAt;
+    return {...live, life, observedAt};
+  }
+
+  observeScreenLife(value) {
+    const live = this.observe();
+    let life;
+    try { life = this.lifeSource.accept(value, this.selectionContext(), live); }
+    catch (error) {
+      if (error instanceof ScreenLifeValidationError) throw new SessionValidationError(error.message);
+      if (error instanceof ScreenLifeConflictError) throw new SessionConflictError(error.message);
+      throw error;
+    }
+    // Explicit loss of screen scope must break the old dead -> alive chain.
+    // An authoritative API observation remains valid despite a screen reset.
+    if (value.state === 'unknown' && life.source === 'unavailable') this.scanSchedule.forgetLife();
+    return this.getModel();
+  }
   selectionEligible(live) { return this.ocr.enabled && live.phase === 'InProgress' && live.stage !== 'loading' && !(live.mode?.known && !live.mode.isMayhem); }
   getSelectionObservation() { const live = this.observe(); return this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live)); }
 
@@ -318,15 +344,17 @@ export class BackgroundSidebar {
     delete this.ocr.code;
     delete this.ocr.diagnostics;
     if (!value.enabled) { this.generation++; this.selectionObserver.invalidate(); this.ocr.status = 'disabled'; this.ocr.message = '自动识别已暂停；已确认海克斯仍保留。'; }
-    else if (!this.offers.length) { this.ocr.status = 'waiting'; this.ocr.message = '后台识别已开启；游戏在前台并出现三选一卡片时检查。'; }
+    else if (!this.offers.length) { this.ocr.status = 'waiting'; this.ocr.message = '后台识别已开启；等待开局或复活后的识别窗口。'; }
     void this.persistRecognition();
     return this.getModel();
   }
 
-  async scan() {
+  async scan({automatic = false} = {}) {
     // Both manual requests and the background timer await the same capture.
     if (this.pending) return this.pending;
     const live = this.observe();
+    const startingWindow = this.scanScheduleState(live);
+    if (automatic && !startingWindow.due) return {status:'waiting', message:'等待开局或复活后的识别窗口。', proposals:[]};
     if (live.phase !== 'InProgress' || live.stage === 'loading' || live.mode?.known && !live.mode.isMayhem) {
       this.recordSelectionAttempt(null, false, live, false);
       return {status:'waiting', message:'等待进入海克斯大乱斗对局后识别。', proposals:[]};
@@ -345,6 +373,15 @@ export class BackgroundSidebar {
         completion = {status:'waiting', code:'scan-context-changed'};
         this.recordSelectionAttempt(raw, false, current, false, 'scan-context-changed');
         this.selectionObserver.invalidate(); return {status:'waiting', message:'本局已变化，请等待新一轮三选一卡片。', proposals:[]};
+      }
+      const currentWindow = this.scanScheduleState(current);
+      if (automatic && (currentWindow.windowId !== startingWindow.windowId || currentWindow.windowRemainingMs <= 0
+        || !['window', 'backoff'].includes(currentWindow.mode))) {
+        // Do not arm a late pre-death/new-window frame. Expiry of the same
+        // window leaves existing short-lived click/FX verification untouched.
+        completion = {status:'waiting', code:'scan-context-changed'};
+        if (currentWindow.windowId !== startingWindow.windowId) this.selectionObserver.invalidate();
+        return {status:'waiting', code:'scan-context-changed', message:'本次识别窗口已结束，等待下次开局或复活。', proposals:[]};
       }
       const status = ['recognized', 'waiting', 'unavailable'].includes(raw?.status) ? raw.status : 'unavailable';
       const proposals = (Array.isArray(raw?.proposals) ? raw.proposals : []).filter(proposal => this.augments.has(proposal?.id)).map(proposal => ({id:proposal.id, name:this.augments.get(proposal.id).name, confidence:'exact'}));
@@ -417,8 +454,9 @@ export class BackgroundSidebar {
     const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live));
     const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), this.selectionEligible(live));
     return {
-      version:'1.11.2', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      version:'1.11.3', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
       gameEpoch:this.gameEpoch, selection, selectionResult, selectionDiagnostics:this.selectionDiagnostics(selection),
+      life:this.lifeSource.resolve(live, this.selectionContext()),
       mode:live.mode || {queueId:null, isMayhem:false, known:false},
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
       level:live.level ?? null, gameTime:live.gameTime ?? null, currentGold:live.currentGold ?? null, items:live.items || [],
@@ -435,11 +473,11 @@ export class BackgroundSidebar {
     const schedule = this.scanScheduleState(live);
     // Diagnostics are observational; filesystem latency must not gate capture.
     void this.publishScanDiagnostics(live);
-    if (schedule.due) await this.scan();
+    if (schedule.due) await this.scan({automatic:true});
   }
 
   scanScheduleState(live) {
-    const current = live || this.collector.getSnapshot();
+    const current = this.schedulingSnapshot(live || this.collector.getSnapshot());
     const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(current));
     return this.scanSchedule.decision({live:current, gameEpoch:this.gameEpoch, enabled:this.ocr.enabled,
       hasOffers:this.offers.length === 3, armed:selection.status === 'armed', inFlight:Boolean(this.pending)});

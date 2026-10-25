@@ -28,16 +28,16 @@ export class OcrScheduleDiagnostics {
     const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
     const mode = MODES.has(value.mode) ? value.mode : 'inactive';
     const snapshot = {
-      schemaVersion:1,
-      appVersion:'1.11.2',
+      schemaVersion:2,
+      appVersion:'1.11.3',
       updatedAtUtc:new Date(timestamp(this.now())).toISOString(),
       mode,
       due:value.due === true,
       intervalMs:boundedInteger(value.intervalMs, 30000),
       nextInMs:boundedInteger(value.nextInMs, 30000),
-      boostRemainingMs:boundedInteger(value.boostRemainingMs, 120000),
-      triggerLevel:mode === 'boost' && Number.isInteger(value.triggerLevel)
-        && value.triggerLevel >= 1 && value.triggerLevel <= 30 ? value.triggerLevel : null,
+      windowRemainingMs:boundedInteger(value.windowRemainingMs, 120000),
+      trigger:value.trigger === 'game-start' || value.trigger === 'respawn' ? value.trigger : null,
+      windowId:Number.isSafeInteger(value.windowId) && value.windowId > 0 ? value.windowId : null,
       scanCount:boundedInteger(value.scanCount, 1000000),
       failureCount:boundedInteger(value.failureCount, 1000000),
       lastDurationMs:boundedInteger(value.lastDurationMs, 60000),
@@ -55,6 +55,7 @@ export class OcrScheduleDiagnostics {
   isDue(value) {
     const now = timestamp(this.now());
     return !this.lastAttempt || value.mode !== this.lastAttempt.mode
+      || value.windowId !== this.lastAttempt.windowId || value.trigger !== this.lastAttempt.trigger
       || value.scanCount !== this.lastAttempt.scanCount
       || now < this.lastAttemptAt || now - this.lastAttemptAt >= THROTTLE_MS;
   }

@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.11.2.0")]
-[assembly: AssemblyFileVersion("1.11.2.0")]
-[assembly: AssemblyInformationalVersion("1.11.2")]
+[assembly: AssemblyVersion("1.11.3.0")]
+[assembly: AssemblyFileVersion("1.11.3.0")]
+[assembly: AssemblyInformationalVersion("1.11.3")]
 
 namespace HexGuide.Desktop
 {
@@ -48,9 +48,10 @@ namespace HexGuide.Desktop
                 try
                 {
                     int ownedChecks = Convert.ToInt32(OwnedAugmentVerificationFixtures.Run()["checks"]);
-                    int checks = ScreenSelectionWatcher.ValidateFixtures() + MainWindow.ValidateSelectionDiagnosticFixtures() + ownedChecks;
+                    int checks = ScreenSelectionWatcher.ValidateFixtures() + MainWindow.ValidateSelectionDiagnosticFixtures() + ownedChecks
+                        + ScreenLifeObserver.ValidateFixtures() + ScreenLifeController.ValidateFixtures();
                     Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                        { "version", "1.11.2" }, { "checks", checks },
+                        { "version", "1.11.3" }, { "checks", checks },
                         { "titleProbeVersion", 1 },
                         { "nativeDiagnosticMaxBytes", ScreenSelectionWatcher.LargestDiagnosticFixtureBytes },
                         { "mode", "offline-no-ui" }, { "liveGameVerified", false }
@@ -189,6 +190,9 @@ namespace HexGuide.Desktop
         private readonly SidebarVisibilityState sidebarVisibility;
         private readonly SidebarShortcut shortcut;
         private readonly ScreenSelectionWatcher selectionWatcher;
+        private readonly ScreenLifeController lifeController;
+        private Dictionary<string, object> pendingLifeProof;
+        private bool lifePosting;
         private bool desiredSidebarVisible;
         private bool explicitActivation, trayHintShown;
         private bool fetching, scanChanging, confirmChanging, appearanceRequested, appearanceOpening, layoutRequested, layoutOpening;
@@ -205,7 +209,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.11.2 · 我的这一局";
+            Text = "海克斯指南 1.11.3 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -275,6 +279,16 @@ namespace HexGuide.Desktop
                 if (!closing && !confirmChanging) { sidebar.Notice = message; sidebar.Invalidate(); }
             };
             selectionWatcher.SelectionObserved += async delegate(Dictionary<string, object> evidence) { await ConfirmScreenSelectionAsync(evidence); };
+            lifeController = new ScreenLifeController(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "native"), dataDirectory);
+            lifeController.ProofReady += delegate(Dictionary<string, object> evidence)
+            {
+                if (closing || IsDisposed || !IsHandleCreated) return;
+                Action publish = async delegate { await PublishScreenLifeAsync(evidence); };
+                // Construction may precede installation of the WinForms
+                // synchronization context; keep the proof queue on the UI thread.
+                if (InvokeRequired) { try { BeginInvoke(publish); } catch (InvalidOperationException) { } }
+                else publish();
+            };
             var menu = new ContextMenuStrip();
             menu.Items.Add("打开海克斯指南", null, delegate { ShowMain(); });
             menu.Items.Add("界面设置", null, async delegate { await OpenAppearanceAsync(); });
@@ -301,6 +315,7 @@ namespace HexGuide.Desktop
                 shortcut.Pulse(dataDirectory, sidebarVisibility.Enabled, sidebarVisibility.Pinned, desiredSidebarVisible, sidebar.Visible);
                 PulseSelectionDiagnostics();
                 if (DateTime.UtcNow >= nextFetch) { nextFetch = DateTime.UtcNow.AddSeconds(2); await FetchSidebarAsync(); }
+                await lifeController.PulseAsync();
                 if (appearanceRequested) await OpenRequestedAppearanceAsync();
                 if (layoutRequested) await OpenRequestedLayoutAsync();
             };
@@ -318,6 +333,7 @@ namespace HexGuide.Desktop
                 closing = true;
                 refreshTimer.Stop(); refreshTimer.Dispose();
                 selectionWatcher.Dispose();
+                lifeController.Dispose();
                 shortcut.Dispose();
                 sidebar.Close();
                 tray.Visible = false; tray.Dispose();
@@ -567,11 +583,12 @@ namespace HexGuide.Desktop
                 if (closing || IsDisposed || generation != sidebarRequestGeneration || confirmChanging || scanChanging) return;
                 sidebar.Model = model;
                 selectionWatcher.UpdateModel(model);
+                lifeController.UpdateModel(model);
                 scanMenu.Checked = ModelValue.Boolean(ModelValue.Object(model, "ocr"), "enabled");
                 scanMenu.Enabled = !scanChanging;
                 sidebar.Invalidate();
             }
-            catch { if (!closing && generation == sidebarRequestGeneration && !confirmChanging && !scanChanging) { selectionWatcher.CancelForLocalAction(); sidebar.Model = ModelValue.Failure("正在等待本地连接…"); sidebar.Invalidate(); } }
+            catch { if (!closing && generation == sidebarRequestGeneration && !confirmChanging && !scanChanging) { selectionWatcher.CancelForLocalAction(); lifeController.UpdateModel(null); sidebar.Model = ModelValue.Failure("正在等待本地连接…"); sidebar.Invalidate(); } }
             finally { fetching = false; }
         }
 
@@ -610,7 +627,7 @@ namespace HexGuide.Desktop
         internal static string SelectionDiagnosticsJson(ScreenSelectionWatcher watcher, Dictionary<string, object> model, DateTime now)
         {
             var snapshot = new Dictionary<string, object> {
-                { "version", "1.11.2" }, { "schemaVersion", 2 },
+                { "version", "1.11.3" }, { "schemaVersion", 2 },
                 { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
                 { "native", watcher.Diagnostics() },
                 { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
@@ -636,7 +653,7 @@ namespace HexGuide.Desktop
                 string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
                 var snapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
                 if (snapshot.Count != 5 || Encoding.UTF8.GetByteCount(json) > 4096
-                    || ModelValue.Text(snapshot, "version") != "1.11.2" || ModelValue.Text(snapshot, "schemaVersion") != "2")
+                    || ModelValue.Text(snapshot, "version") != "1.11.3" || ModelValue.Text(snapshot, "schemaVersion") != "2")
                     throw new InvalidOperationException("The persisted selection diagnostic snapshot exceeded its schema or byte bound.");
                 if (json.Contains("PRIVATE-MARKER") || json.Contains("\"ids\"") || json.Contains("windowHandle")
                     || json.Contains("\"signature\"") || json.Contains("\"signatures\"") || json.Contains("\"delta\""))
@@ -756,6 +773,59 @@ namespace HexGuide.Desktop
             }
             catch { if (!closing) sidebar.Notice = "屏幕自动确认（实验）：记录未完成，可手动确认"; }
             finally { confirmChanging = false; if (!closing) sidebar.Invalidate(); }
+        }
+
+        private async Task PublishScreenLifeAsync(Dictionary<string, object> evidence)
+        {
+            if (closing || localOrigin == null || evidence == null) return;
+            // One newest pending proof. In particular, a focus-loss unknown
+            // supersedes older queued observations and is never dropped busy.
+            pendingLifeProof = evidence;
+            if (lifePosting) return;
+            lifePosting = true;
+            try
+            {
+                while (!closing && pendingLifeProof != null)
+                {
+                    var proof = pendingLifeProof; pendingLifeProof = null;
+                    try
+                    {
+                        string body = new JavaScriptSerializer().Serialize(proof);
+                        if (Encoding.UTF8.GetByteCount(body) <= 1024)
+                        {
+                            for (int attempt = 0; attempt < 2; attempt++)
+                            {
+                                try { await RequestModelAsync("api/sidebar/life", body); break; }
+                                catch (WebException error)
+                                {
+                                    var response = error.Response as HttpWebResponse;
+                                    bool transient = response == null || (int)response.StatusCode >= 500;
+                                    if (response != null) response.Close();
+                                    if (attempt != 0 || !transient || pendingLifeProof != null || !LifeProofStillCurrent(proof)) break;
+                                }
+                                await Task.Delay(200);
+                                if (pendingLifeProof != null || !LifeProofStillCurrent(proof)) break;
+                            }
+                        }
+                    }
+                    catch { /* Expired or changed-context proof cannot change the session. */ }
+                    // Do not replace UI/session state with a possibly older
+                    // POST reply while a selection confirmation is in flight.
+                    nextFetch = DateTime.MinValue;
+                }
+            }
+            finally { lifePosting = false; }
+        }
+
+        private bool LifeProofStillCurrent(Dictionary<string, object> proof)
+        {
+            long proofEpoch, modelEpoch, at;
+            return !closing && ModelValue.Integer(proof, "gameEpoch", out proofEpoch)
+                && ModelValue.Integer(sidebar.Model, "gameEpoch", out modelEpoch) && proofEpoch == modelEpoch
+                && ModelValue.Text(proof, "gameId") == ModelValue.Text(sidebar.Model, "gameId")
+                && ModelValue.Integer(proof, "observedAt", out at)
+                && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - at >= -1000
+                && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - at < 2500;
         }
 
         private Task<Dictionary<string, object>> RequestModelAsync(string path, string body)

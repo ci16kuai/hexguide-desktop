@@ -4,8 +4,8 @@ import {DEFAULT_OCR_SCHEDULE_POLICY, OCR_SCHEDULE_MODES, OcrScanSchedule} from '
 
 function fixture(policy) {
   let now = Date.parse('2026-10-25T06:00:00Z');
-  let live = {phase:'InProgress', stage:'live', connection:{status:'connected'}, level:2,
-    observedAt:new Date(now).toISOString(), mode:{known:true, isMayhem:true}};
+  let live = {phase:'InProgress', stage:'live', connection:{status:'connected'}, level:3, gameTime:0,
+    life:{status:'detected', isDead:false}, observedAt:new Date(now).toISOString(), mode:{known:true, isMayhem:true}};
   let gameEpoch = 1;
   const schedule = new OcrScanSchedule({now:() => now, policy});
   return {
@@ -13,25 +13,33 @@ function fixture(policy) {
     decide:extra => schedule.decision({live, gameEpoch, ...extra}),
     observe:() => schedule.observe({live, gameEpoch}),
     update:patch => { live = {...live, ...patch}; },
-    advance:(ms, fresh = true) => { now += ms; if (fresh) live.observedAt = new Date(now).toISOString(); },
+    advance:(ms, fresh = true) => { now += ms; if (fresh) {
+      live.observedAt = new Date(now).toISOString();
+      if (typeof live.gameTime === 'number') live.gameTime += ms / 1000;
+    } },
     epoch:value => { gameEpoch = value; },
     timestamp:() => new Date(now).toISOString(),
     get now() { return now; },
   };
 }
 
-test('defaults expose a bounded immutable policy and fixed diagnostic mode vocabulary', () => {
-  assert.deepEqual(DEFAULT_OCR_SCHEDULE_POLICY.levels, [3, 7, 11, 15]);
-  assert.deepEqual(DEFAULT_OCR_SCHEDULE_POLICY.intervals, {
-    battle:5000, unknown:5000, approaching:3000, boost:1000, offersAcquiring:1000, offersArmed:1000,
-  });
-  assert.deepEqual(DEFAULT_OCR_SCHEDULE_POLICY.cooldowns, {
-    battle:1000, unknown:2500, approaching:1000, boost:250, offersAcquiring:250, offersArmed:250,
-  });
-  assert.equal(DEFAULT_OCR_SCHEDULE_POLICY.boostDurationMs, 60000);
-  assert.ok(Object.isFrozen(DEFAULT_OCR_SCHEDULE_POLICY.intervals));
+function died(f) {
+  f.advance(1000); f.update({life:{status:'detected', isDead:true}}); f.observe();
+}
+function respawned(f) {
+  f.advance(1000); f.update({life:{status:'detected', isDead:false}}); return f.decide();
+}
+
+test('defaults expose a bounded immutable event policy and fixed diagnostic modes', () => {
+  assert.equal(DEFAULT_OCR_SCHEDULE_POLICY.windowMs, 60000);
+  assert.equal(DEFAULT_OCR_SCHEDULE_POLICY.intervalMs, 500);
+  assert.equal(DEFAULT_OCR_SCHEDULE_POLICY.cooldownMs, 100);
+  assert.equal(DEFAULT_OCR_SCHEDULE_POLICY.snapshotFreshnessMs, 10000);
+  assert.ok(Object.isFrozen(DEFAULT_OCR_SCHEDULE_POLICY));
+  assert.ok(Object.isFrozen(DEFAULT_OCR_SCHEDULE_POLICY.backoff));
   assert.ok(Object.isFrozen(OCR_SCHEDULE_MODES));
   assert.equal(new Set(OCR_SCHEDULE_MODES).size, OCR_SCHEDULE_MODES.length);
+  assert.deepEqual(OCR_SCHEDULE_MODES, ['disabled', 'inactive', 'loading', 'other-mode', 'unknown', 'dead', 'idle', 'window', 'backoff']);
 });
 
 test('loading, pause, inactive phases and known other modes never schedule OCR', () => {
@@ -39,376 +47,373 @@ test('loading, pause, inactive phases and known other modes never schedule OCR',
     [{phase:'GameStart', stage:'loading'}, {}, 'loading'],
     [{}, {enabled:false}, 'disabled'],
     [{phase:'Lobby'}, {}, 'inactive'],
+    [{stage:'waiting'}, {}, 'inactive'],
     [{mode:{known:true, isMayhem:false}}, {}, 'other-mode'],
   ]) {
     const f = fixture(); f.update(patch);
-    assert.deepEqual(f.decide(extra), {mode:expected, due:false, intervalMs:0, nextInMs:0, boostRemainingMs:0});
+    assert.equal(f.decide(extra).mode, expected);
+    assert.equal(f.decide(extra).due, false);
     f.advance(60000);
     assert.equal(f.decide(extra).due, false);
   }
 });
 
-test('loading observations do not consume the first live boost or level crossing', () => {
+test('fresh loading to live transition in the same epoch opens one sixty second window', () => {
   const f = fixture();
-  f.update({phase:'GameStart', stage:'loading', level:3});
+  f.update({phase:'GameStart', stage:'loading', gameTime:null, connection:{status:'waiting'}, life:{status:'unavailable', isDead:null}});
   f.observe(); f.advance(90000); f.observe();
-  f.update({phase:'InProgress', stage:'live'});
-  assert.deepEqual(f.decide(), {mode:'boost', due:true, intervalMs:1000, nextInMs:0, boostRemainingMs:60000, triggerLevel:3});
+  f.advance(1000); f.update({phase:'InProgress', stage:'live', gameTime:1, connection:{status:'connected'}, life:{status:'detected', isDead:false}});
+  const first = f.decide();
+  assert.deepEqual(first, {mode:'window', due:true, intervalMs:500, nextInMs:0, windowRemainingMs:60000, trigger:'game-start', windowId:1});
+  f.advance(1000); assert.equal(f.decide().windowRemainingMs, 59000);
+  f.advance(59000); assert.equal(f.decide().mode, 'idle');
+  f.advance(1000); assert.equal(f.decide({hasOffers:true, armed:true}).due, false);
 });
 
-test('first live observation gets one short opening boost rather than extending every poll', () => {
-  const f = fixture();
-  assert.equal(f.decide().boostRemainingMs, 30000);
-  for (let i = 0; i < 30; i++) { f.advance(1000); f.observe(); }
-  assert.equal(f.decide().mode, 'battle');
-  assert.equal(f.decide().boostRemainingMs, 0);
-});
-
-test('3, 7, 11 and 15 crossing each start a single bounded window', () => {
-  const f = fixture(); f.observe();
-  for (const level of [3, 7, 11, 15]) {
-    f.advance(1000); f.update({level});
-    assert.equal(f.decide().triggerLevel, level);
-    assert.equal(f.decide().boostRemainingMs, 60000);
-    f.advance(60000); f.observe();
-    assert.equal(f.decide().boostRemainingMs, 0);
-    f.advance(1000);
-    assert.equal(f.decide().boostRemainingMs, 0, 'the same level must not renew the boost');
+test('first live attachment inside the first minute scans only the remaining opening time', () => {
+  for (const [gameTime, remaining] of [[0, 60000], [0.5, 59500], [20, 40000], [59.999, 1]]) {
+    const f = fixture(); f.update({gameTime});
+    assert.equal(f.decide().windowRemainingMs, remaining);
+    assert.equal(f.decide().trigger, 'game-start');
+    f.advance(remaining); assert.equal(f.decide().due, false);
   }
 });
 
-test('skipped levels and mid-game attachment still discover the latest unseen threshold', () => {
-  const f = fixture(); f.update({level:6}); f.observe(); f.schedule.confirmed();
-  f.update({level:8});
-  assert.equal(f.decide().triggerLevel, 7);
-  const joined = fixture(); joined.update({level:16});
-  assert.equal(joined.decide().triggerLevel, 15);
-  joined.schedule.confirmed(); joined.update({level:9}); joined.observe();
-  joined.update({level:16});
-  assert.equal(joined.decide().boostRemainingMs, 0, 'a level regression cannot reuse thresholds');
-});
-
-test('unknown or stale levels use a nonzero fallback and cannot invent a crossing', () => {
-  for (const level of [null, undefined, NaN, Infinity, 0, 31, -1, 7.5, '7']) {
-    const f = fixture(); f.update({level});
-    const decision = f.decide();
-    assert.equal(decision.mode, 'unknown');
-    assert.equal(decision.due, true);
-    assert.equal(decision.intervalMs, 5000);
-    assert.equal(decision.boostRemainingMs, 0);
-    assert.ok(!Object.hasOwn(decision, 'triggerLevel'));
-  }
-  const missing = fixture(); missing.update({level:7, observedAt:null});
-  assert.equal(missing.decide().mode, 'unknown');
-  const stale = fixture(); stale.update({level:7}); stale.advance(10001, false);
-  assert.equal(stale.decide().mode, 'unknown');
-  stale.update({observedAt:stale.timestamp()});
-  assert.equal(stale.decide().triggerLevel, 7);
-});
-
-test('disconnected, invalid and implausibly future timestamps do not strengthen the level signal', () => {
-  for (const patch of [
-    {level:7, connection:{status:'waiting'}}, {level:7, observedAt:'invalid'},
-    {level:7, observedAt:'2026-10-25T06:00:01.001Z'},
-  ]) {
-    const f = fixture(); f.update(patch);
-    assert.equal(f.decide().mode, 'unknown');
-  }
-  const f = fixture(); f.update({level:7, observedAt:'2026-10-25T06:00:01.000Z'});
-  assert.equal(f.decide().triggerLevel, 7);
-});
-
-test('a fresh recovery after losing level data starts a missed threshold only once', () => {
-  const f = fixture(); f.update({level:6}); f.observe(); f.schedule.confirmed();
-  f.update({level:null}); f.advance(15000);
-  assert.equal(f.decide().mode, 'unknown');
-  f.update({level:8});
-  assert.equal(f.decide().triggerLevel, 7);
-  f.advance(61000); f.update({level:null}); f.observe(); f.update({level:8});
-  assert.equal(f.decide().boostRemainingMs, 0);
-});
-
-test('6, 10 and 14 use the approaching mode after the bounded boost ends', () => {
-  for (const level of [6, 10, 14]) {
-    const f = fixture(); f.update({level}); f.observe(); f.schedule.confirmed();
-    assert.equal(f.decide().mode, 'approaching');
-    assert.equal(f.decide().intervalMs, 3000);
+test('mid or late game attachment never invents an opening event from alive, level or existing offers', () => {
+  for (const gameTime of [60, 900, 3000, null, undefined, NaN, Infinity, -1, '12']) {
+    const f = fixture(); f.update({gameTime, level:15});
+    const decision = f.decide({hasOffers:true, armed:true});
+    assert.equal(decision.mode, 'idle'); assert.equal(decision.due, false);
+    assert.equal(decision.trigger, null); assert.equal(decision.windowId, null);
+    f.advance(1000); assert.equal(f.decide({hasOffers:true}).due, false);
   }
 });
 
-test('confirmation ends only the current boost and later thresholds still work', () => {
-  const f = fixture(); f.update({level:3}); f.observe();
-  f.schedule.confirmed();
-  assert.equal(f.decide().mode, 'battle');
-  f.advance(1000); f.update({level:7});
-  assert.equal(f.decide().triggerLevel, 7);
-  f.schedule.confirmed(); f.update({level:16}); f.observe(); f.schedule.confirmed();
-  assert.equal(f.decide().mode, 'battle');
-  assert.equal(f.decide().due, true, 'the fourth ordinary choice must not turn off fallback OCR');
+test('a delayed first live sample deducts its age rather than receiving a fresh minute', () => {
+  const f = fixture(); f.update({gameTime:20}); f.advance(4000, false);
+  assert.equal(f.decide().windowRemainingMs, 36000);
+  const transition = fixture(); transition.update({stage:'loading'}); transition.observe();
+  transition.advance(1000); transition.update({stage:'live', gameTime:1}); transition.advance(3000, false);
+  assert.equal(transition.decide().windowRemainingMs, 57000);
 });
 
-test('backend armed does not slow the fresh witnesses needed for native Ready', () => {
-  const f = fixture(); f.update({level:16}); f.observe(); f.schedule.confirmed();
-  assert.equal(f.decide({hasOffers:true, armed:false}).mode, 'offers-acquiring');
-  assert.equal(f.decide({hasOffers:true, armed:false}).intervalMs, 1000);
-  const armed = f.decide({hasOffers:true, armed:true});
-  assert.equal(armed.mode, 'offers-armed');
-  assert.equal(armed.intervalMs, 1000);
-  f.schedule.started(); f.advance(2000); f.schedule.completed({status:'recognized'});
-  f.advance(249);
-  assert.equal(f.decide({hasOffers:true, armed:true}).due, false);
-  f.advance(1);
-  assert.equal(f.decide({hasOffers:true, armed:true}).due, true);
+test('only a fresh known dead to alive edge opens a respawn window', () => {
+  const f = fixture(); f.update({gameTime:900}); assert.equal(f.decide().due, false);
+  died(f); assert.equal(f.decide().mode, 'dead'); assert.equal(f.decide().due, false);
+  const first = respawned(f);
+  assert.equal(first.mode, 'window'); assert.equal(first.trigger, 'respawn');
+  assert.equal(first.windowRemainingMs, 60000); assert.equal(first.windowId, 1);
+  f.advance(1000); assert.equal(f.decide().windowRemainingMs, 59000);
+  f.advance(59000); assert.equal(f.decide().mode, 'idle');
+  died(f); const second = respawned(f);
+  assert.equal(second.windowId, 2); assert.equal(second.windowRemainingMs, 60000);
 });
 
-test('armed reference refresh leaves room in the unchanged 30 second lease even with a slow successful pass', () => {
-  const f = fixture(); f.observe();
-  f.schedule.started(); f.advance(10000); f.schedule.completed({status:'recognized'});
-  const decision = f.decide({hasOffers:true, armed:true});
-  assert.equal(decision.nextInMs, 250);
-  f.advance(250); assert.equal(f.decide({hasOffers:true, armed:true}).due, true);
-  // A second ten-second capture completes at 20.25s after the previous frame,
-  // before the observer's existing 30s expiry. No lease is extended here.
-  assert.ok(10000 + decision.nextInMs + 10000 < 30000);
-});
-
-test('battle scans respect a five-second start target and one-second completion cooldown', () => {
-  const f = fixture(); f.observe(); f.schedule.confirmed();
-  f.schedule.started(); f.advance(12000);
-  assert.equal(f.decide().due, false, 'a slow scan must not overlap');
-  f.schedule.completed({status:'recognized'});
-  assert.equal(f.decide().nextInMs, 1000);
-  f.advance(999); assert.equal(f.decide().due, false);
-  f.advance(1); assert.equal(f.decide().due, true);
-});
-
-test('short battle scans resume at the five-second start target rather than five seconds after completion', () => {
-  const f = fixture(); f.observe(); f.schedule.confirmed();
-  f.schedule.started(); f.advance(200); f.schedule.completed({status:'recognized'});
-  assert.equal(f.decide().nextInMs, 4800);
-  f.advance(4799); assert.equal(f.decide().due, false);
-  f.advance(1); assert.equal(f.decide().due, true);
-});
-
-test('short boost and candidate scans can start once per second without skipping their completion rest', () => {
-  for (const extra of [{}, {hasOffers:true, armed:false}, {hasOffers:true, armed:true}]) {
-    const f = fixture(); f.update({level:7}); f.observe();
-    f.schedule.started(); f.advance(200); f.schedule.completed({status:'recognized'});
-    assert.equal(f.decide(extra).nextInMs, 800);
-    f.advance(799); assert.equal(f.decide(extra).due, false);
-    f.advance(1); assert.equal(f.decide(extra).due, true);
-    f.schedule.started(); f.advance(900); f.schedule.completed({status:'recognized'});
-    assert.equal(f.decide(extra).nextInMs, 250, 'a one-second target does not override minimum rest');
-    f.advance(249); assert.equal(f.decide(extra).due, false);
-    f.advance(1); assert.equal(f.decide(extra).due, true);
+test('unknown life data does not trigger a window or infer a resurrection', () => {
+  const f = fixture(); f.update({gameTime:900, life:{status:'unavailable', isDead:null}}); f.observe();
+  f.advance(1000); f.update({life:{status:'detected', isDead:false}});
+  assert.equal(f.decide().mode, 'idle');
+  for (const life of [null, {}, {status:'detected'}, {status:'detected', isDead:0}, {status:'unavailable', isDead:false}, {status:'detected', isDead:'false'}]) {
+    f.advance(1000); f.update({life}); assert.equal(f.decide().due, false);
   }
+  died(f); f.advance(1000); f.update({life:{status:'unavailable', isDead:null}});
+  assert.equal(f.decide().mode, 'dead', 'unavailable is not evidence that a known dead player is alive');
+  assert.equal(respawned(f).trigger, 'respawn', 'a brief unknown gap does not erase recent reliable evidence');
 });
 
-test('boost and both candidate modes keep a 250ms rest even when the target interval passed', () => {
-  for (const extra of [{}, {hasOffers:true, armed:false}, {hasOffers:true, armed:true}]) {
-    const f = fixture(); f.update({level:7}); f.observe();
-    f.schedule.started(); f.advance(9000); f.schedule.completed({status:'recognized'});
-    assert.equal(f.decide(extra).nextInMs, 250);
-    f.advance(249); assert.equal(f.decide(extra).due, false);
-    f.advance(1); assert.equal(f.decide(extra).due, true);
+test('explicit screen life timestamps are independently fresh and do not inherit raw keepalives', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe();
+  f.advance(1000); const capturedAt = f.now;
+  f.update({life:{status:'detected', isDead:true, observedAt:capturedAt}}); f.observe();
+  for (let n = 0; n < 12; n++) { f.advance(1000); f.observe(); }
+  assert.equal(f.schedule.lastLife.observedAt, capturedAt);
+  f.advance(1000); f.update({life:{status:'detected', isDead:false, observedAt:f.now}});
+  assert.equal(f.decide().due, false, 'an old dead proof is not a fresh respawn edge');
+});
+
+test('explicit ISO screen evidence uses its capture time and rejects stale, invalid or reversed proofs', () => {
+  for (const observedAt of [null, 'invalid', Infinity, -1, '2026-10-25T05:59:49.000Z', '2026-10-25T06:00:02.000Z']) {
+    const f = fixture(); f.update({gameTime:900, life:{status:'detected', isDead:true, observedAt}}); f.observe();
+    f.advance(1000); f.update({life:{status:'detected', isDead:false, observedAt:f.timestamp()}});
+    assert.equal(f.decide().due, false);
   }
-});
-
-test('new level crossings cannot bypass the completion cooldown of an active scan', () => {
-  const f = fixture(); f.observe(); f.schedule.confirmed(); f.schedule.started();
-  f.advance(10000); f.update({level:7}); f.observe();
+  const f = fixture(); f.update({gameTime:900}); f.observe();
+  f.advance(1000); f.update({life:{status:'detected', isDead:true, observedAt:f.timestamp()}}); f.observe();
+  const deadAt = f.now;
+  f.advance(1000); f.update({life:{status:'detected', isDead:false, observedAt:deadAt - 1}});
   assert.equal(f.decide().due, false);
+  f.advance(1000); f.update({life:{status:'detected', isDead:false, observedAt:f.timestamp()}});
+  assert.equal(f.decide().trigger, 'respawn');
+});
+
+test('new screen life evidence can be consumed against the same fresh collector timestamp', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe();
+  f.advance(1000); const rawObserved = f.timestamp();
+  f.update({life:{status:'detected', isDead:true, observedAt:f.now - 200}}); f.observe();
+  f.advance(100, false); f.update({observedAt:rawObserved, life:{status:'detected', isDead:false, observedAt:f.now}});
+  const alive = f.decide();
+  assert.equal(alive.trigger, 'respawn'); assert.equal(alive.windowRemainingMs, 60000);
+});
+
+test('forgetLife breaks an unfocused screen chain without starting or renewing any window', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe(); died(f);
+  f.schedule.forgetLife(); assert.equal(f.schedule.lastLife, null);
+  f.advance(1000); f.update({life:{status:'detected', isDead:false, observedAt:f.now}});
+  assert.equal(f.decide().mode, 'idle'); assert.equal(f.decide().windowId, null);
+  const opening = fixture(); opening.observe(); opening.advance(1000); opening.schedule.forgetLife();
+  assert.equal(opening.decide().windowRemainingMs, 59000);
+});
+
+test('dead evidence too old to witness a respawn cannot invent a new choice window', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe(); died(f);
+  f.advance(10001); f.update({life:{status:'detected', isDead:false}});
+  assert.equal(f.decide().mode, 'idle'); assert.equal(f.decide().windowId, null);
+});
+
+test('repeated alive or dead frames never extend windows, and death closes an active opening window', () => {
+  const f = fixture(); f.observe(); const openingId = f.decide().windowId;
+  for (let i = 0; i < 30; i++) { f.advance(1000); f.observe(); }
+  assert.equal(f.decide().windowRemainingMs, 30000);
+  died(f); assert.equal(f.decide().windowRemainingMs, 0);
+  for (let i = 0; i < 30; i++) { f.advance(1000); f.observe(); }
+  assert.equal(f.decide().windowId, openingId);
+  assert.equal(f.decide().due, false);
+  assert.equal(respawned(f).windowId, openingId + 1);
+});
+
+test('confirmation closes the current window despite candidates and a later actual respawn still works', () => {
+  const f = fixture(); f.observe(); f.schedule.confirmed();
+  for (const extra of [{}, {hasOffers:true}, {hasOffers:true, armed:true}]) {
+    assert.equal(f.decide(extra).mode, 'idle'); assert.equal(f.decide(extra).due, false);
+  }
+  f.advance(1000); f.update({level:7}); assert.equal(f.decide().due, false);
+  died(f); assert.equal(respawned(f).trigger, 'respawn');
+  f.schedule.confirmed(); assert.equal(f.decide({hasOffers:true}).due, false);
+});
+
+test('levels, armed state, and candidates have no influence on timing or event identity', () => {
+  const f = fixture(); const first = f.decide();
+  for (const [index, level] of [3, 7, 11, 15, null, 16].entries()) {
+    f.advance(1000); f.update({level});
+    const decision = f.decide({hasOffers:true, armed:index % 2 === 0});
+    assert.equal(decision.windowRemainingMs, 60000 - (index + 1) * 1000);
+    assert.equal(decision.windowId, first.windowId); assert.equal(decision.intervalMs, 500);
+  }
+  f.advance(60000); assert.equal(f.decide({hasOffers:true, armed:true}).due, false);
+});
+
+test('short scans start at the 500ms target, with no overlapping work', () => {
+  const f = fixture(); f.observe(); f.schedule.started();
+  f.advance(200); assert.equal(f.decide().due, false);
   f.schedule.completed({status:'recognized'});
-  assert.equal(f.decide().nextInMs, 250);
+  assert.equal(f.decide().nextInMs, 300);
+  f.advance(299); assert.equal(f.decide().due, false);
+  f.advance(1); assert.equal(f.decide().due, true);
 });
 
-test('external in-flight state and duplicate starts cannot enqueue or rewrite a scan start', () => {
-  const f = fixture();
-  assert.equal(f.decide({inFlight:true}).due, false);
-  assert.ok(f.decide({inFlight:true}).nextInMs >= 1000);
-  f.schedule.started(); f.advance(300); f.schedule.started();
-  f.advance(200); f.schedule.completed({status:'recognized'});
-  f.advance(499); assert.equal(f.decide().due, false);
-  f.advance(1);
-  assert.equal(f.decide().due, true, 'the duplicate start must not move the 1000ms target');
-});
-
-test('engine failures back off at 5, 10, 20 and 30 seconds without an infinite lockout', () => {
+test('slow scans finish serially and keep a 100ms completion rest', () => {
   const f = fixture(); f.observe();
-  for (const [index, delay] of [5000, 10000, 20000, 30000, 30000].entries()) {
-    f.schedule.started(); f.advance(1000);
-    f.schedule.completed({status:'unavailable', code:index % 2 ? 'scan-execution-failed' : 'ocr-engine-unavailable'});
-    const decision = f.decide();
-    assert.equal(decision.mode, 'backoff');
-    assert.equal(decision.nextInMs, delay);
-    f.advance(delay - 1); assert.equal(f.decide().due, false);
+  for (let pass = 0; pass < 3; pass++) {
+    f.schedule.started(); f.advance(10000);
+    assert.equal(f.decide().due, false);
+    f.schedule.completed({status:'recognized'});
+    assert.equal(f.decide().nextInMs, 100);
+    f.advance(99); assert.equal(f.decide().due, false);
     f.advance(1); assert.equal(f.decide().due, true);
   }
 });
 
-test('foreground loss stays short and does not poison a later engine failure streak', () => {
-  const f = fixture(); f.observe();
-  for (let n = 0; n < 10; n++) {
-    f.schedule.started(); f.advance(1000);
-    f.schedule.completed({status:'waiting', code:n % 2 ? 'foreground-changed' : 'game-not-foreground'});
-    assert.equal(f.decide({hasOffers:true}).nextInMs, 5000);
-    f.advance(5000);
-  }
-  f.schedule.started(); f.advance(1000);
-  f.schedule.completed({status:'unavailable', code:'ocr-engine-unavailable'});
-  assert.equal(f.decide({hasOffers:true}).nextInMs, 5000);
-});
-
-test('OCR execution failure and timeout are recoverable and successful capture clears the failure streak', () => {
-  const f = fixture(); f.observe();
-  f.schedule.started(); f.advance(15000); f.schedule.completed({status:'unavailable', code:'scan-execution-failed'});
-  assert.equal(f.decide().nextInMs, 5000);
-  f.advance(5000); f.schedule.started(); f.advance(1000); f.schedule.completed({status:'recognized', code:'title-layout-confirmed'});
-  assert.notEqual(f.decide().mode, 'backoff');
-  f.advance(5000); f.schedule.started(); f.advance(1000); f.schedule.completed({status:'unavailable', code:'ocr-engine-unavailable'});
-  assert.equal(f.decide().nextInMs, 5000, 'a fresh failure starts at the initial backoff');
-});
-
-test('expected no-title battle results do not count as engine failures', () => {
-  for (const code of ['ocr-no-text', 'title-name-unmatched', 'title-layout-incomplete', 'title-layout-ambiguous', 'scan-offer-consumed']) {
-    const f = fixture(); f.observe();
-    f.schedule.started(); f.advance(3000); f.schedule.completed({status:'unavailable', code});
-    assert.equal(f.decide().mode, 'boost');
-    assert.equal(f.decide().nextInMs, 250);
-  }
-});
-
-test('threshold boosts and candidate offers do not silently bypass failure backoff', () => {
-  const f = fixture(); f.observe();
-  f.schedule.started(); f.advance(1000); f.schedule.completed({status:'unavailable', code:'ocr-language-missing'});
-  f.update({level:7});
-  assert.equal(f.decide({hasOffers:true, armed:true}).mode, 'backoff');
-  assert.equal(f.decide({hasOffers:true, armed:true}).nextInMs, 5000);
-});
-
-test('new game epoch clears thresholds, deadlines and old completion cannot poison the new game', () => {
-  const f = fixture(); f.update({level:7}); f.observe();
-  f.schedule.started(); f.advance(9000);
-  f.epoch(2); f.update({level:3});
-  assert.equal(f.decide().due, false, 'the old resource remains in flight until completion');
+test('a scan completing at or beyond the deadline releases busy but never schedules more OCR', () => {
+  const f = fixture(); f.observe(); f.schedule.started(); f.advance(60000);
+  assert.equal(f.decide().mode, 'idle');
   f.schedule.completed({status:'unavailable', code:'scan-execution-failed'});
-  const decision = f.decide();
-  assert.equal(decision.due, true);
-  assert.equal(decision.triggerLevel, 3);
-  assert.equal(decision.boostRemainingMs, 60000);
-  assert.equal(decision.mode, 'boost');
+  assert.equal(f.schedule.activeScan, false); assert.equal(f.decide({hasOffers:true}).due, false);
+  assert.equal(f.schedule.backoffUntil, 0);
 });
 
-test('lobby and transient ineligible states do not renew already-used thresholds within the epoch', () => {
-  const f = fixture(); f.update({level:7}); f.observe(); f.schedule.confirmed();
-  f.update({phase:'None'}); f.observe(); f.advance(1000);
-  f.update({phase:'InProgress'});
-  assert.equal(f.decide().boostRemainingMs, 0);
-  f.epoch(2);
-  assert.equal(f.decide().triggerLevel, 7);
+test('external in-flight state and duplicate starts cannot enqueue or rewrite a start target', () => {
+  const f = fixture(); assert.equal(f.decide({inFlight:true}).due, false);
+  f.schedule.started(); f.advance(200); f.schedule.started();
+  f.advance(100); f.schedule.completed({status:'recognized'});
+  assert.equal(f.decide().nextInMs, 200);
+  f.advance(200); assert.equal(f.decide().due, true);
 });
 
-test('custom policy can add thresholds while rejecting unsafe or invalid values per field', () => {
-  const f = fixture({levels:[5, 5, 9], approachingLevels:[4, 8], boostDurationMs:45000,
-    intervals:{battle:12000, boost:1500, offersArmed:999999}, cooldowns:{boost:750, battle:6000},
-    backoff:{initialMs:6000, maxMs:24000}});
-  f.update({level:5});
-  assert.equal(f.decide().triggerLevel, 5);
-  assert.equal(f.decide().boostRemainingMs, 45000);
-  assert.equal(f.decide().intervalMs, 1500);
-  assert.equal(f.decide({hasOffers:true, armed:true}).intervalMs, 1000);
-  assert.equal(f.schedule.policy.cooldowns.boost, 750, 'subsecond completion rest is valid');
-  f.schedule.confirmed();
-  assert.equal(f.decide().intervalMs, 12000);
-  assert.deepEqual(f.schedule.policy.levels, [5, 9]);
-  const invalid = fixture({levels:[-1, '7'], boostDurationMs:Infinity, openingBoostMs:-1, intervals:{battle:NaN}});
-  invalid.update({level:3}); assert.equal(invalid.decide().triggerLevel, 3);
-  assert.equal(invalid.decide().boostRemainingMs, 60000);
+test('engine failures back off at five, ten and twenty seconds only within the active deadline', () => {
+  const f = fixture(); f.observe();
+  for (const delay of [5000, 10000, 20000]) {
+    f.schedule.started(); f.advance(500);
+    f.schedule.completed({status:'unavailable', code:'ocr-engine-unavailable'});
+    assert.equal(f.decide().mode, 'backoff'); assert.equal(f.decide().nextInMs, delay);
+    f.advance(delay - 1); assert.equal(f.decide().due, false);
+    f.advance(1); assert.equal(f.decide().due, true);
+  }
+  f.schedule.started(); f.advance(500); f.schedule.completed({status:'unavailable', code:'ocr-engine-unavailable'});
+  assert.equal(f.schedule.backoffDelay(), 30000);
+  assert.equal(f.decide().nextInMs, f.decide().windowRemainingMs, 'a retry after expiry cannot extend the window');
+  f.advance(f.decide().windowRemainingMs); assert.equal(f.decide().mode, 'idle');
 });
 
-test('custom policies allow 100ms completion rest while rejecting subsecond start intervals', () => {
-  const valid = fixture({intervals:{boost:1000}, cooldowns:{boost:100}});
-  valid.update({level:7}); valid.observe();
-  valid.schedule.started(); valid.advance(2000); valid.schedule.completed({status:'recognized'});
-  assert.equal(valid.decide().intervalMs, 1000);
-  assert.equal(valid.decide().nextInMs, 100);
-  valid.advance(99); assert.equal(valid.decide().due, false);
-  valid.advance(1); assert.equal(valid.decide().due, true);
-  for (const cooldown of [99, 0, -1, NaN, Infinity, '100']) {
-    const invalid = fixture({intervals:{boost:999}, cooldowns:{boost:cooldown}});
-    assert.equal(invalid.schedule.policy.intervals.boost, 1000);
-    assert.equal(invalid.schedule.policy.cooldowns.boost, 250);
+test('foreground failures remain bounded and are reset by a fresh respawn window', () => {
+  const f = fixture(); f.observe();
+  for (let n = 0; n < 4; n++) {
+    f.schedule.started(); f.advance(500);
+    f.schedule.completed({status:'waiting', code:n % 2 ? 'foreground-changed' : 'game-not-foreground'});
+    assert.equal(f.decide().nextInMs, 5000); f.advance(5000);
+  }
+  died(f); const fresh = respawned(f);
+  assert.equal(fresh.mode, 'window'); assert.equal(fresh.due, true);
+});
+
+test('a successful scan resets failures, while expected no-title frames are not faults', () => {
+  const f = fixture(); f.observe(); f.schedule.started(); f.advance(500);
+  f.schedule.completed({status:'unavailable', code:'scan-execution-failed'});
+  f.advance(5000); f.schedule.started(); f.advance(500); f.schedule.completed({status:'recognized', code:'title-layout-confirmed'});
+  assert.equal(f.decide().mode, 'window'); assert.equal(f.schedule.failureStreak, 0);
+  for (const code of ['ocr-no-text', 'title-name-unmatched', 'title-layout-incomplete', 'title-layout-ambiguous', 'scan-offer-consumed', 'scan-busy']) {
+    f.advance(500); f.schedule.started(); f.advance(500);
+    f.schedule.completed({status:'unavailable', code});
+    assert.equal(f.decide().mode, 'window'); assert.equal(f.decide().nextInMs, 100);
   }
 });
 
-test('decision output is bounded, fixed-field, contains no snapshot identity and tolerates clock rollback', () => {
+test('disconnected, missing, old, invalid and implausibly future observations cannot create events', () => {
+  for (const patch of [
+    {connection:{status:'waiting'}}, {observedAt:null}, {observedAt:'invalid'},
+    {observedAt:'2026-10-25T05:59:49.999Z'}, {observedAt:'2026-10-25T06:00:01.001Z'},
+  ]) {
+    const f = fixture(); f.update(patch);
+    assert.equal(f.decide().mode, 'unknown'); assert.equal(f.decide().windowId, null);
+  }
+  const future = fixture(); future.update({observedAt:'2026-10-25T06:00:01.000Z'});
+  assert.equal(future.decide().windowRemainingMs, 60000, 'tolerated future timestamp must not add time');
+  const old = fixture(); old.update({stage:'loading', observedAt:'2026-10-25T05:59:49.999Z'}); old.observe();
+  old.advance(1000); old.update({stage:'live', gameTime:900}); assert.equal(old.decide().due, false);
+});
+
+test('a stale current snapshot pauses scanning without renewing or pausing the deadline', () => {
+  const f = fixture(); f.observe(); f.advance(10001, false);
+  assert.equal(f.decide().mode, 'unknown'); assert.equal(f.decide().due, false);
+  f.advance(1000); assert.equal(f.decide().windowRemainingMs, 48999);
+  f.advance(48999); assert.equal(f.decide().mode, 'idle');
+});
+
+test('duplicate timestamps cannot synthesize a dead to alive edge', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe();
+  f.update({life:{status:'detected', isDead:true}}); f.observe();
+  f.advance(1000); f.update({life:{status:'detected', isDead:false}});
+  assert.equal(f.decide().due, false); assert.equal(f.decide().windowId, null);
+});
+
+test('out of order observations and regressing game clocks cannot synthesize a respawn', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe(); died(f); const deathTime = f.timestamp();
+  f.advance(1000); f.update({observedAt:deathTime, life:{status:'detected', isDead:false}});
+  assert.equal(f.decide().due, false);
+  f.advance(1000); f.update({gameTime:898});
+  assert.equal(f.decide().mode, 'unknown'); assert.equal(f.decide().windowId, null);
+  f.advance(1000); f.update({gameTime:904});
+  assert.equal(f.decide().trigger, 'respawn', 'the later valid alive evidence may close the witnessed death');
+});
+
+test('new epochs clear old loading and life state and reject a late older epoch', () => {
+  const f = fixture(); f.observe(); died(f);
+  f.epoch(2); f.advance(1000); f.update({gameTime:900, life:{status:'detected', isDead:false}});
+  assert.equal(f.decide().windowId, null); assert.equal(f.decide().due, false);
+  f.epoch(1); f.advance(1000); f.update({gameTime:0});
+  assert.equal(f.decide().mode, 'unknown'); assert.equal(f.decide().due, false);
+  f.epoch(3); f.advance(1000); assert.equal(f.decide().trigger, 'game-start');
+});
+
+test('new epoch cannot inherit an old loading transition', () => {
+  const f = fixture(); f.update({stage:'loading'}); f.observe();
+  f.epoch(2); f.advance(1000); f.update({stage:'live', gameTime:900});
+  assert.equal(f.decide().due, false); assert.equal(f.decide().trigger, null);
+});
+
+test('an old epoch completion releases busy without poisoning the new opening window', () => {
+  const f = fixture(); f.observe(); f.schedule.started(); f.advance(2000);
+  f.epoch(2); f.update({gameTime:0}); const fresh = f.decide();
+  assert.equal(fresh.due, false); assert.equal(fresh.windowId, 2);
+  f.schedule.completed({status:'unavailable', code:'scan-execution-failed'});
+  assert.equal(f.decide().due, true); assert.equal(f.schedule.backoffUntil, 0);
+});
+
+test('an old window completion releases busy without poisoning the respawn window', () => {
+  const f = fixture(); f.observe(); f.schedule.started(); died(f); const fresh = respawned(f);
+  assert.equal(fresh.windowId, 2); assert.equal(fresh.due, false);
+  f.schedule.completed({status:'unavailable', code:'scan-execution-failed'});
+  assert.equal(f.decide().due, true); assert.equal(f.schedule.backoffUntil, 0);
+});
+
+test('confirmation while OCR is running prevents late completion from reviving the window', () => {
+  const f = fixture(); f.observe(); f.schedule.started(); f.advance(1000); f.schedule.confirmed();
+  f.schedule.completed({status:'unavailable', code:'ocr-engine-unavailable'});
+  assert.equal(f.decide({hasOffers:true}).due, false); assert.equal(f.schedule.backoffUntil, 0);
+});
+
+test('transient ineligible phases, loading repeats, disable and reenabling never renew a used window', () => {
+  const f = fixture(); f.observe(); f.schedule.confirmed();
+  for (const patch of [{phase:'None'}, {phase:'InProgress', stage:'loading'}, {stage:'live'}]) {
+    f.advance(1000); f.update(patch); assert.equal(f.decide().due, false);
+  }
+  assert.equal(f.decide({enabled:false}).due, false);
+  f.advance(1000); assert.equal(f.decide({enabled:true}).due, false);
+});
+
+test('unknown mode metadata does not fabricate an event or block a verified opening', () => {
+  const f = fixture(); f.update({mode:{known:false}});
+  assert.equal(f.decide().due, true); f.schedule.confirmed();
+  f.advance(1000); assert.equal(f.decide({hasOffers:true}).due, false);
+});
+
+test('custom event timings are bounded and legacy level/battle policy is ignored', () => {
+  const f = fixture({windowMs:45000, intervalMs:750, cooldownMs:250,
+    snapshotFreshnessMs:5000, futureToleranceMs:0, levels:[5, 9], intervals:{battle:0},
+    backoff:{initialMs:6000, maxMs:24000, foregroundMs:3000}});
+  assert.equal(f.decide().windowRemainingMs, 45000); assert.equal(f.decide().intervalMs, 750);
+  assert.equal(f.schedule.policy.cooldownMs, 250); assert.equal(f.schedule.policy.levels, undefined);
+  for (const value of [0, 499, -1, NaN, Infinity, '500']) {
+    const invalid = fixture({intervalMs:value, cooldownMs:0, windowMs:-1});
+    assert.equal(invalid.schedule.policy.intervalMs, 500);
+    assert.equal(invalid.schedule.policy.cooldownMs, 100);
+    assert.equal(invalid.schedule.policy.windowMs, 60000);
+  }
+});
+
+test('diagnostics have fixed fields, bounded values, no identity, and monotonic clock behavior', () => {
   let now = 100000;
   const schedule = new OcrScanSchedule({now:() => now});
-  const live = {phase:'InProgress', stage:'live', level:7, connection:{status:'connected'}, observedAt:new Date(now).toISOString(),
+  const live = {phase:'InProgress', stage:'live', gameTime:0, connection:{status:'connected'},
+    life:{status:'detected', isDead:false}, observedAt:new Date(now).toISOString(),
     gameId:'private-game', summonerName:'private-player', mode:{known:true, isMayhem:true}};
   const first = schedule.decision({live, gameEpoch:1}); schedule.started();
   now -= 1000; schedule.completed({status:'unavailable', code:'private-error-path'});
   const decision = schedule.decision({live, gameEpoch:1});
-  assert.equal(first.boostRemainingMs, 60000);
-  assert.ok(OCR_SCHEDULE_MODES.includes(decision.mode));
-  assert.deepEqual(Object.keys(decision).sort(), ['mode', 'due', 'intervalMs', 'nextInMs', 'boostRemainingMs', 'triggerLevel'].sort());
+  assert.equal(first.windowRemainingMs, 60000); assert.ok(OCR_SCHEDULE_MODES.includes(decision.mode));
+  assert.deepEqual(Object.keys(decision).sort(), ['mode', 'due', 'intervalMs', 'nextInMs', 'windowRemainingMs', 'trigger', 'windowId'].sort());
   for (const key of ['intervalMs', 'nextInMs']) assert.ok(Number.isSafeInteger(decision[key]) && decision[key] >= 0 && decision[key] <= 30000);
-  assert.ok(decision.boostRemainingMs <= 120000);
+  assert.ok(decision.windowRemainingMs <= 120000);
   assert.doesNotMatch(JSON.stringify(schedule), /private-game|private-player|private-error-path/);
 });
 
-test('unknown mode status does not disable fallback and missing game epochs do not reset every poll', () => {
-  let now = 100000;
-  const schedule = new OcrScanSchedule({now:() => now});
-  const live = {phase:'InProgress', level:7, connection:{status:'connected'}, observedAt:new Date(now).toISOString(), mode:{known:false}};
-  assert.equal(schedule.decision({live}).due, true);
-  now += 10000; live.observedAt = new Date(now).toISOString();
-  assert.equal(schedule.decision({live}).boostRemainingMs, 50000);
+test('manual OCR outside a window remains callable without creating automatic work', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe();
+  f.schedule.started(); assert.equal(f.schedule.activeScan, true);
+  f.advance(1000); f.schedule.completed({status:'recognized'});
+  assert.equal(f.schedule.activeScan, false); assert.equal(f.decide().mode, 'idle');
+  assert.equal(f.decide({hasOffers:true, armed:true}).due, false);
 });
 
-test('deterministic five-second battle targets reduce short scans compared with the old fixed 2.5-second target', () => {
-  function simulate(adaptive, durationMs = 900000) {
-    const f = fixture(); let scanCount = 0, busyMs = 0, lastStart = -Infinity;
-    f.observe(); f.schedule.confirmed();
-    while (f.now < Date.parse('2026-10-25T06:00:00Z') + durationMs) {
-      const due = adaptive ? f.decide().due : f.now - lastStart >= 2500;
-      if (due) {
-        scanCount++; lastStart = f.now; f.schedule.started();
-        f.advance(1000); busyMs += 1000;
-        f.schedule.completed({status:'unavailable', code:'title-layout-incomplete'});
-      }
-      f.advance(1000);
+test('a fifteen minute battle has no automatic OCR outside opening and observed respawns', () => {
+  const f = fixture(); let count = 0;
+  const start = f.now;
+  while (f.now - start < 900000) {
+    if (f.decide().due) {
+      count++; f.schedule.started(); f.advance(100); f.schedule.completed({status:'unavailable', code:'title-layout-incomplete'});
     }
-    return {scanCount, busyMs};
+    f.advance(100);
   }
-  const previous = simulate(false), current = simulate(true);
-  assert.equal(previous.scanCount, 300);
-  assert.equal(current.scanCount, 180);
-  assert.ok(current.scanCount < previous.scanCount, JSON.stringify({previous, current}));
-  assert.equal(current.busyMs, current.scanCount * 1000);
-});
-
-test('long battle scans never overlap or restart faster than the old one-second post-scan loop', () => {
-  const f = fixture(); f.observe(); f.schedule.confirmed();
-  for (let pass = 0; pass < 3; pass++) {
-    const startedAt = f.now;
-    f.schedule.started(); f.advance(10000);
-    assert.equal(f.decide().due, false, 'a long task must remain the only active capture');
-    f.schedule.completed({status:'unavailable', code:'title-layout-incomplete'});
-    assert.equal(f.decide().nextInMs, 1000);
-    f.advance(999); assert.equal(f.decide().due, false);
-    f.advance(1); assert.equal(f.decide().due, true);
-    assert.equal(f.now - startedAt, 11000);
-  }
-});
-
-test('a level-window transition can shorten battle rest but retains its own minimum rest', () => {
-  const f = fixture(); f.observe(); f.schedule.confirmed();
-  f.schedule.started(); f.advance(10000); f.schedule.completed({status:'unavailable', code:'title-layout-incomplete'});
-  assert.equal(f.decide().nextInMs, 1000);
-  f.update({level:7});
-  assert.equal(f.decide().mode, 'boost');
-  assert.equal(f.decide().nextInMs, 250);
-  f.advance(249); assert.equal(f.decide().due, false);
-  f.advance(1); assert.equal(f.decide().due, true);
+  assert.equal(count, 120);
+  assert.equal(f.decide({hasOffers:true, armed:true}).due, false);
+  died(f); assert.equal(respawned(f).due, true);
 });

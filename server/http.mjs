@@ -36,7 +36,7 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
     let pathname;
     try { pathname = decodeURIComponent(new URL(request.url, `http://${expectedHost}`).pathname); }
     catch { return send(response, 400, {error:'Invalid URL.'}); }
-    const writeRequest = ['/api/ocr', '/api/session', '/api/session/confirm', '/api/sidebar/ocr', '/api/sidebar/selection', '/api/appearance', '/api/layout'].includes(pathname) && request.method === 'POST';
+    const writeRequest = ['/api/ocr', '/api/session', '/api/session/confirm', '/api/sidebar/ocr', '/api/sidebar/selection', '/api/sidebar/life', '/api/appearance', '/api/layout'].includes(pathname) && request.method === 'POST';
     if (!writeRequest && (!['GET', 'HEAD'].includes(request.method) || request.headers['transfer-encoding'] || Number(request.headers['content-length'] || 0) !== 0)) {
       request.resume();
       return send(response, 405, {error:'Only bodyless GET and HEAD requests are permitted.'});
@@ -77,11 +77,13 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
         }
         if (!sidebar) return send(response, 503, {error:'Shared session is unavailable.'});
         if (pathname === '/api/sidebar/selection' && typeof sidebar.observeSelectionEvidence !== 'function') return send(response, 503, {error:'Selection observation is unavailable.'});
+        if (pathname === '/api/sidebar/life' && typeof sidebar.observeScreenLife !== 'function') return send(response, 503, {error:'Life observation is unavailable.'});
         if (pathname === '/api/session' && (!Number.isSafeInteger(parsed.expectedRevision) || parsed.expectedRevision < 0 || !Number.isSafeInteger(parsed.expectedGameEpoch) || parsed.expectedGameEpoch < 0 || !(parsed.expectedGameId === null || typeof parsed.expectedGameId === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(parsed.expectedGameId)))) return send(response, 400, {error:'Current session guards are required.'});
         try {
           const value = pathname === '/api/session/confirm' ? await sidebar.confirmOffer(parsed)
             : pathname === '/api/session' ? await sidebar.setSession(parsed)
             : pathname === '/api/sidebar/selection' ? await sidebar.observeSelectionEvidence(parsed)
+            : pathname === '/api/sidebar/life' ? sidebar.observeScreenLife(parsed)
             : sidebar.setOcr(parsed);
           return send(response, 200, value);
         } catch (error) {
@@ -89,7 +91,7 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
           return send(response, conflict ? 409 : error instanceof SessionValidationError ? 400 : 500, {error:conflict ? 'The current assistant session has changed.' : error instanceof SessionValidationError ? 'Invalid assistant state.' : 'Assistant state could not be saved.', ...(conflict ? {session:sidebar.getSession()} : {})});
         }
       }
-      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.11.2', localOnly:true});
+      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.11.3', localOnly:true});
       if (pathname === '/api/live') return send(response, 200, collector.getSnapshot());
       if (pathname === '/api/sidebar') return sidebar ? send(response, 200, sidebar.getModel()) : send(response, 503, {error:'Sidebar is unavailable.'});
       if (pathname === '/api/session') return sidebar ? send(response, 200, sidebar.getSession()) : send(response, 503, {error:'Shared session is unavailable.'});

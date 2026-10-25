@@ -164,10 +164,12 @@ test('manual and background scan requests share one capture and ignore late resu
 test('automatic recognition defaults on, honors pauses, current game and interval without visible UI', async () => {
   let scans = 0;
   const {sidebar,update,advance} = setup({scanner:async () => {scans++;return recognized();}});
+  update({stage:'live', gameTime:1, life:{status:'detected',isDead:false}});
   await sidebar.pollOnce();
   assert.equal(scans,1);
   sidebar.setOcr({enabled:false});
   advance(7000);
+  update({observedAt:'2026-10-23T12:00:07.000Z'});
   await sidebar.pollOnce();
   assert.equal(scans,1);
   sidebar.setOcr({enabled:true});
@@ -176,6 +178,7 @@ test('automatic recognition defaults on, honors pauses, current game and interva
   await sidebar.pollOnce();
   assert.equal(scans,2);
   advance(7000);
+  update({observedAt:'2026-10-23T12:00:14.000Z'});
   await sidebar.pollOnce();
   assert.equal(scans,3);
   update({phase:'ChampSelect'});
