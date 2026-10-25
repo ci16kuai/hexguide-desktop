@@ -116,7 +116,7 @@ Tab 区域的目标模板有较高相似度，但全库排名存在近同形歧�
 
 [Riot Live Client Data API](https://developer.riotgames.com/docs/lol#game-client-api_live-client-data-api) 是局中本机接口，官方示例包含英雄属性、技能、符文等信息；已查看的文档没有给出可直接依赖的 Mayhem 已选海克斯字段。必须以获准的实际模式响应验证，不能把字段缺失当成零个海克斯。
 
-[Overwolf LoL augments 文档](https://dev.overwolf.com/ow-native/live-game-data-gep/supported-games/league-of-legends/#augments) 明确区分三候选 `augments` 与最后选中的 `picked_augment`。它是可继续验证的局中结果来源，但开发资格、国服自定义实际事件、精确名称映射和生命周期仍须分别实测，不能用文档样例替代成功接入。
+[Overwolf LoL augments 文档](https://dev.overwolf.com/ow-native/live-game-data-gep/supported-games/league-of-legends/#augments) 明确区分三候选 `augments` 与最后选中的 `picked_augment`。这是此前研究的另一种局中结果来源；用户已于 **2026-10-25** 决定停止推进 Overwolf 路线，以下相关资格和事件说明仅作为历史研究记录，不再列入后续实施计划。当前以独立 EXE 的本机客户端同步、候选 OCR 和玩家手动打开六格面板后的图标核对为主；历史文档示例不能视为成功接入或实际已选证据。
 
 LCU 局后战绩或公开 Match API 中的字段，即使能回溯选择，也不能自动视为局中实时接口。开源应用声称能记录局后选择同样不能直接证明其支持当前对局中的实时确认。
 
