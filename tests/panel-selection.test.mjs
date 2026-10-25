@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DEFAULT_PANEL_SELECTION_POLICY, validatePanelEvidence} from '../server/panel-selection.mjs';
+import {glyphProof} from './fixtures/panel-glyph-proof.mjs';
 
 const stamp = Date.parse('2026-10-25T01:00:00Z');
 const statistic = (sampleCount = 1000, winRate = .55, extra = {}) => ({
@@ -17,7 +18,7 @@ const slots = (matches = [[0]], start = 0) => Array.from({length:6},(_,index) =>
   return {slotIndex:index,state:indices.length > 1 ? 'ambiguous' : indices.length ? 'candidate' : 'empty',candidateIndices:[...indices]};
 });
 function proof(current = context(), matches = [[0]]) {
-  return {provider:'panel-icon',offerToken:current.offerToken,gameId:current.gameId,gameEpoch:current.gameEpoch,
+  return {version:2,provider:'panel-icon',glyphs:glyphProof(current.offers,current.owned),offerToken:current.offerToken,gameId:current.gameId,gameEpoch:current.gameEpoch,
     revision:current.revision,ids:[...current.ids],frames:[0,1,2].map(index => ({captureId:`capture-${index}`,
       capturedAt:stamp+1000+index*150,panelVisible:true,gameSurfaceVerified:true,selectionUiVisible:false,
       geometryKey:'client-1920x1080-hud-100',slots:slots(matches)}))};

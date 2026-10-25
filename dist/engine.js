@@ -73,6 +73,32 @@ const cleanText = value => String(value || '').replace(/<[^>]*>/g, ' ').replace(
 const rawText = augment => cleanText(augment?.description);
 const label = tag => TAG_LABELS[tag] || tag;
 
+/** Hard restrictions need an explicit lost action and an exclusively dependent
+ * payoff. Merely mentioning an ultimate (or a borrowed one) is not a dependency.
+ * Keep this shared by pair explanations and every recommendation entry point.
+ */
+export function getMechanicalConstraints(augment) {
+  const description = rawText(augment);
+  const noUltimate = /(?:无法|不能|不可)(?:施放|释放|使用)(?:你(?:的)?|自身的?|自己的?)?(?:终极技能|大招)|(?:cannot|can not|can't|unable to)\s+(?:cast|use)\s+(?:your\s+)?ultimate(?:\s+ability)?\b/i.test(description);
+  const sentences = description.split(/[。；;!！?？]|\.(?=\s|$)/u).map(value => value.trim()).filter(Boolean)
+    .filter(value => !/^[（(][^（）()]{0,80}(?:冷却时间|cooldown)[^（）()]{0,80}[）)]$/i.test(value));
+  const dependent = sentence => {
+    const trigger = sentence.split(/[，,（(]|时|后|会/u)[0];
+    const ownCast = /^(?:在|当|每当|每次)?\s*(?:你)?\s*(?:施放|释放|使用)(?:你(?:的)?|自身的?|自己的?)?(?:终极技能|大招)|^(?:(?:when|whenever|after|upon)\s+)?(?:you\s+)?(?:cast(?:ing)?|us(?:e|ing))\s+(?:your\s+)?ultimate(?:\s+ability)?\b/i.test(trigger);
+    // An alternate trigger still works when the holder's ultimate is disabled.
+    if (ownCast && !/(?:或|或者)|\bor\b/i.test(trigger)) return true;
+    if (/^(?:你的?|自身的?|自己的?)(?:终极技能|大招)(?:的)?伤害|^your ultimate(?: ability)?(?:'s)? damage/i.test(sentence)) return true;
+    if (/^(?:获得|增加|提升|提高)\s*(?:\d+(?:\.\d+)?\s*(?:点)?)?终极技能急速\s*$|^(?:gain|grant|increase)\s+\d+(?:\.\d+)?\s+ultimate(?: ability)? haste\s*$/i.test(sentence)) return true;
+    const clauses = sentence.split(/[，,]/u).map(value => value.trim()).filter(Boolean);
+    const last = clauses.at(-1) || '';
+    return /^(?:则会|则|会)?(?:返还|减少|降低|重置|刷新)(?:你的?|自身的?|自己的?)?(?:终极技能|大招)(?:的)?.{0,24}(?:冷却时间|冷却)$/u.test(last)
+      && clauses.slice(0, -1).every(value => /^(?:在|当|每当|每次|如果|若)/u.test(value));
+  };
+  const dependencies = sentences.map((sentence, index) => dependent(sentence)
+    || index > 0 && /^(?:当它|在其中|它|该效果|此效果)/u.test(sentence) && dependent(sentences[index - 1]));
+  return {noUltimate, requiresUltimate: dependencies.length > 0 && dependencies.every(Boolean)};
+}
+
 function normalizeTags(tags) {
   return unique(asArray(tags).flatMap(tag => {
     const value = String(tag);
@@ -109,7 +135,7 @@ export function getChampionTags(champion) {
 
 function mechanics(augment) {
   const text = rawText(augment);
-  if (!text) return {tags: [], outputs: [], triggers: [], constraints: []};
+  if (!text) return {tags: [], outputs: [], triggers: [], constraints: [], requirements: []};
   let tags = unique([...normalizeTags(augment?.tags), ...Object.keys(TAG_PATTERNS).filter(tag => TAG_PATTERNS[tag].test(text))]);
   // A trigger mentioning "gain a shield" is not itself a source of shields.
   const outputText = cleanText(augment?.description)
@@ -125,6 +151,10 @@ function mechanics(augment) {
   const outputs = [];
   const triggers = [];
   const constraints = [];
+  const requirements = [];
+  const ultimate = getMechanicalConstraints(augment);
+  if (ultimate.noUltimate) constraints.push('noUltimate');
+  if (ultimate.requiresUltimate) requirements.push('requiresUltimate');
   if (hasOutput(/(?:获得|提供|增加|提升|提高|获取|赋予).{0,45}(?:暴击几率|暴击率)(?!\s*(?:转换|转化|转)为)|(?:gain|grant|increase).{0,30}(?:critical strike chance|crit chance)/i)) outputs.push('critChance');
   if (hasOutput(/技能.{0,12}(?:可以|能够|能|可)(?:造成)?暴击|abilities can (?:crit|critically strike)|spells can (?:crit|critically strike)/i)) outputs.push('spellCrit');
   if (hasOutput(/(?:获得|增加|提升|提高).{0,18}(?:攻击速度|攻速)(?!\s*(?:转换|转化|转)为)|(?:gain|grant|increase).{0,25}attack speed(?!\s*(?:is |are )?convert)/i)) outputs.push('attackFrequency');
@@ -146,7 +176,7 @@ function mechanics(augment) {
   if (/(?:无法|不能|不可)(?:进行|使用)?(?:普攻|普通攻击|基本攻击)|cannot (?:use |perform )?(?:basic )?attack/i.test(text)) constraints.push('noAttacks');
   if (/(?:你|伤害)(?:将|的伤害)?(?:无法|不能|不可)暴击|(?:your damage|you) cannot (?:crit|critically strike)/i.test(text)) constraints.push('noCrit');
   if (tags.includes('health') && !outputs.includes('bonusHealth') && !triggers.includes('bonusHealth') && !/(?:你的|自身|自己)(?:最大生命|额外生命)|(?:受益于|基于|相当于)(?:你的)?(?:最大生命|额外生命)/.test(text)) tags = tags.filter(tag => tag !== 'health');
-  return {tags, outputs: unique(outputs), triggers: unique(triggers), constraints: unique(constraints)};
+  return {tags, outputs: unique(outputs), triggers: unique(triggers), constraints: unique(constraints), requirements};
 }
 
 /** Clones data and augments metadata without replacing authentic descriptions. */
@@ -157,7 +187,7 @@ export function enrichData(data) {
     augments: asArray(data?.augments).map(augment => {
       const inferred = mechanics(augment);
       const summary = augment.summary || (augment.description ? String(augment.description).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim() : '效果待补充，暂不判断具体适配。');
-      return {...augment, tags: inferred.tags, derivedTags: inferred.tags.filter(tag => !normalizeTags(augment.tags).includes(tag)), summary, effects: inferred.outputs, triggers: inferred.triggers, mechanismNote: '标签和推荐基于文字效果推导，未代表实测胜率。'};
+      return {...augment, tags: inferred.tags, derivedTags: inferred.tags.filter(tag => !normalizeTags(augment.tags).includes(tag)), summary, effects: inferred.outputs, triggers: inferred.triggers, constraints: inferred.constraints, requirements: inferred.requirements, mechanismNote: '标签和推荐基于文字效果推导，未代表实测胜率。'};
     }),
     combos: asArray(data?.combos)
   };
@@ -173,6 +203,7 @@ export function getSynergy(a, b, champion = null) {
   if (a.exclusiveGroup && a.exclusiveGroup === b.exclusiveGroup) return relationship('conflict', '来源数据将这两个海克斯标记为互斥。', '', [], sourceUrl, 'documented');
   const ma = mechanics(a), mb = mechanics(b);
   for (const [first, second, fm, sm] of [[a, b, ma, mb], [b, a, mb, ma]]) {
+    if (fm.constraints.includes('noUltimate') && sm.requirements.includes('requiresUltimate')) return relationship('conflict', `${first.name}禁止使用终极技能，而${second.name}的收益依赖终极技能，无法满足其核心条件。`, '禁止终极技能 → 终极技能相关收益无法触发', [], sourceUrl);
     if (fm.constraints.includes('noAttacks') && (sm.triggers.includes('attack') || sm.outputs.includes('attackFrequency'))) return relationship('conflict', `${first.name}禁止普攻，而${second.name}需要普攻或提高攻速，核心收益存在冲突。`, '禁止普攻 → 普攻相关收益受限', [], sourceUrl);
     if (fm.constraints.includes('noCrit') && (sm.tags.includes('crit'))) return relationship('conflict', `${first.name}禁止暴击，而${second.name}依赖暴击机制。`, '禁止暴击 → 暴击相关收益受限', ['需核对原始描述是否存在例外。'], sourceUrl);
   }

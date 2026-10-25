@@ -4,6 +4,8 @@
  * only bounded classifications; it never receives pixels, names or game input.
  * A shared glyph can suggest an augment, but cannot prove its actual identity.
  */
+import {panelGlyphIdentity} from './panel-glyph-identity.mjs';
+
 export const DEFAULT_PANEL_SELECTION_POLICY = Object.freeze({
   maxProofBytes:4096,
   maxOfferAgeMs:300000,
@@ -24,7 +26,7 @@ const token = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value)
 const gameId = value => value === null || typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(value);
 const rate = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 const identifier = (value, max = 100) => string(value,max) && /^[A-Za-z0-9_./:-]+$/.test(value);
-const validIds = ids => Array.isArray(ids) && ids.length === 3 && Array.from(ids).every(id => string(id)) && new Set(ids).size === 3;
+const validIds = ids => Array.isArray(ids) && ids.length === 3 && Array.from(ids).every(id => identifier(id)) && new Set(ids).size === 3;
 const same = (left, right) => left.length === right.length && left.every((value,index) => value === right[index]);
 const checkedInteger = (value, fallback, min, max) => integer(value,min,max) ? value : fallback;
 
@@ -51,12 +53,12 @@ function contextValid(context) {
     && Array.from(context.offers).every((offer,index) => record(offer) && offer.id === context.ids[index]
       && identifier(offer.iconKey,400) && offer.kind === 'augment')
     && Array.isArray(context.owned) && context.owned.length <= 6
-    && Array.from(context.owned).every(augment => record(augment) && string(augment.id) && identifier(augment.iconKey,400))
+    && Array.from(context.owned).every(augment => record(augment) && identifier(augment.id) && identifier(augment.iconKey,400))
     && new Set(context.owned.map(augment => augment.id)).size === context.owned.length
     && !context.ids.some(id => context.owned.some(augment => augment.id === id));
 }
 
-const slotStates = new Set(['empty','excluded','unmatched','candidate','ambiguous']);
+const slotStates = new Set(['empty','excluded','unmatched','owned','candidate','ambiguous']);
 function slotValid(slot, index) {
   if (!exact(slot,['slotIndex','state','candidateIndices']) || slot.slotIndex !== index
     || !slotStates.has(slot.state) || !Array.isArray(slot.candidateIndices)
@@ -76,8 +78,8 @@ function frameValid(frame) {
 }
 
 function proofValid(proof, policy) {
-  if (!exact(proof,['provider','offerToken','gameId','gameEpoch','revision','ids','frames'])
-    || proof.provider !== 'panel-icon' || !token(proof.offerToken) || !gameId(proof.gameId)
+  if (!exact(proof,['version','provider','offerToken','gameId','gameEpoch','revision','ids','glyphs','frames'])
+    || proof.version !== 2 || proof.provider !== 'panel-icon' || !token(proof.offerToken) || !gameId(proof.gameId)
     || !integer(proof.gameEpoch) || !integer(proof.revision) || !validIds(proof.ids)
     || !Array.isArray(proof.frames) || !integer(proof.frames.length,3,8)
     || !Array.from(proof.frames).every(frameValid)) return false;
@@ -116,6 +118,8 @@ export function validatePanelEvidence(proof, context, suppliedPolicy) {
   if (!proofValid(proof,policy)) return summary('rejected','panel-evidence-invalid',context);
   if (proof.gameId !== context.gameId || proof.gameEpoch !== context.gameEpoch || proof.revision !== context.revision
     || proof.offerToken !== context.offerToken || !same(proof.ids,context.ids)) return summary('rejected','panel-context-mismatch',context);
+  const glyphs = panelGlyphIdentity(proof.glyphs,context.offers,context.owned);
+  if (!glyphs) return summary('rejected','panel-glyph-identity-invalid',context);
   if (context.offeredAt > context.now + policy.futureToleranceMs || context.now - context.offeredAt > policy.maxOfferAgeMs)
     return summary('rejected','panel-offer-expired',context);
 
@@ -145,17 +149,17 @@ export function validatePanelEvidence(proof, context, suppliedPolicy) {
   const groups = new Map();
   for (const slot of frames[0].slots) {
     if (!slot.candidateIndices.length) continue;
-    const iconKey = context.offers[slot.candidateIndices[0]].iconKey;
-    const expected = context.offers.flatMap((offer,index) => offer.iconKey === iconKey ? [index] : []);
+    const identity = glyphs.offers[slot.candidateIndices[0]];
+    const expected = glyphs.offers.flatMap((glyph,index) => glyph === identity ? [index] : []);
     if (!same(slot.candidateIndices,expected)) return summary('pending','panel-collision-unverified',context);
-    const group = groups.get(iconKey) || {indices:expected,slots:[]};
-    group.slots.push(slot.slotIndex); groups.set(iconKey,group);
+    const group = groups.get(identity) || {indices:expected,slots:[]};
+    group.slots.push(slot.slotIndex); groups.set(identity,group);
   }
-  const newGroups = [...groups.entries()].filter(([iconKey,group]) =>
-    group.slots.length > context.owned.filter(augment => augment.iconKey === iconKey).length);
+  const ownedCount = identity => glyphs.owned.filter(glyph => glyph === identity).length;
+  const newGroups = [...groups.entries()].filter(([identity,group]) => group.slots.length > ownedCount(identity));
   if (!newGroups.length) return summary('pending','panel-no-new-match',context);
   if (newGroups.length > 1 || newGroups[0][1].slots.length
-    - context.owned.filter(augment => augment.iconKey === newGroups[0][0]).length > 1)
+    - ownedCount(newGroups[0][0]) > 1)
     return summary('pending','panel-multiple-new-groups',context);
 
   const [,group] = newGroups[0];

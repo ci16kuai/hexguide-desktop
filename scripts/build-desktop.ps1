@@ -77,6 +77,8 @@ $compilerArguments = @('/nologo', '/target:winexe', '/platform:x64', '/optimize+
     ('/win32icon:' + (Join-Path $projectRoot 'native\assets\hexguide.ico')))
 foreach ($reference in $references) { $compilerArguments += '/reference:' + $reference }
 $compilerArguments += Join-Path $projectRoot 'native\Program.cs'
+$compilerArguments += Join-Path $projectRoot 'native\ApplicationInstance.cs'
+$compilerArguments += Join-Path $projectRoot 'native\RemoteIconCache.cs'
 $compilerArguments += Join-Path $projectRoot 'native\SidebarShortcut.cs'
 $compilerArguments += Join-Path $projectRoot 'native\ScreenSelectionWatcher.cs'
 $compilerArguments += Join-Path $projectRoot 'native\CardTitleIdentity.cs'

@@ -268,7 +268,7 @@ export class RecommendationRepository {
   #entries = new Map(); #failures = new Map(); #referenceFailures = new Map(); #pending = new Map(); #static;
   #mayhemPending = new Set(); #referencePending = new Set();
   #ids = new Map(); #numbers = new Map(); #loadPromise; #writeTail = Promise.resolve();
-  #client; #referenceClient; #now; #patch; #file; #closed = false; #storageStatus;
+  #client; #referenceClient; #referenceClientPromise; #now; #patch; #file; #closed = false; #storageStatus;
   constructor({dataDirectory, statisticsSnapshot, champions = [], augments = [], client, referenceClient, now = Date.now, patch = '16.21'} = {}) {
     if (typeof patch !== 'string' || !PATCH.test(patch) || typeof now !== 'function' || client != null && typeof client.load !== 'function'
       || referenceClient != null && typeof referenceClient.load !== 'function'
@@ -404,7 +404,11 @@ export class RecommendationRepository {
     try {
       // Loading this module is deferred too: load()/get() never start network
       // work, and Mayhem stays usable independently of the reference provider.
-      const client = this.#referenceClient ?? (await import('./reference-build-source.mjs')).createReferenceBuildSource({now:this.#now});
+      // Retain one lazy provider per repository: its blocked-response cooldown
+      // applies across heroes and refreshes. Store the initialization promise
+      // before awaiting it so simultaneous heroes cannot create separate clients.
+      const client = this.#referenceClient ?? await (this.#referenceClientPromise ??=
+        import('./reference-build-source.mjs').then(module => module.createReferenceBuildSource({now:this.#now})));
       const raw = await client.load({championId:id, championSlug:id.toLowerCase(), patch:this.#patch});
       if (raw == null) throw Object.assign(new Error('Reference data unavailable.'), {code:'unavailable'});
       const time = this.#time();

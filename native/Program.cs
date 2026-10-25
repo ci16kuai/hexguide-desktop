@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.12.0.0")]
-[assembly: AssemblyFileVersion("1.12.0.0")]
-[assembly: AssemblyInformationalVersion("1.12.0")]
+[assembly: AssemblyVersion("1.12.1.0")]
+[assembly: AssemblyFileVersion("1.12.1.0")]
+[assembly: AssemblyInformationalVersion("1.12.1")]
 
 namespace HexGuide.Desktop
 {
@@ -31,6 +31,22 @@ namespace HexGuide.Desktop
         [STAThread]
         private static void Main(string[] args)
         {
+            // Both modes are isolated diagnostics handled before any app UI,
+            // backend, hotkey, game sampling or installed settings are opened.
+            if (args.Length == 2 && (args[0] == "--instance-self-test" || args[0] == "--instance-lock-probe"))
+            {
+                Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
+                try
+                {
+                    if (args[0] == "--instance-self-test")
+                        Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
+                            { "checks", ApplicationInstance.ValidateFixtures(args[1]) }, { "mode", "offline-instance-no-ui" }, { "liveGameVerified", false }
+                        }));
+                    else using (var lease = ApplicationInstance.TryAcquire(args[1])) Console.WriteLine(lease == null ? "already-running" : "acquired");
+                }
+                catch (Exception error) { Console.Error.WriteLine(error.Message); Environment.ExitCode = 1; }
+                return;
+            }
             if (args.Length == 1 && args[0] == "--selection-title-observe")
             {
                 Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
@@ -49,9 +65,10 @@ namespace HexGuide.Desktop
                 {
                     int ownedChecks = Convert.ToInt32(OwnedAugmentVerificationFixtures.Run()["checks"]);
                     int checks = ScreenSelectionWatcher.ValidateFixtures() + MainWindow.ValidateSelectionDiagnosticFixtures() + ownedChecks
-                        + ScreenLifeObserver.ValidateFixtures() + ScreenLifeController.ValidateFixtures() + OwnedPanelWatcher.ValidateFixtures();
+                        + ScreenLifeObserver.ValidateFixtures() + ScreenLifeController.ValidateFixtures() + OwnedPanelWatcher.ValidateFixtures()
+                        + RemoteIconCache.ValidateFixtures();
                     Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                        { "version", "1.12.0" }, { "checks", checks },
+                        { "version", "1.12.1" }, { "checks", checks },
                         { "titleProbeVersion", 1 },
                         { "nativeDiagnosticMaxBytes", ScreenSelectionWatcher.LargestDiagnosticFixtureBytes },
                         { "mode", "offline-no-ui" }, { "liveGameVerified", false }
@@ -83,7 +100,21 @@ namespace HexGuide.Desktop
                 else if (args[i] == "--background") background = true;
                 else if (args[i] == "--sidebar-preview") { preview = true; background = true; }
             }
-            try { Application.Run(new MainWindow(dataDirectory, background, preview)); }
+            try
+            {
+                using (var instance = ApplicationInstance.TryAcquire(dataDirectory))
+                {
+                    if (instance == null)
+                    {
+                        if (!ApplicationInstance.NotifyExisting(dataDirectory))
+                            MessageBox.Show("助手已在后台运行。请从系统托盘打开已有窗口。", "海克斯指南");
+                        return;
+                    }
+                    var main = new MainWindow(dataDirectory, background, preview);
+                    instance.ActivationRequested += main.RestoreExistingInstance;
+                    Application.Run(main);
+                }
+            }
             catch (Exception error)
             {
                 MessageBox.Show("无法打开海克斯指南。请将压缩包完整解压后再运行。\r\n" + error.Message, "海克斯指南", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -210,7 +241,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.12.0 · 我的这一局";
+            Text = "海克斯指南 1.12.1 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -362,6 +393,8 @@ namespace HexGuide.Desktop
                 tray.ShowBalloonTip(2500, "助手继续在后台运行", "右下角托盘可打开助手、返回游戏或完全退出。Alt + Shift + H 切换游戏侧栏。", ToolTipIcon.Info);
             }
         }
+
+        internal void RestoreExistingInstance() { if (!closing && !IsDisposed) ShowMain(); }
 
         private void ShowMain()
         {
@@ -628,7 +661,7 @@ namespace HexGuide.Desktop
                 json = SelectionDiagnosticsJson(selectionWatcher, sidebar.Model, now);
                 var panelSnapshot = panelWatcher.Diagnostics();
                 panelSnapshot["schemaVersion"] = 1;
-                panelSnapshot["appVersion"] = "1.12.0";
+                panelSnapshot["appVersion"] = "1.12.1";
                 panelSnapshot["updatedAtUtc"] = now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);
                 panelSnapshot["backendReason"] = PanelReason(sidebar.Model);
                 panelJson = new JavaScriptSerializer().Serialize(panelSnapshot);
@@ -665,7 +698,7 @@ namespace HexGuide.Desktop
         internal static string SelectionDiagnosticsJson(ScreenSelectionWatcher watcher, Dictionary<string, object> model, DateTime now)
         {
             var snapshot = new Dictionary<string, object> {
-                { "version", "1.12.0" }, { "schemaVersion", 2 },
+                { "version", "1.12.1" }, { "schemaVersion", 2 },
                 { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
                 { "native", watcher.Diagnostics() },
                 { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
@@ -703,7 +736,7 @@ namespace HexGuide.Desktop
                 string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
                 var snapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
                 if (snapshot.Count != 5 || Encoding.UTF8.GetByteCount(json) > 4096
-                    || ModelValue.Text(snapshot, "version") != "1.12.0" || ModelValue.Text(snapshot, "schemaVersion") != "2")
+                    || ModelValue.Text(snapshot, "version") != "1.12.1" || ModelValue.Text(snapshot, "schemaVersion") != "2")
                     throw new InvalidOperationException("The persisted selection diagnostic snapshot exceeded its schema or byte bound.");
                 if (json.Contains("PRIVATE-MARKER") || json.Contains("\"ids\"") || json.Contains("windowHandle")
                     || json.Contains("\"signature\"") || json.Contains("\"signatures\"") || json.Contains("\"delta\""))
@@ -1070,9 +1103,8 @@ namespace HexGuide.Desktop
         private readonly Dictionary<Rectangle, Dictionary<string, object>> augmentTargets = new Dictionary<Rectangle, Dictionary<string, object>>();
         private readonly ToolTip augmentHint = new ToolTip { ShowAlways = true, InitialDelay = 450, ReshowDelay = 100, AutoPopDelay = 5000 };
         private string activeAugmentHint = "";
-        private readonly Dictionary<string, Image> buildIcons = new Dictionary<string, Image>();
+        private readonly RemoteIconCache buildIcons = new RemoteIconCache();
         private readonly Dictionary<string, Image> augmentIcons = new Dictionary<string, Image>();
-        private readonly HashSet<string> requestedIcons = new HashSet<string>();
         private Rectangle buildToggle;
         private bool buildExpanded, remoteIcons = true;
         private bool initialPlanHandled;
@@ -1162,6 +1194,7 @@ namespace HexGuide.Desktop
 
         internal SidebarWindow()
         {
+            buildIcons.Evicted += RemoveAugmentVariants;
             Text = "海克斯指南 · 游戏侧栏";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
@@ -1458,6 +1491,15 @@ namespace HexGuide.Desktop
             }
             return colored;
         }
+        private void RemoveAugmentVariants(string url)
+        {
+            foreach (string rarity in new[] { "silver", "gold", "prismatic" })
+            {
+                string key = url + "\n" + rarity;
+                Image image;
+                if (augmentIcons.TryGetValue(key, out image)) { augmentIcons.Remove(key); image.Dispose(); }
+            }
+        }
         private static Bitmap CreateRarityIcon(Image original, string rarity)
         {
             var rectangle = new Rectangle(0, 0, original.Width, original.Height);
@@ -1557,7 +1599,7 @@ namespace HexGuide.Desktop
             Uri uri;
             if (!remoteIcons || string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out uri)
                 || uri.Scheme != "https" || (uri.Host != "ddragon.leagueoflegends.com" && uri.Host != "raw.communitydragon.org")
-                || requestedIcons.Count >= 96 || !requestedIcons.Add(url)) return;
+                || !buildIcons.TryBegin(url)) return;
             try
             {
                 byte[] bytes = await Task.Run(delegate
@@ -1574,12 +1616,16 @@ namespace HexGuide.Desktop
                         return buffer.ToArray();
                     }
                 });
-                if (IsDisposed || Disposing) return;
+                if (IsDisposed || Disposing) { buildIcons.Complete(url, null); return; }
                 using (var stream = new MemoryStream(bytes))
-                using (var image = Image.FromStream(stream)) buildIcons[url] = new Bitmap(image);
+                using (var image = Image.FromStream(stream))
+                {
+                    if (image.Width < 12 || image.Height < 12 || image.Width > 1024 || image.Height > 1024) throw new IOException("Invalid icon dimensions.");
+                    buildIcons.Complete(url, new Bitmap(image));
+                }
                 Invalidate();
             }
-            catch { /* Missing icons do not affect selection or live recommendations. */ }
+            catch { buildIcons.Complete(url, null); /* Bounded retry keeps temporary failures recoverable. */ }
         }
         private void DrawHero(Graphics g, int x, int y, int width)
         {
@@ -1773,7 +1819,7 @@ namespace HexGuide.Desktop
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); foreach (Image image in augmentIcons.Values) image.Dispose(); augmentIcons.Clear(); foreach (Image image in buildIcons.Values) image.Dispose(); }
+            if (disposing) { buildIcons.Dispose(); augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); foreach (Image image in augmentIcons.Values) image.Dispose(); augmentIcons.Clear(); }
             base.Dispose(disposing);
         }
         internal static string RunSelfTest(string previewPath)
@@ -2027,6 +2073,18 @@ namespace HexGuide.Desktop
                 Color silverCenter = silver.GetPixel(32, 32), goldCenter = gold.GetPixel(32, 32);
                 check(silverCenter.B >= silverCenter.R && goldCenter.R > goldCenter.G && goldCenter.G > goldCenter.B, "Shared gold source did not become distinct silver and gold art.");
                 check(prismatic.GetPixel(20, 20).ToArgb() != silver.GetPixel(20, 20).ToArgb() && prismatic.GetPixel(45, 45).ToArgb() != gold.GetPixel(45, 45).ToArgb(), "Prismatic art did not receive its own gradient palette.");
+                // Exercise the actual sidebar eviction hook, including tinted
+                // resources, rather than only the cache's isolated fixtures.
+                for (int index = 0; index < 96; index++) window.buildIcons["fixture://lru-" + index] = new Bitmap(12, 12);
+                check(window.buildIcons.Count == 96 && window.GetAugmentIcon(sharedUrl, "silver") == null, "Sidebar did not evict old source art at the resident limit.");
+                check(!window.augmentIcons.ContainsKey(sharedUrl + "\nsilver") && !window.augmentIcons.ContainsKey(sharedUrl + "\ngold")
+                    && !window.augmentIcons.ContainsKey(sharedUrl + "\nprismatic"), "Sidebar retained tinted variants after source eviction.");
+                bool tintDisposed = false;
+                try { silver.GetPixel(0, 0); } catch (ArgumentException) { tintDisposed = true; }
+                check(tintDisposed, "Evicted sidebar tinted art was not disposed.");
+                check(window.buildIcons.TryBegin("fixture://after-capacity"), "Sidebar stopped admitting new requests after 96 icons.");
+                window.buildIcons.Complete("fixture://after-capacity", new Bitmap(12, 12));
+                check(window.buildIcons.Count == 96 && window.buildIcons.PendingCount == 0, "Sidebar completion failed to release a request or preserve the cache limit.");
             }
             return checks;
         }

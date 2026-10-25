@@ -1,0 +1,38 @@
+{
+  "source": "CommunityDragon catalog 16.21",
+  "capturedDate": "2026-10-25",
+  "purpose": "Offline normalized-glyph regression; no live HUD claim",
+  "algorithm": "normalized28-sha256-v1",
+  "assets": [
+    {
+      "id": "its_killing_time",
+      "glyph": "cb5363e88d0d5fff4d6eecf23a5912092b2acf6196041c1fbacbe9d894031d6c",
+      "url": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/itskillingtime_small.png",
+      "sha256": "5598c00a61262d459b8f2a78faf8a4db430a018ec54b359b4359ec2ab65f16dd"
+    },
+    {
+      "id": "final_form",
+      "glyph": "cb5363e88d0d5fff4d6eecf23a5912092b2acf6196041c1fbacbe9d894031d6c",
+      "url": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/finalform_small.png",
+      "sha256": "e76ac68869eebe7256f9733ab9d4d9dc02ae07c50da7344a3587a75837a52388"
+    },
+    {
+      "id": "surge_field",
+      "glyph": "cb5363e88d0d5fff4d6eecf23a5912092b2acf6196041c1fbacbe9d894031d6c",
+      "url": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/surgefield_small.png",
+      "sha256": "e76ac68869eebe7256f9733ab9d4d9dc02ae07c50da7344a3587a75837a52388"
+    },
+    {
+      "id": "goliath",
+      "glyph": "cd1d2074fb6d414694ca70c71320ca89070a948114cf3416ba381e71f668771a",
+      "url": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/goliath_small.png",
+      "sha256": "64d019aa7ae8f9d168d7ec1d187baeb86d0474b48037e1ed3e1302c701a70600"
+    },
+    {
+      "id": "eureka",
+      "glyph": "98e41ce06de36a52caf21cdfb3bf670474f4dbc70fac733c412c492a3ae41005",
+      "url": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/eureka_small.png",
+      "sha256": "51ea2fe84c3ba780d0c514c82fed692936f6f7cbdbf119d19f42e05ec74ff2cf"
+    }
+  ]
+}

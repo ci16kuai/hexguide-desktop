@@ -5,6 +5,8 @@
  * grouping remains transitive; it is a product preference, not a significance test.
  * Policy overrides contain JSON values only. Nothing here fetches or persists data.
  */
+import {getMechanicalConstraints} from './engine.js';
+
 const CATEGORIES = ['mechanical', 'scaling-percent', 'fixed-stat', 'unknown'];
 const NUMERIC_KINDS = ['omnivamp', 'lifeSteal', 'percentPenetration', 'crit',
   'percentAttackDamage', 'highFlatAttackDamage', 'flatPenetration', 'attackDamage', 'health', 'shield'];
@@ -166,6 +168,12 @@ function eligible(row, champion, owned, config, features) {
   if (owned.some(entry => String(record(entry) ? entry.id : entry) === id)) return false;
   if (list(config.hero.excludedAugmentIds).map(String).includes(id)) return false;
   if (features.numericKinds.some(kind => list(config.hero.excludedNumericKinds).includes(kind))) return false;
+  const candidateConstraints = getMechanicalConstraints(augment);
+  if (owned.filter(record).some(entry => {
+    const previous = getMechanicalConstraints(entry);
+    return previous.noUltimate && candidateConstraints.requiresUltimate
+      || candidateConstraints.noUltimate && previous.requiresUltimate;
+  })) return false;
   const description = text(augment.description);
   if (noMana(champion, config.hero) && (augment.requiresMana === true || manaOnly(description))) return false;
   const ownedText = owned.filter(record).map(entry => text(entry.description)).join('\n');

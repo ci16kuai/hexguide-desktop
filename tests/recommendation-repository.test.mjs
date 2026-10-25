@@ -353,3 +353,55 @@ test('the default Mayhem provider stays lazy and refreshes its own memory cache 
   assert.equal((await repo.ensure('Ahri')).mayhemStatus,'ready');assert.equal(calls,6);
   await repo.close();
 });
+
+test('the default reference provider retains blocked cooldowns across retries and champions until 30 minutes', async t => {
+  const original=globalThis.fetch;
+  t.after(()=>{globalThis.fetch=original;});
+  for (const status of [401,403,429]) {
+    let clock=TIME;const calls=[];
+    globalThis.fetch=async url=>{calls.push({url:String(url),at:clock});return {ok:false,status};};
+    const repo=repository({now:()=>clock,referenceClient:undefined,
+      client:{async load(){throw Object.assign(new Error('Offline Mayhem fixture'),{code:'unavailable'});}}});
+    try {
+      await repo.load();repo.get('Ahri');await repo.ensure('unknown');
+      assert.equal(calls.length,0,'construct/load/get/unknown remain lazy');
+      await repo.ensure('Ahri');assert.equal(calls.length,1);
+      clock+=60_001;
+      await repo.ensure('Ahri');await repo.ensure('Jinx');
+      assert.equal(calls.length,1,`${status}: repository retry and another hero must share the provider cooldown`);
+      clock=TIME+30*60_000-1;
+      await repo.ensure('Annie');assert.equal(calls.length,1,'29:59.999 is still blocked');
+      clock++;
+      await repo.ensure('Ashe');assert.equal(calls.length,2,'the provider cooldown expires at exactly 30 minutes');
+      assert.equal(calls[1].at-TIME,30*60_000);
+      assert.ok(calls.every(call=>call.url.startsWith('https://op.gg/lol/modes/aram/')),
+        'blocked responses must not fall through to the ranked source');
+
+      const isolated=repository({now:()=>clock,referenceClient:undefined,
+        client:{async load(){return null;}}});
+      try {
+        await isolated.ensure('Ahri');assert.equal(calls.length,3,'another repository has its own source state');
+        clock+=60_001;
+        await repo.ensure('Jinx');assert.equal(calls.length,3,'the second repository cannot clear the first cooldown');
+      } finally {await isolated.close();}
+    } finally {await repo.close();}
+  }
+});
+
+test('simultaneous champion refreshes share lazy reference-provider initialization', async t => {
+  const original=globalThis.fetch;let clock=TIME;let calls=0;
+  const gate=deferred();
+  globalThis.fetch=async ()=>{calls++;await gate.promise;return {ok:false,status:429};};
+  t.after(()=>{globalThis.fetch=original;});
+  const repo=repository({now:()=>clock,referenceClient:undefined,client:{async load(){return null;}}});
+  try {
+    const pending=Promise.all([repo.ensure('Ahri'),repo.ensure('Jinx')]);
+    await new Promise(resolve=>setImmediate(resolve));
+    gate.resolve();await pending;
+    const initialCalls=calls;
+    assert.ok(initialCalls>0 && initialCalls<=2,'only requests already in flight can precede the first blocked response');
+    clock+=60_001;
+    await repo.ensure('Ahri');await repo.ensure('Jinx');await repo.ensure('Ashe');
+    assert.equal(calls,initialCalls,'neither concurrent initializer may discard the shared blocked state');
+  } finally {gate.resolve();await repo.close();}
+});

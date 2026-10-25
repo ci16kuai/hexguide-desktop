@@ -6,6 +6,7 @@ import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {BackgroundSidebar} from '../server/sidebar.mjs';
 import {createLocalServer} from '../server/http.mjs';
+import {glyphProof} from './fixtures/panel-glyph-proof.mjs';
 
 const data = JSON.parse(await readFile(new URL('../dist/data.json',import.meta.url),'utf8'));
 const itemsCatalog = JSON.parse(await readFile(new URL('../dist/items.json',import.meta.url),'utf8'));
@@ -71,7 +72,7 @@ async function harness(t,{candidateIds = ids,recommendationRepository} = {}) {
 
 function proof(h,matching = [0]) {
   const scope = h.scope;
-  return {provider:'panel-icon',offerToken:scope.offerToken,gameId:scope.gameId,gameEpoch:scope.gameEpoch,
+  return {version:2,provider:'panel-icon',glyphs:glyphProof(scope.offers,scope.owned),offerToken:scope.offerToken,gameId:scope.gameId,gameEpoch:scope.gameEpoch,
     revision:scope.revision,ids:[...scope.ids],frames:[0,1,2].map(index => ({captureId:`panel-http-${index}`,
       capturedAt:h.now()-300+index*150,panelVisible:true,gameSurfaceVerified:true,selectionUiVisible:false,
       geometryKey:'client-1920x1080-hud-100',slots:Array.from({length:6},(_,slotIndex) => ({slotIndex,
@@ -134,7 +135,10 @@ test('malformed JSON, extra private data and invalid panel classifications retur
   }
   for (const change of [value => {value.provider = 'overwolf';},value => {value.rawText = 'private';},
     value => {value.frames[0].image = 'private-pixels';},value => {value.frames[0].slots.pop();},
-    value => {value.frames[0].slots[0].candidateIndices = [99];}]) {
+    value => {value.frames[0].slots[0].candidateIndices = [99];},
+    value => {value.glyphs.templates.reverse();},value => {value.glyphs.algorithm = 'different';},
+    value => {value.glyphs.templates[0][0] = '0'.repeat(64);},
+    value => {delete value.version; delete value.glyphs;}]) {
     const value = proof(h);change(value);
     const response = await h.post('/api/sidebar/panel',value);
     assert.equal(response.status,400);

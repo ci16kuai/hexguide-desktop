@@ -5,6 +5,7 @@ import {mkdir, mkdtemp, readFile, rm} from 'node:fs/promises';
 import path from 'node:path';
 import {BackgroundSidebar, SessionConflictError, SessionValidationError} from '../server/sidebar.mjs';
 import {RecommendationRepository} from '../server/recommendation-repository.mjs';
+import {glyphProof} from './fixtures/panel-glyph-proof.mjs';
 
 const data = JSON.parse(await readFile(new URL('../dist/data.json', import.meta.url), 'utf8'));
 const itemsCatalog = JSON.parse(await readFile(new URL('../dist/items.json', import.meta.url), 'utf8'));
@@ -69,7 +70,7 @@ test('stale, future and manually invalidated OCR cannot establish a panel result
 });
 
 function proof(h, scope, matching = [0]) {
-  return {provider:'panel-icon',offerToken:scope.offerToken,gameId:scope.gameId,gameEpoch:scope.gameEpoch,
+  return {version:2,glyphs:glyphProof(scope.offers,scope.owned),provider:'panel-icon',offerToken:scope.offerToken,gameId:scope.gameId,gameEpoch:scope.gameEpoch,
     revision:scope.revision,ids:[...scope.ids],frames:[0,1,2].map(index => ({captureId:`isolated-panel-${index}`,
       capturedAt:h.now()-300+index*150,panelVisible:true,gameSurfaceVerified:true,selectionUiVisible:false,
       geometryKey:'client-1920x1080-hud-100',slots:Array.from({length:6},(_,slotIndex) => ({slotIndex,

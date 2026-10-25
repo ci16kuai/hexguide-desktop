@@ -67,10 +67,14 @@ export class OcrScanSchedule {
     this.policy = normalizePolicy(policy);
     this.clock = 0;
     this.epoch = null;
+    // Capture/evidence ownership is narrower than a game and independent of
+    // the fast/follow-up pacing window. Death revokes it before respawn exists.
+    this.lifecycle = 0;
+    this.lifecycleStartedAt = 0;
     this.windowSequence = 0;
     this.activeScan = false;
     this.activeEpoch = null;
-    this.activeWindowId = null;
+    this.activeLifecycle = null;
     this.resetTiming();
   }
 
@@ -86,6 +90,7 @@ export class OcrScanSchedule {
     this.enteredLive = false;
     this.highestGameTime = null;
     this.lastLife = null;
+    this.otherModeObserved = false;
     this.windowUntil = 0;
     this.awaitingConfirmation = false;
     this.windowId = null;
@@ -121,12 +126,18 @@ export class OcrScanSchedule {
   }
 
   beginWindow(trigger, until) {
+    this.advanceLifecycle();
     this.windowSequence = this.windowSequence < Number.MAX_SAFE_INTEGER ? this.windowSequence + 1 : 1;
     this.windowId = this.windowSequence;
     this.trigger = trigger;
     this.windowUntil = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(until)));
     this.awaitingConfirmation = true;
     this.resetPacing();
+  }
+
+  advanceLifecycle() {
+    this.lifecycle = this.lifecycle < Number.MAX_SAFE_INTEGER ? this.lifecycle + 1 : 1;
+    this.lifecycleStartedAt = this.time();
   }
 
   observe({live, gameEpoch} = {}) {
@@ -136,6 +147,7 @@ export class OcrScanSchedule {
       // from a previous game must not reset the current window or life edge.
       if (this.epoch !== null && gameEpoch < this.epoch) return;
       this.epoch = gameEpoch;
+      this.advanceLifecycle();
       this.resetTiming();
       // An old capture stays busy until completed(), but cannot poison this
       // epoch's pacing or retry state when its result finally returns.
@@ -143,8 +155,20 @@ export class OcrScanSchedule {
     const observed = this.snapshotTime(live, now);
     if (observed === null || this.lastObservedAt !== null && observed < this.lastObservedAt) return;
     const newSnapshot = this.lastObservedAt === null || observed > this.lastObservedAt;
+    if (live?.mode?.known === true && live.mode.isMayhem !== true) {
+      if (!this.otherModeObserved) {
+        this.advanceLifecycle();
+        this.windowUntil = 0;
+        this.awaitingConfirmation = false;
+        this.lastLife = null;
+        this.resetPacing();
+      }
+      this.otherModeObserved = true;
+      this.lastObservedAt = observed;
+      return;
+    }
+    this.otherModeObserved = false;
     if (live?.stage === 'loading') {
-      if (live.mode?.known === true && live.mode.isMayhem !== true) return;
       if (newSnapshot) {
         this.lastObservedAt = observed;
         if (!this.enteredLive) this.loadingObserved = true;
@@ -175,6 +199,7 @@ export class OcrScanSchedule {
       // receives a fresh ID/deadline, so late pre-death OCR cannot be applied.
       this.windowUntil = 0;
       this.awaitingConfirmation = false;
+      if (previous?.isDead !== true) this.advanceLifecycle();
       return;
     }
     if (previous?.isDead === true && life.observedAt - previous.observedAt <= this.policy.snapshotFreshnessMs) {
@@ -218,7 +243,7 @@ export class OcrScanSchedule {
     if (this.activeScan) return;
     this.activeScan = true;
     this.activeEpoch = this.epoch;
-    this.activeWindowId = this.windowId;
+    this.activeLifecycle = this.lifecycle;
     this.lastStartedAt = this.time();
   }
 
@@ -229,10 +254,10 @@ export class OcrScanSchedule {
 
   completed({status, code} = {}) {
     const now = this.time();
-    const current = this.activeScan && this.activeEpoch === this.epoch && this.activeWindowId === this.windowId;
+    const current = this.activeScan && this.activeEpoch === this.epoch && this.activeLifecycle === this.lifecycle;
     this.activeScan = false;
     this.activeEpoch = null;
-    this.activeWindowId = null;
+    this.activeLifecycle = null;
     if (!current || !this.awaitingConfirmation) return;
     this.lastCompletedAt = now;
     // Empty battle frames and a busy response are expected, not engine faults.

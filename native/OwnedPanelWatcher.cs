@@ -8,6 +8,8 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -57,9 +59,11 @@ namespace HexGuide.Desktop
             context = next;
             needed.Clear();
             foreach (string url in next.IconUrls) needed.Add(url);
+            foreach (string url in next.OwnedUrls) needed.Add(url);
             foreach (string url in next.ExcludedUrls) needed.Add(url);
             TrimCache();
             foreach (string url in next.IconUrls) QueueTemplate(url);
+            foreach (string url in next.OwnedUrls) QueueTemplate(url);
             foreach (string url in next.ExcludedUrls) QueueTemplate(url);
             timer.Start();
         }
@@ -182,12 +186,15 @@ namespace HexGuide.Desktop
             var expected = context;
             var shapes = new OwnedPanelShape[3];
             for (int index = 0; index < 3; index++)
-                if (!templates.TryGetValue(expected.IconUrls[index], out shapes[index])) { stability.Reset(); SetStatus("loading-icons"); return; }
+                if (!templates.TryGetValue(expected.IconUrls[index], out shapes[index])) { QueueTemplate(expected.IconUrls[index]); stability.Reset(); SetStatus("loading-icons"); return; }
+            var owned = new OwnedPanelShape[expected.OwnedUrls.Length];
+            for (int index = 0; index < owned.Length; index++)
+                if (!templates.TryGetValue(expected.OwnedUrls[index], out owned[index])) { QueueTemplate(expected.OwnedUrls[index]); stability.Reset(); SetStatus("loading-icons"); return; }
             var excluded = new List<OwnedPanelShape>();
             foreach (string url in expected.ExcludedUrls)
             {
                 OwnedPanelShape shape;
-                if (!templates.TryGetValue(url, out shape)) { stability.Reset(); SetStatus("loading-icons"); return; }
+                if (!templates.TryGetValue(url, out shape)) { QueueTemplate(url); stability.Reset(); SetStatus("loading-icons"); return; }
                 excluded.Add(shape);
             }
             long stamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -202,7 +209,7 @@ namespace HexGuide.Desktop
                 OwnedPanelLayout layout;
                 if (!OwnedPanelMatcher.TryLocate(bitmap, expected.Reference.ClientBounds.Size, out layout))
                 { stability.Reset(); SetStatus("waiting-panel"); return; }
-                OwnedPanelSlotMatch[] slots = OwnedPanelMatcher.ReadSlots(bitmap, layout, shapes, excluded.ToArray());
+                OwnedPanelSlotMatch[] slots = OwnedPanelMatcher.ReadSlots(bitmap, layout, shapes, owned, excluded.ToArray());
                 bool any = false;
                 foreach (var slot in slots) if (slot.Indices.Length > 0) any = true;
                 if (!any) { stability.Reset(); SetStatus("waiting-panel"); return; }
@@ -212,10 +219,15 @@ namespace HexGuide.Desktop
                 if (!stability.Observe(expected.Identity, frame)) { SetStatus("pending"); return; }
                 if (context != expected || disposed) return;
                 var proof = new Dictionary<string, object> {
-                    { "provider", "panel-icon" }, { "offerToken", expected.Token }, { "gameId", expected.GameId },
+                    { "version", 2 }, { "provider", "panel-icon" }, { "offerToken", expected.Token }, { "gameId", expected.GameId },
                     { "gameEpoch", expected.Epoch }, { "revision", expected.Revision }, { "ids", expected.Ids },
+                    { "glyphs", OwnedPanelGlyphIdentity.Proof(expected, shapes, owned) },
                     { "frames", stability.Proof() }
                 };
+                // The HTTP boundary has the same hard limit. Never emit an
+                // oversized observation, including maximum owned/template IDs.
+                if (Encoding.UTF8.GetByteCount(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(proof)) > 4096)
+                { stability.Reset(); SetStatus("proof-too-large"); return; }
                 publishing = true; emittedIdentity = expected.Identity; SetStatus("observed");
                 var handler = EvidenceReady;
                 if (handler != null) handler(proof); else SubmissionCompleted(false);
@@ -323,7 +335,7 @@ namespace HexGuide.Desktop
         internal string Token, Identity, GeometryKey;
         internal object GameId;
         internal long Epoch, Revision;
-        internal string[] Ids, IconUrls, ExcludedUrls;
+        internal string[] Ids, IconUrls, OwnedIds, OwnedUrls, ExcludedUrls;
         internal ScreenSelectionObservation Reference;
 
         internal static bool TryRead(Dictionary<string, object> value, out OwnedPanelContext result)
@@ -354,6 +366,17 @@ namespace HexGuide.Desktop
                 Uri uri; urls[index] = ModelValue.Text(entry, "icon");
                 if (ModelValue.Text(entry, "id") != reference.Ids[index] || !OwnedPanelWatcher.TrustedIcon(urls[index], out uri)) return false;
             }
+            var ownedIds = new List<string>(); var ownedUrls = new List<string>();
+            var seen = new HashSet<string>(reference.Ids, StringComparer.Ordinal);
+            foreach (object raw in ModelValue.Array(value, "owned"))
+            {
+                if (ownedIds.Count >= 6) return false;
+                var entry = raw as Dictionary<string, object>;
+                string id = ModelValue.Text(entry, "id"), url = ModelValue.Text(entry, "icon"); Uri uri;
+                if (id.Length == 0 || id.Length > 100 || id.IndexOf('\0') >= 0 || !seen.Add(id)
+                    || !OwnedPanelWatcher.TrustedIcon(url, out uri)) return false;
+                ownedIds.Add(id); ownedUrls.Add(url);
+            }
             var excluded = new List<string>();
             foreach (object raw in ModelValue.Array(value, "excluded"))
             {
@@ -365,9 +388,31 @@ namespace HexGuide.Desktop
             }
             string geometry = reference.Window.ToInt64().ToString(CultureInfo.InvariantCulture) + ":" + reference.ClientBounds.X + ":" + reference.ClientBounds.Y + ":" + reference.ClientBounds.Width + ":" + reference.ClientBounds.Height;
             result = new OwnedPanelContext { Token = token, GameId = game, Epoch = epoch, Revision = revision,
-                Reference = reference, Ids = reference.Ids, IconUrls = urls, ExcludedUrls = excluded.ToArray(), GeometryKey = geometry,
-                Identity = token + "|" + (game as string ?? "null") + "|" + epoch + "|" + revision + "|" + string.Join("|", reference.Ids) + "|" + string.Join("|", urls) + "|" + string.Join("|", excluded.ToArray()) + "|" + geometry };
+                Reference = reference, Ids = reference.Ids, IconUrls = urls, OwnedIds = ownedIds.ToArray(), OwnedUrls = ownedUrls.ToArray(), ExcludedUrls = excluded.ToArray(), GeometryKey = geometry,
+                Identity = token + "|" + (game as string ?? "null") + "|" + epoch + "|" + revision + "|" + string.Join("|", reference.Ids) + "|" + string.Join("|", urls) + "|" + string.Join("|", ownedIds.ToArray()) + "|" + string.Join("|", ownedUrls.ToArray()) + "|" + string.Join("|", excluded.ToArray()) + "|" + geometry };
             return true;
+        }
+    }
+
+    // This protocol binds descriptors to the exact catalog IDs/URLs supplied
+    // by the server. Both runtimes use the same normalized glyph identity for
+    // current-offer collisions and subtraction of already owned occurrences.
+    internal static class OwnedPanelGlyphIdentity
+    {
+        internal const string Algorithm = "normalized28-sha256-v1";
+        internal static string Hash(byte[] bytes)
+        {
+            using (var algorithm = SHA256.Create())
+                return BitConverter.ToString(algorithm.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
+        }
+        internal static string Binding(string id, string url)
+        { return Hash(Encoding.UTF8.GetBytes(Algorithm + "\0" + id + "\0" + url)); }
+        internal static Dictionary<string, object> Proof(OwnedPanelContext context, OwnedPanelShape[] offers, OwnedPanelShape[] owned)
+        {
+            var entries = new object[offers.Length + owned.Length];
+            for (int i = 0; i < offers.Length; i++) entries[i] = new[] { Binding(context.Ids[i], context.IconUrls[i]), offers[i].Fingerprint };
+            for (int i = 0; i < owned.Length; i++) entries[offers.Length + i] = new[] { Binding(context.OwnedIds[i], context.OwnedUrls[i]), owned[i].Fingerprint };
+            return new Dictionary<string, object> { { "algorithm", Algorithm }, { "templates", entries } };
         }
     }
 
@@ -375,6 +420,16 @@ namespace HexGuide.Desktop
     {
         internal const int Side = 28;
         internal bool[] Pixels;
+        internal string Fingerprint
+        {
+            get
+            {
+                if (Pixels == null || Pixels.Length != Side * Side) return "";
+                var packed = new byte[Side * Side / 8];
+                for (int i = 0; i < Pixels.Length; i++) if (Pixels[i]) packed[i / 8] |= (byte)(1 << (i % 8));
+                return OwnedPanelGlyphIdentity.Hash(packed);
+            }
+        }
         internal static OwnedPanelShape Extract(Bitmap source, Rectangle region)
         {
             region = Rectangle.Intersect(new Rectangle(Point.Empty, source.Size), region);
@@ -562,35 +617,47 @@ namespace HexGuide.Desktop
         }
 
         internal static OwnedPanelSlotMatch[] ReadSlots(Bitmap bitmap, OwnedPanelLayout layout, OwnedPanelShape[] candidates, OwnedPanelShape[] excluded)
+        { return ReadSlots(bitmap, layout, candidates, new OwnedPanelShape[0], excluded); }
+
+        internal static OwnedPanelSlotMatch[] ReadSlots(Bitmap bitmap, OwnedPanelLayout layout, OwnedPanelShape[] candidates, OwnedPanelShape[] owned, OwnedPanelShape[] excluded)
         {
             var result = new OwnedPanelSlotMatch[6];
             for (int index = 0; index < result.Length; index++)
             {
                 var area = layout.Slots[index]; area.Inflate(-Math.Max(1, area.Width / 20), -Math.Max(1, area.Height / 20));
                 var shape = OwnedPanelShape.Extract(bitmap, area);
-                result[index] = Match(shape, candidates, excluded); result[index].Index = index;
+                result[index] = Match(shape, candidates, owned, excluded); result[index].Index = index;
             }
             return result;
         }
 
         internal static OwnedPanelSlotMatch Match(OwnedPanelShape shape, OwnedPanelShape[] candidates, OwnedPanelShape[] excluded)
+        { return Match(shape, candidates, new OwnedPanelShape[0], excluded); }
+
+        internal static OwnedPanelSlotMatch Match(OwnedPanelShape shape, OwnedPanelShape[] candidates, OwnedPanelShape[] owned, OwnedPanelShape[] excluded)
         {
             var output = new OwnedPanelSlotMatch { State = shape == null ? "empty" : "unmatched", Indices = new int[0] };
             if (shape == null || candidates == null || candidates.Length != 3) return output;
             if (excluded != null) foreach (OwnedPanelShape skill in excluded)
                 if (OwnedPanelShape.Similarity(shape, skill) >= .88) { output.State = "excluded"; return output; }
-            var scores = new double[3]; int best = 0;
-            for (int i = 0; i < 3; i++) { scores[i] = OwnedPanelShape.Similarity(shape, candidates[i]); if (scores[i] > scores[best]) best = i; }
+            if (owned == null || owned.Length > 6) return output;
+            var all = new OwnedPanelShape[3 + owned.Length];
+            Array.Copy(candidates, all, 3); Array.Copy(owned, 0, all, 3, owned.Length);
+            var scores = new double[all.Length]; int best = 0;
+            for (int i = 0; i < all.Length; i++) { scores[i] = OwnedPanelShape.Similarity(shape, all[i]); if (scores[i] > scores[best]) best = i; }
             output.Similarity = scores[best];
             if (scores[best] < .90) return output;
-            var group = new List<int>(); group.Add(best);
-            for (int i = 0; i < 3; i++) if (i != best)
+            string identity = all[best].Fingerprint;
+            if (identity.Length == 0) return output;
+            var group = new List<int>();
+            for (int i = 0; i < all.Length; i++)
             {
-                double pair = OwnedPanelShape.Similarity(candidates[best], candidates[i]);
-                if (pair >= .985 && scores[i] >= .90 && scores[best] - scores[i] <= .035) group.Add(i);
+                // A near match is not proof of a shared glyph. Only the exact
+                // normalized descriptor can form a statistics-resolvable group.
+                if (all[i] != null && all[i].Fingerprint == identity) { if (i < 3) group.Add(i); }
                 else if (scores[best] - scores[i] < .065) return output;
             }
-            group.Sort(); output.Indices = group.ToArray(); output.State = group.Count == 1 ? "candidate" : "ambiguous";
+            output.Indices = group.ToArray(); output.State = group.Count == 0 ? "owned" : group.Count == 1 ? "candidate" : "ambiguous";
             return output;
         }
     }
@@ -675,6 +742,17 @@ namespace HexGuide.Desktop
             contextValue = ModelValue.Object(backendModel(), "panelSelection");
             ModelValue.Object(contextValue, "capture").Remove("capturedAt");
             check(!OwnedPanelContext.TryRead(contextValue, out parsed), "missing original capture timestamp rejected");
+            contextValue = ModelValue.Object(backendModel(), "panelSelection");
+            contextValue["owned"] = new object[] { new Dictionary<string, object> { { "id", "previous" }, { "icon", "https://raw.communitydragon.org/16.21/game/previous.png" } } };
+            check(OwnedPanelContext.TryRead(contextValue, out parsed) && parsed.OwnedIds.Length == 1 && parsed.OwnedIds[0] == "previous", "owned template identities retained");
+            string ownedIdentity = parsed.Identity;
+            (ModelValue.Array(contextValue, "owned")[0] as Dictionary<string, object>)["icon"] = "https://raw.communitydragon.org/16.21/game/changed.png";
+            check(OwnedPanelContext.TryRead(contextValue, out parsed) && parsed.Identity != ownedIdentity, "owned template change resets observation identity");
+            (ModelValue.Array(contextValue, "owned")[0] as Dictionary<string, object>)["icon"] = "https://untrusted.example/previous.png";
+            check(!OwnedPanelContext.TryRead(contextValue, out parsed), "untrusted owned template rejected");
+            contextValue = ModelValue.Object(backendModel(), "panelSelection");
+            contextValue["owned"] = new object[] { new Dictionary<string, object> { { "id", "a" }, { "icon", "https://raw.communitydragon.org/16.21/game/previous.png" } } };
+            check(!OwnedPanelContext.TryRead(contextValue, out parsed), "owned candidate overlap rejected");
             Uri uri;
             check(OwnedPanelWatcher.TrustedIcon("https://raw.communitydragon.org/latest/game/icon.png", out uri), "trusted icon");
             check(!OwnedPanelWatcher.TrustedIcon("http://raw.communitydragon.org/icon.png", out uri), "plain HTTP rejected");
@@ -690,6 +768,12 @@ namespace HexGuide.Desktop
             check(OwnedPanelMatcher.Match(shapes[0], collision, new[] { shapes[0] }).State == "excluded", "known skill wins over candidate collision");
             check(OwnedPanelMatcher.Match(FixtureShape(3, 64), shapes, new OwnedPanelShape[0]).State == "unmatched", "unrelated skill never counted");
             check(OwnedPanelMatcher.Match(null, shapes, new OwnedPanelShape[0]).State == "empty", "empty slot");
+            check(OwnedPanelMatcher.Match(FixtureShape(3, 64), shapes, new[] { FixtureShape(3, 64) }, new OwnedPanelShape[0]).State == "owned", "distinct known-owned template classified without a candidate");
+            check(OwnedPanelMatcher.Match(shapes[0], shapes, new[] { shapes[0] }, new OwnedPanelShape[0]).State == "candidate", "owned equivalent shares candidate glyph for occurrence counting");
+            var near = new OwnedPanelShape { Pixels = (bool[])shapes[0].Pixels.Clone() }; near.Pixels[0] = !near.Pixels[0];
+            check(near.Fingerprint != shapes[0].Fingerprint && OwnedPanelShape.Similarity(near, shapes[0]) > .985, "near descriptors have separate identity");
+            check(OwnedPanelMatcher.Match(shapes[0], new[] { shapes[0], near, shapes[2] }, new OwnedPanelShape[0]).State == "unmatched", "near current templates cannot be promoted to aliases");
+            check(OwnedPanelMatcher.Match(shapes[0], shapes, new[] { near }, new OwnedPanelShape[0]).State == "unmatched", "near known-owned glyph prevents false new selection");
             var slots = new OwnedPanelSlotMatch[6];
             for (int i = 0; i < 6; i++) slots[i] = new OwnedPanelSlotMatch { Index = i, State = i == 4 ? "candidate" : "empty", Indices = i == 4 ? new[] { 1 } : new int[0] };
             var stable = new OwnedPanelStability();
@@ -700,15 +784,18 @@ namespace HexGuide.Desktop
             check(stable.Observe("round1", new OwnedPanelProofFrame(1800, "geometry1", slots)), "three independent frames accepted");
             check(stable.Proof().Length == 3, "bounded frame evidence");
             var proof = new Dictionary<string, object> {
-                { "provider", "panel-icon" }, { "offerToken", "0123456789abcdef0123456789abcdef" }, { "gameId", "fixture-game" },
-                { "gameEpoch", 7L }, { "revision", 12L }, { "ids", new[] { "a", "b", "c" } }, { "frames", stable.Proof() }
+                { "version", 2 }, { "provider", "panel-icon" }, { "offerToken", "0123456789abcdef0123456789abcdef" }, { "gameId", "fixture-game" },
+                { "gameEpoch", 7L }, { "revision", 12L }, { "ids", new[] { "a", "b", "c" } },
+                { "glyphs", OwnedPanelGlyphIdentity.Proof(new OwnedPanelContext { Ids = new[] { "a", "b", "c" }, IconUrls = new[] { "url-a", "url-b", "url-c" }, OwnedIds = new string[0], OwnedUrls = new string[0] }, shapes, new OwnedPanelShape[0]) }, { "frames", stable.Proof() }
             };
             string proofJson = serializer.Serialize(proof);
             check(System.Text.Encoding.UTF8.GetByteCount(proofJson) <= 4096, "native proof fits authenticated endpoint body limit");
             var decodedProof = serializer.DeserializeObject(proofJson) as Dictionary<string, object>;
-            check(decodedProof.Count == 7 && ModelValue.Text(decodedProof, "provider") == "panel-icon"
+            check(decodedProof.Count == 9 && ModelValue.Text(decodedProof, "version") == "2" && ModelValue.Text(decodedProof, "provider") == "panel-icon"
                 && ModelValue.Array(decodedProof, "ids").Count == 3 && ModelValue.Array(decodedProof, "frames").Count == 3,
                 "proof JSON top-level schema matches server");
+            check(ModelValue.Text(ModelValue.Object(decodedProof, "glyphs"), "algorithm") == OwnedPanelGlyphIdentity.Algorithm
+                && ModelValue.Array(ModelValue.Object(decodedProof, "glyphs"), "templates").Count == 3, "proof carries versioned bound template fingerprints");
             long previousAt = 0;
             var captureIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (object rawFrame in ModelValue.Array(decodedProof, "frames"))
