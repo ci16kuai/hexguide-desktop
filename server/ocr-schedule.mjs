@@ -14,8 +14,8 @@ export const DEFAULT_OCR_SCHEDULE_POLICY = Object.freeze({
   openingBoostMs:30000,
   // Backend armed is not native Ready. Keep discovery speed until native has
   // gathered its post-fence witnesses; reducing this would slow first arming.
-  intervals:Object.freeze({battle:10000, unknown:5000, approaching:3000, boost:2500, offersAcquiring:2500, offersArmed:2500}),
-  cooldowns:Object.freeze({battle:5000, unknown:2500, approaching:1000, boost:1000, offersAcquiring:1000, offersArmed:1000}),
+  intervals:Object.freeze({battle:5000, unknown:5000, approaching:3000, boost:1000, offersAcquiring:1000, offersArmed:1000}),
+  cooldowns:Object.freeze({battle:1000, unknown:2500, approaching:1000, boost:250, offersAcquiring:250, offersArmed:250}),
   backoff:Object.freeze({initialMs:5000, maxMs:30000, foregroundMs:5000}),
 });
 
@@ -50,7 +50,7 @@ function normalizePolicy(value) {
     boostDurationMs:bounded(candidate.boostDurationMs, defaults.boostDurationMs, 1000, 120000),
     openingBoostMs:bounded(candidate.openingBoostMs, defaults.openingBoostMs, 1000, 120000),
     intervals:normalizeTimes(candidate.intervals, defaults.intervals, 1000),
-    cooldowns:normalizeTimes(candidate.cooldowns, defaults.cooldowns, 1000),
+    cooldowns:normalizeTimes(candidate.cooldowns, defaults.cooldowns, 100),
     backoff:Object.freeze({initialMs, maxMs:Math.max(initialMs, bounded(candidate.backoff?.maxMs, defaults.backoff.maxMs, 1000, 30000)),
       foregroundMs:bounded(candidate.backoff?.foregroundMs, defaults.backoff.foregroundMs, 1000, 10000)}),
   });

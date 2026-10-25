@@ -22,8 +22,12 @@ function fixture(policy) {
 
 test('defaults expose a bounded immutable policy and fixed diagnostic mode vocabulary', () => {
   assert.deepEqual(DEFAULT_OCR_SCHEDULE_POLICY.levels, [3, 7, 11, 15]);
-  assert.equal(DEFAULT_OCR_SCHEDULE_POLICY.intervals.battle, 10000);
-  assert.equal(DEFAULT_OCR_SCHEDULE_POLICY.intervals.offersArmed, 2500);
+  assert.deepEqual(DEFAULT_OCR_SCHEDULE_POLICY.intervals, {
+    battle:5000, unknown:5000, approaching:3000, boost:1000, offersAcquiring:1000, offersArmed:1000,
+  });
+  assert.deepEqual(DEFAULT_OCR_SCHEDULE_POLICY.cooldowns, {
+    battle:1000, unknown:2500, approaching:1000, boost:250, offersAcquiring:250, offersArmed:250,
+  });
   assert.equal(DEFAULT_OCR_SCHEDULE_POLICY.boostDurationMs, 60000);
   assert.ok(Object.isFrozen(DEFAULT_OCR_SCHEDULE_POLICY.intervals));
   assert.ok(Object.isFrozen(OCR_SCHEDULE_MODES));
@@ -49,7 +53,7 @@ test('loading observations do not consume the first live boost or level crossing
   f.update({phase:'GameStart', stage:'loading', level:3});
   f.observe(); f.advance(90000); f.observe();
   f.update({phase:'InProgress', stage:'live'});
-  assert.deepEqual(f.decide(), {mode:'boost', due:true, intervalMs:2500, nextInMs:0, boostRemainingMs:60000, triggerLevel:3});
+  assert.deepEqual(f.decide(), {mode:'boost', due:true, intervalMs:1000, nextInMs:0, boostRemainingMs:60000, triggerLevel:3});
 });
 
 test('first live observation gets one short opening boost rather than extending every poll', () => {
@@ -146,12 +150,12 @@ test('confirmation ends only the current boost and later thresholds still work',
 test('backend armed does not slow the fresh witnesses needed for native Ready', () => {
   const f = fixture(); f.update({level:16}); f.observe(); f.schedule.confirmed();
   assert.equal(f.decide({hasOffers:true, armed:false}).mode, 'offers-acquiring');
-  assert.equal(f.decide({hasOffers:true, armed:false}).intervalMs, 2500);
+  assert.equal(f.decide({hasOffers:true, armed:false}).intervalMs, 1000);
   const armed = f.decide({hasOffers:true, armed:true});
   assert.equal(armed.mode, 'offers-armed');
-  assert.equal(armed.intervalMs, 2500);
+  assert.equal(armed.intervalMs, 1000);
   f.schedule.started(); f.advance(2000); f.schedule.completed({status:'recognized'});
-  f.advance(999);
+  f.advance(249);
   assert.equal(f.decide({hasOffers:true, armed:true}).due, false);
   f.advance(1);
   assert.equal(f.decide({hasOffers:true, armed:true}).due, true);
@@ -161,29 +165,51 @@ test('armed reference refresh leaves room in the unchanged 30 second lease even 
   const f = fixture(); f.observe();
   f.schedule.started(); f.advance(10000); f.schedule.completed({status:'recognized'});
   const decision = f.decide({hasOffers:true, armed:true});
-  assert.equal(decision.nextInMs, 1000);
-  f.advance(1000); assert.equal(f.decide({hasOffers:true, armed:true}).due, true);
-  // A second ten-second capture completes at 21s after the previous frame,
+  assert.equal(decision.nextInMs, 250);
+  f.advance(250); assert.equal(f.decide({hasOffers:true, armed:true}).due, true);
+  // A second ten-second capture completes at 20.25s after the previous frame,
   // before the observer's existing 30s expiry. No lease is extended here.
   assert.ok(10000 + decision.nextInMs + 10000 < 30000);
 });
 
-test('battle scans respect both start interval and a five-second completion cooldown', () => {
+test('battle scans respect a five-second start target and one-second completion cooldown', () => {
   const f = fixture(); f.observe(); f.schedule.confirmed();
   f.schedule.started(); f.advance(12000);
   assert.equal(f.decide().due, false, 'a slow scan must not overlap');
   f.schedule.completed({status:'recognized'});
-  assert.equal(f.decide().nextInMs, 5000);
-  f.advance(4999); assert.equal(f.decide().due, false);
+  assert.equal(f.decide().nextInMs, 1000);
+  f.advance(999); assert.equal(f.decide().due, false);
   f.advance(1); assert.equal(f.decide().due, true);
 });
 
-test('boost and acquiring modes have a completion cooldown even when the target interval passed', () => {
-  for (const extra of [{}, {hasOffers:true, armed:false}]) {
+test('short battle scans resume at the five-second start target rather than five seconds after completion', () => {
+  const f = fixture(); f.observe(); f.schedule.confirmed();
+  f.schedule.started(); f.advance(200); f.schedule.completed({status:'recognized'});
+  assert.equal(f.decide().nextInMs, 4800);
+  f.advance(4799); assert.equal(f.decide().due, false);
+  f.advance(1); assert.equal(f.decide().due, true);
+});
+
+test('short boost and candidate scans can start once per second without skipping their completion rest', () => {
+  for (const extra of [{}, {hasOffers:true, armed:false}, {hasOffers:true, armed:true}]) {
+    const f = fixture(); f.update({level:7}); f.observe();
+    f.schedule.started(); f.advance(200); f.schedule.completed({status:'recognized'});
+    assert.equal(f.decide(extra).nextInMs, 800);
+    f.advance(799); assert.equal(f.decide(extra).due, false);
+    f.advance(1); assert.equal(f.decide(extra).due, true);
+    f.schedule.started(); f.advance(900); f.schedule.completed({status:'recognized'});
+    assert.equal(f.decide(extra).nextInMs, 250, 'a one-second target does not override minimum rest');
+    f.advance(249); assert.equal(f.decide(extra).due, false);
+    f.advance(1); assert.equal(f.decide(extra).due, true);
+  }
+});
+
+test('boost and both candidate modes keep a 250ms rest even when the target interval passed', () => {
+  for (const extra of [{}, {hasOffers:true, armed:false}, {hasOffers:true, armed:true}]) {
     const f = fixture(); f.update({level:7}); f.observe();
     f.schedule.started(); f.advance(9000); f.schedule.completed({status:'recognized'});
-    assert.equal(f.decide(extra).nextInMs, 1000);
-    f.advance(999); assert.equal(f.decide(extra).due, false);
+    assert.equal(f.decide(extra).nextInMs, 250);
+    f.advance(249); assert.equal(f.decide(extra).due, false);
     f.advance(1); assert.equal(f.decide(extra).due, true);
   }
 });
@@ -193,7 +219,7 @@ test('new level crossings cannot bypass the completion cooldown of an active sca
   f.advance(10000); f.update({level:7}); f.observe();
   assert.equal(f.decide().due, false);
   f.schedule.completed({status:'recognized'});
-  assert.equal(f.decide().nextInMs, 1000);
+  assert.equal(f.decide().nextInMs, 250);
 });
 
 test('external in-flight state and duplicate starts cannot enqueue or rewrite a scan start', () => {
@@ -201,9 +227,10 @@ test('external in-flight state and duplicate starts cannot enqueue or rewrite a 
   assert.equal(f.decide({inFlight:true}).due, false);
   assert.ok(f.decide({inFlight:true}).nextInMs >= 1000);
   f.schedule.started(); f.advance(300); f.schedule.started();
-  f.advance(700); f.schedule.completed({status:'recognized'});
-  f.advance(1500);
-  assert.equal(f.decide().due, true, 'the duplicate start must not move the 2500ms target');
+  f.advance(200); f.schedule.completed({status:'recognized'});
+  f.advance(499); assert.equal(f.decide().due, false);
+  f.advance(1);
+  assert.equal(f.decide().due, true, 'the duplicate start must not move the 1000ms target');
 });
 
 test('engine failures back off at 5, 10, 20 and 30 seconds without an infinite lockout', () => {
@@ -247,7 +274,7 @@ test('expected no-title battle results do not count as engine failures', () => {
     const f = fixture(); f.observe();
     f.schedule.started(); f.advance(3000); f.schedule.completed({status:'unavailable', code});
     assert.equal(f.decide().mode, 'boost');
-    assert.equal(f.decide().nextInMs, 1000);
+    assert.equal(f.decide().nextInMs, 250);
   }
 });
 
@@ -289,13 +316,29 @@ test('custom policy can add thresholds while rejecting unsafe or invalid values 
   assert.equal(f.decide().triggerLevel, 5);
   assert.equal(f.decide().boostRemainingMs, 45000);
   assert.equal(f.decide().intervalMs, 1500);
-  assert.equal(f.decide({hasOffers:true, armed:true}).intervalMs, 2500);
+  assert.equal(f.decide({hasOffers:true, armed:true}).intervalMs, 1000);
+  assert.equal(f.schedule.policy.cooldowns.boost, 750, 'subsecond completion rest is valid');
   f.schedule.confirmed();
   assert.equal(f.decide().intervalMs, 12000);
   assert.deepEqual(f.schedule.policy.levels, [5, 9]);
   const invalid = fixture({levels:[-1, '7'], boostDurationMs:Infinity, openingBoostMs:-1, intervals:{battle:NaN}});
   invalid.update({level:3}); assert.equal(invalid.decide().triggerLevel, 3);
   assert.equal(invalid.decide().boostRemainingMs, 60000);
+});
+
+test('custom policies allow 100ms completion rest while rejecting subsecond start intervals', () => {
+  const valid = fixture({intervals:{boost:1000}, cooldowns:{boost:100}});
+  valid.update({level:7}); valid.observe();
+  valid.schedule.started(); valid.advance(2000); valid.schedule.completed({status:'recognized'});
+  assert.equal(valid.decide().intervalMs, 1000);
+  assert.equal(valid.decide().nextInMs, 100);
+  valid.advance(99); assert.equal(valid.decide().due, false);
+  valid.advance(1); assert.equal(valid.decide().due, true);
+  for (const cooldown of [99, 0, -1, NaN, Infinity, '100']) {
+    const invalid = fixture({intervals:{boost:999}, cooldowns:{boost:cooldown}});
+    assert.equal(invalid.schedule.policy.intervals.boost, 1000);
+    assert.equal(invalid.schedule.policy.cooldowns.boost, 250);
+  }
 });
 
 test('decision output is bounded, fixed-field, contains no snapshot identity and tolerates clock rollback', () => {
@@ -323,9 +366,10 @@ test('unknown mode status does not disable fallback and missing game epochs do n
   assert.equal(schedule.decision({live}).boostRemainingMs, 50000);
 });
 
-test('deterministic idle-battle simulation reduces heavy scans compared with the previous fixed schedule', () => {
+test('deterministic five-second battle targets reduce short scans compared with the old fixed 2.5-second target', () => {
   function simulate(adaptive, durationMs = 900000) {
     const f = fixture(); let scanCount = 0, busyMs = 0, lastStart = -Infinity;
+    f.observe(); f.schedule.confirmed();
     while (f.now < Date.parse('2026-10-25T06:00:00Z') + durationMs) {
       const due = adaptive ? f.decide().due : f.now - lastStart >= 2500;
       if (due) {
@@ -339,17 +383,32 @@ test('deterministic idle-battle simulation reduces heavy scans compared with the
   }
   const previous = simulate(false), current = simulate(true);
   assert.equal(previous.scanCount, 300);
-  assert.ok(current.scanCount < previous.scanCount / 2, JSON.stringify({previous, current}));
+  assert.equal(current.scanCount, 180);
+  assert.ok(current.scanCount < previous.scanCount, JSON.stringify({previous, current}));
   assert.equal(current.busyMs, current.scanCount * 1000);
 });
 
-test('long-scan simulation reduces duty cycle while preserving the faster level-window response', () => {
+test('long battle scans never overlap or restart faster than the old one-second post-scan loop', () => {
+  const f = fixture(); f.observe(); f.schedule.confirmed();
+  for (let pass = 0; pass < 3; pass++) {
+    const startedAt = f.now;
+    f.schedule.started(); f.advance(10000);
+    assert.equal(f.decide().due, false, 'a long task must remain the only active capture');
+    f.schedule.completed({status:'unavailable', code:'title-layout-incomplete'});
+    assert.equal(f.decide().nextInMs, 1000);
+    f.advance(999); assert.equal(f.decide().due, false);
+    f.advance(1); assert.equal(f.decide().due, true);
+    assert.equal(f.now - startedAt, 11000);
+  }
+});
+
+test('a level-window transition can shorten battle rest but retains its own minimum rest', () => {
   const f = fixture(); f.observe(); f.schedule.confirmed();
   f.schedule.started(); f.advance(10000); f.schedule.completed({status:'unavailable', code:'title-layout-incomplete'});
-  assert.equal(f.decide().nextInMs, 5000);
-  // Old policy only waited the outer one-second tick after a ten-second pass.
-  assert.ok(10000 / (10000 + f.decide().nextInMs) < 10000 / 11000);
-  f.advance(1000); f.update({level:7});
+  assert.equal(f.decide().nextInMs, 1000);
+  f.update({level:7});
   assert.equal(f.decide().mode, 'boost');
-  assert.equal(f.decide().due, true, 'a real crossing may accelerate after its own completion cooldown');
+  assert.equal(f.decide().nextInMs, 250);
+  f.advance(249); assert.equal(f.decide().due, false);
+  f.advance(1); assert.equal(f.decide().due, true);
 });

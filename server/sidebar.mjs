@@ -40,11 +40,13 @@ function publicOcrDetails(raw) {
 
 /** Confirmed choices and public game observations, shared by both app windows. */
 export class BackgroundSidebar {
-  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, recommendationRepository, recommendationPolicy = {}, scanPolicy = {}, now = () => Date.now(), offerLifetime = 60000} = {}) {
+  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, recommendationRepository, recommendationPolicy = {}, scanPolicy = {}, timers = {}, now = () => Date.now(), offerLifetime = 60000} = {}) {
     if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
     Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, recommendationRepository, recommendationPolicy, now, offerLifetime});
     this.scanSchedule = new OcrScanSchedule({now, policy:scanPolicy});
     this.scanDiagnostics = new OcrScheduleDiagnostics({dataDirectory, now});
+    this.timers = {setTimeout:typeof timers?.setTimeout === 'function' ? timers.setTimeout : setTimeout,
+      clearTimeout:typeof timers?.clearTimeout === 'function' ? timers.clearTimeout : clearTimeout};
     this.scanCount = 0;
     this.scanFailureCount = 0;
     this.lastScanDuration = null;
@@ -415,7 +417,7 @@ export class BackgroundSidebar {
     const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live));
     const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), this.selectionEligible(live));
     return {
-      version:'1.11.1', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      version:'1.11.2', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
       gameEpoch:this.gameEpoch, selection, selectionResult, selectionDiagnostics:this.selectionDiagnostics(selection),
       mode:live.mode || {queueId:null, isMayhem:false, known:false},
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
@@ -450,6 +452,14 @@ export class BackgroundSidebar {
     } catch { return Promise.resolve(); }
   }
 
+  nextAutomaticPollDelay() {
+    try {
+      const schedule = this.scanScheduleState();
+      if (schedule.intervalMs > 0) return Math.max(100, Math.min(1000, schedule.nextInMs));
+    } catch { /* A transient collector failure still gets a bounded retry. */ }
+    return 1000;
+  }
+
   start() {
     if (!this.stopped) return;
     this.stopped = false;
@@ -462,14 +472,14 @@ export class BackgroundSidebar {
         this.recordSelectionAttempt({code:'scan-loop-failed'}, false, null);
         if (!this.offers.length) Object.assign(this.ocr, {status:'unavailable', code:'scan-loop-failed', message:'本次自动识别暂未完成，稍后会自动重试。', observedAt:new Date(this.now()).toISOString()});
       } finally {
-        if (!this.stopped) { this.timer = setTimeout(tick, 1000); this.timer.unref?.(); }
+        if (!this.stopped) { this.timer = this.timers.setTimeout(tick, this.nextAutomaticPollDelay()); this.timer.unref?.(); }
       }
     };
     void tick();
   }
 
   async stop() {
-    this.stopped = true; clearTimeout(this.timer);
+    this.stopped = true; this.timers.clearTimeout(this.timer);
     // Drain our own scan and latest bounded diagnostics without touching the game.
     await this.pending?.catch(() => {});
     await Promise.all([this.persistTail.catch(() => {}), this.preferencesTail.catch(() => {}), this.recommendationRepository?.close(), this.scanDiagnostics.close()]);

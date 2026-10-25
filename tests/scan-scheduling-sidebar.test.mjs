@@ -8,14 +8,14 @@ import {BackgroundSidebar} from '../server/sidebar.mjs';
 const data = JSON.parse(await readFile(new URL('../dist/data.json', import.meta.url), 'utf8'));
 const ids = data.augments.filter(a => a.availability === 'current' && a.recommendable !== false && !a.retiredPatch && !a.isInternalTemplate).slice(0, 3).map(a => a.id);
 const noCards = {status:'waiting', code:'title-name-unmatched', proposals:[]};
-function harness({scanner, dataDirectory} = {}) {
+function harness({scanner, dataDirectory, timers} = {}) {
   let now = Date.parse('2026-10-25T05:00:00Z'), scans = 0;
   let live = {connection:{status:'connected'}, phase:'InProgress', stage:'live', gameId:'isolated-schedule-one', championId:'Vi', level:9, gameTime:300,
     mode:{known:true, isMayhem:true}, items:[], stats:{}, observedAt:new Date(now).toISOString()};
   const advance = ms => { now += ms; live.observedAt = new Date(now).toISOString(); };
-  const sidebar = new BackgroundSidebar({collector:{getSnapshot:() => structuredClone(live)}, data, dataDirectory, now:() => now,
+  const sidebar = new BackgroundSidebar({collector:{getSnapshot:() => structuredClone(live)}, data, dataDirectory, timers, now:() => now,
     scanner:() => { scans++; return scanner ? scanner({advance, scans}) : Promise.resolve(noCards); }});
-  return {sidebar, advance, update:value => { live = {...live, ...value}; }, scans:() => scans};
+  return {sidebar, advance, update:value => { live = {...live, ...value}; }, scans:() => scans, time:() => now};
 }
 
 test('loading remains zero OCR and entering live starts discovery independently of the UI', async t => {
@@ -38,10 +38,9 @@ test('slow battle OCR has a completion cooldown while a later level window stays
   await h.sidebar.pollOnce();
   assert.equal(h.scans(), 2);
   assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'battle');
-  h.advance(1000); await h.sidebar.pollOnce(); assert.equal(h.scans(), 2);
-  h.advance(3999); await h.sidebar.pollOnce(); assert.equal(h.scans(), 2);
+  h.advance(999); await h.sidebar.pollOnce(); assert.equal(h.scans(), 2);
   h.advance(1); await h.sidebar.pollOnce(); assert.equal(h.scans(), 3);
-  h.update({level:11}); h.advance(1000);
+  h.update({level:11}); h.advance(250);
   await h.sidebar.pollOnce();
   assert.equal(h.scans(), 4, 'new level uses fast mode after the completion rest, without waiting for battle interval');
   assert.equal(h.sidebar.getModel().ocr.schedule.triggerLevel, 11);
@@ -102,7 +101,7 @@ test('stored schedule diagnostics describe actual mode/count/duration without re
   await h.sidebar.stop();
   const storedText = await readFile(path.join(folder, 'diagnostics', 'ocr-schedule.json'), 'utf8');
   const stored = JSON.parse(storedText);
-  assert.equal(stored.appVersion, '1.11.1');
+  assert.equal(stored.appVersion, '1.11.2');
   assert.equal(stored.scanCount, 1);
   assert.equal(stored.lastDurationMs, 1500);
   assert.equal(stored.mode, 'boost');
@@ -130,4 +129,35 @@ test('diagnostic filesystem latency cannot postpone a due automatic capture', as
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(h.scans(), 1, 'OCR starts without waiting for observational disk IO');
   } finally { finishPublication(); await poll; }
+});
+
+test('the real background loop uses the remaining second rather than adding one second after a short scan', async t => {
+  const queue = [], starts = [];
+  const timers = {setTimeout:(fn, delay) => { const task = {fn, delay}; queue.push(task); return task; }, clearTimeout:task => { if (task) task.cancelled = true; }};
+  const h = harness({timers, scanner:async ({advance}) => { starts.push(h.time()); advance(200); return noCards; }});
+  t.after(() => h.sidebar.stop());
+  h.sidebar.start(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(queue[0].delay, 800);
+  const next = queue.shift(); h.advance(next.delay); await next.fn();
+  assert.equal(starts[1] - starts[0], 1000);
+  h.sidebar.setOcr({enabled:false});
+  const paused = queue.shift(); h.advance(paused.delay); await paused.fn();
+  assert.equal(h.scans(), 2);
+  assert.equal(queue[0].delay, 1000);
+  await h.sidebar.stop(); assert.equal(queue[0].cancelled, true);
+});
+
+test('the real background loop waits for a long task and its short rest without queuing catch-up captures', async t => {
+  const queue = [], starts = [];
+  const timers = {setTimeout:(fn, delay) => { const task = {fn, delay}; queue.push(task); return task; }, clearTimeout:task => { if (task) task.cancelled = true; }};
+  const h = harness({timers, scanner:async ({advance}) => { starts.push(h.time()); advance(1500); return noCards; }});
+  t.after(() => h.sidebar.stop());
+  h.sidebar.start(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.scans(), 1);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].delay, 250);
+  const next = queue.shift(); h.advance(next.delay); await next.fn();
+  assert.equal(starts[1] - starts[0], 1750);
+  assert.equal(h.scans(), 2);
+  assert.equal(queue.length, 1);
 });

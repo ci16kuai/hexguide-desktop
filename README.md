@@ -1,10 +1,10 @@
 # 海克斯指南 · Windows 桌面版
 
-面向英雄联盟海克斯大乱斗玩家的本局助手与资料查询工具。当前源码版本 **1.11.1（测试版，尚未发布）**，默认打开“我的这一局”。加载阶段识别本局双方阵容，只展示推荐装备；进入实战并记录实际选择后，结合所选海克斯、英雄和可读敌方阵容更新装备与后续海克斯方向。辅助页面保留独立全宽入口，英雄胜率原始榜单继续按同口径持有胜率差排序。资料对应 **海克斯大乱斗 4.0 / 26.21**，英雄与装备资料为 **Data Dragon 16.21.1**。
+面向英雄联盟海克斯大乱斗玩家的本局助手与资料查询工具。当前源码版本 **1.11.2（测试版，尚未发布）**，默认打开“我的这一局”。加载阶段识别本局双方阵容，只展示推荐装备；进入实战并记录实际选择后，结合所选海克斯、英雄和可读敌方阵容更新装备与后续海克斯方向。辅助页面保留独立全宽入口，英雄胜率原始榜单继续按同口径持有胜率差排序。资料对应 **海克斯大乱斗 4.0 / 26.21**，英雄与装备资料为 **Data Dragon 16.21.1**。
 
-## 1.11.1 自适应扫描（测试版）
+## 1.11.2 自适应扫描（测试版）
 
-重文字识别按阶段和可信等级调度：加载时不扫卡片，首次入场以及跨过 3／7／11／15 级时暂时加强，6／10／14 级提前提高检查频率。普通战斗保留低频兜底，已识别候选定期刷新，确认后结束当前加强窗口。慢扫描按完成时间冷却，手动请求仍立即执行并复用在途任务。轻量点击与选择特效观察频率不变。
+重文字识别按阶段和可信等级调度：加载时不扫卡片，普通战斗目标每 5 秒开始一次；首次入场以及跨过 3／7／11／15 级的加强窗口、已有候选时，目标每 1 秒开始一次；6／10／14 级提前提高检查频率。确认后结束当前加强窗口。按剩余时间安排后台检查，并保留完成后的短冷却；耗时超过目标的扫描串行执行，不补扫堆积。手动请求仍立即执行并复用在途任务，轻量点击与选择特效观察频率不变。
 
 具体默认间隔、失败退避、兼容随机事件的兜底及有界诊断见 [扫描调度](docs/ocr-scheduling.md)。这是调度与资源使用优化，不代表单次 OCR 变快、自动确认准确率提高或新版实战验收完成。正在运行的旧版本需另行更新才能生效。
 
@@ -167,14 +167,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps
 安装版构建（需先构建独立暂存目录）：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -StagePath artifacts/portable-1.11.1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -StagePath artifacts/portable-1.11.1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -StagePath artifacts/portable-1.11.2
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -StagePath artifacts/portable-1.11.2
 ```
 
 仅运行自动确认的离线原生测试（不打开窗口、不启动后端、不采集游戏或读取安装版设置）：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-native-selection.ps1 -ExecutablePath artifacts/portable-1.11.1/HexGuide.exe
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-native-selection.ps1 -ExecutablePath artifacts/portable-1.11.2/HexGuide.exe
 ```
 
 安装程序以当前用户身份运行，允许选择安装目录与桌面图标，提供开始菜单和 Windows 设置中的卸载入口；详情见 `installer/README.md`。安装包尚未进行代码签名。浏览器下载文件保存位置由浏览器决定，可使用“另存为”或浏览器的下载位置设置。

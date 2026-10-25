@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.11.1.0")]
-[assembly: AssemblyFileVersion("1.11.1.0")]
-[assembly: AssemblyInformationalVersion("1.11.1")]
+[assembly: AssemblyVersion("1.11.2.0")]
+[assembly: AssemblyFileVersion("1.11.2.0")]
+[assembly: AssemblyInformationalVersion("1.11.2")]
 
 namespace HexGuide.Desktop
 {
@@ -50,7 +50,7 @@ namespace HexGuide.Desktop
                     int ownedChecks = Convert.ToInt32(OwnedAugmentVerificationFixtures.Run()["checks"]);
                     int checks = ScreenSelectionWatcher.ValidateFixtures() + MainWindow.ValidateSelectionDiagnosticFixtures() + ownedChecks;
                     Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                        { "version", "1.11.1" }, { "checks", checks },
+                        { "version", "1.11.2" }, { "checks", checks },
                         { "titleProbeVersion", 1 },
                         { "nativeDiagnosticMaxBytes", ScreenSelectionWatcher.LargestDiagnosticFixtureBytes },
                         { "mode", "offline-no-ui" }, { "liveGameVerified", false }
@@ -205,7 +205,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.11.1 · 我的这一局";
+            Text = "海克斯指南 1.11.2 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -610,7 +610,7 @@ namespace HexGuide.Desktop
         internal static string SelectionDiagnosticsJson(ScreenSelectionWatcher watcher, Dictionary<string, object> model, DateTime now)
         {
             var snapshot = new Dictionary<string, object> {
-                { "version", "1.11.1" }, { "schemaVersion", 2 },
+                { "version", "1.11.2" }, { "schemaVersion", 2 },
                 { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
                 { "native", watcher.Diagnostics() },
                 { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
@@ -636,7 +636,7 @@ namespace HexGuide.Desktop
                 string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
                 var snapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
                 if (snapshot.Count != 5 || Encoding.UTF8.GetByteCount(json) > 4096
-                    || ModelValue.Text(snapshot, "version") != "1.11.1" || ModelValue.Text(snapshot, "schemaVersion") != "2")
+                    || ModelValue.Text(snapshot, "version") != "1.11.2" || ModelValue.Text(snapshot, "schemaVersion") != "2")
                     throw new InvalidOperationException("The persisted selection diagnostic snapshot exceeded its schema or byte bound.");
                 if (json.Contains("PRIVATE-MARKER") || json.Contains("\"ids\"") || json.Contains("windowHandle")
                     || json.Contains("\"signature\"") || json.Contains("\"signatures\"") || json.Contains("\"delta\""))
