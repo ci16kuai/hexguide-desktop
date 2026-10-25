@@ -114,7 +114,7 @@ test('confirming current offers stops scanning until an actual respawn regardles
 test('unconfirmed candidates continue every five seconds after the fast phase without renewing it', async t => {
   const h = harness({scanner:async () => cards()}); t.after(() => h.sidebar.stop());
   await h.sidebar.pollOnce(); const original = h.sidebar.getModel().ocr.schedule;
-  h.advance(59000); await h.sidebar.pollOnce();
+  h.advance(60000); await h.sidebar.pollOnce();
   const followUp = h.sidebar.getModel();
   assert.equal(h.scans(), 2); assert.equal(followUp.offers.length, 3);
   assert.equal(followUp.ocr.schedule.windowId, original.windowId);
@@ -150,7 +150,7 @@ test('an automatic capture completing across the fast boundary is accepted in th
     advance(1); return Promise.resolve(cards(time()));
   }});
   t.after(() => h.sidebar.stop());
-  await h.sidebar.pollOnce(); h.advance(58000); await h.sidebar.pollOnce();
+  await h.sidebar.pollOnce(); h.advance(59000); await h.sidebar.pollOnce();
   const observation = h.sidebar.getSelectionObservation(), cycle = h.sidebar.getModel().ocr.schedule.windowId;
   assert.equal(observation.status, 'armed');
   h.advance(500); const lateTime = h.time(), late = h.sidebar.scan({automatic:true});
@@ -245,7 +245,7 @@ test('stored schedule diagnostics describe current window and actual count/durat
   const h = harness({dataDirectory:folder, scanner:async ({advance}) => { advance(1500); return noCards; }});
   await h.sidebar.pollOnce(); await h.sidebar.stop();
   const storedText = await readFile(path.join(folder, 'diagnostics', 'ocr-schedule.json'), 'utf8'), stored = JSON.parse(storedText);
-  assert.equal(stored.schemaVersion, 2); assert.equal(stored.appVersion, '1.11.4');
+  assert.equal(stored.schemaVersion, 2); assert.equal(stored.appVersion, '1.12.0');
   assert.equal(stored.scanCount, 1); assert.equal(stored.lastDurationMs, 1500);
   assert.equal(stored.mode, 'window'); assert.equal(stored.trigger, 'game-start'); assert.equal(stored.windowId, 1);
   assert.ok(stored.windowRemainingMs > 0); assert.ok(Buffer.byteLength(storedText) < 2048);

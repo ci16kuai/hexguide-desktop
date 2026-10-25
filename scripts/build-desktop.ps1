@@ -81,6 +81,7 @@ $compilerArguments += Join-Path $projectRoot 'native\SidebarShortcut.cs'
 $compilerArguments += Join-Path $projectRoot 'native\ScreenSelectionWatcher.cs'
 $compilerArguments += Join-Path $projectRoot 'native\CardTitleIdentity.cs'
 $compilerArguments += Join-Path $projectRoot 'native\OwnedAugmentVerification.cs'
+$compilerArguments += Join-Path $projectRoot 'native\OwnedPanelWatcher.cs'
 $compilerArguments += Join-Path $projectRoot 'native\ScreenLifeObserver.cs'
 $compilerArguments += Join-Path $projectRoot 'native\ScreenLifeController.cs'
 & $compiler @compilerArguments

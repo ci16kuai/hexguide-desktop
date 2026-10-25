@@ -72,14 +72,69 @@ test('fresh loading to live transition in the same epoch opens one sixty second 
   assert.equal(f.decide().windowId, first.windowId);
 });
 
-test('first live attachment inside the first minute uses remaining opening time then slow follow-up', () => {
-  for (const [gameTime, remaining] of [[0, 60000], [0.5, 59500], [20, 40000], [59.999, 1]]) {
+test('first usable live attachment inside the first minute receives a full minute then slow follow-up', () => {
+  for (const gameTime of [0, 0.5, 20, 59.999]) {
     const f = fixture(); f.update({gameTime});
-    assert.equal(f.decide().windowRemainingMs, remaining);
+    assert.equal(f.decide().windowRemainingMs, 60000);
     assert.equal(f.decide().trigger, 'game-start');
-    f.advance(remaining); assert.equal(f.decide().mode, 'follow-up');
+    f.advance(60000); assert.equal(f.decide().mode, 'follow-up');
     assert.equal(f.decide().intervalMs, 5000); assert.equal(f.decide().due, true);
   }
+});
+
+test('a partial first live clock cannot consume the later verified opening edge', () => {
+  for (const gameTime of [null, undefined, NaN, Infinity, -1, '0']) {
+    const f = fixture();
+    f.update({gameTime, life:{status:'unavailable', isDead:null}});
+    assert.equal(f.decide().mode, 'idle'); assert.equal(f.decide().windowId, null);
+    for (let n = 0; n < 3; n++) {
+      f.advance(1000); f.update({gameTime}); assert.equal(f.decide().due, false);
+    }
+    f.advance(1000); f.update({gameTime:4});
+    const opening = f.decide();
+    assert.equal(opening.mode, 'window'); assert.equal(opening.trigger, 'game-start');
+    assert.equal(opening.windowRemainingMs, 60000); assert.equal(opening.windowId, 1);
+    assert.equal(opening.due, true, 'unknown death state does not suppress a witnessed opening');
+    f.advance(1000); f.update({life:{status:'detected', isDead:false}});
+    assert.equal(f.decide().windowRemainingMs, 59000); assert.equal(f.decide().windowId, 1);
+  }
+});
+
+test('a missing clock followed by a valid late clock stays mid-game and cannot reopen from a later low clock', () => {
+  const f = fixture(); f.update({gameTime:null}); assert.equal(f.decide().due, false);
+  f.advance(1000); f.update({gameTime:84});
+  assert.equal(f.decide().mode, 'idle'); assert.equal(f.decide().windowId, null);
+  f.advance(1000); f.update({gameTime:2, level:3});
+  assert.equal(f.decide({hasOffers:true, armed:true}).due, false);
+  assert.equal(f.decide().windowId, null);
+});
+
+test('a loading witness survives transient inactive or disconnected responses before first live availability', () => {
+  const f = fixture();
+  f.update({phase:'GameStart', stage:'loading', gameTime:null, connection:{status:'waiting'}, life:{status:'unavailable', isDead:null}});
+  f.observe();
+  f.advance(1000); f.update({phase:'None', stage:'waiting'});
+  assert.equal(f.decide().mode, 'inactive'); assert.equal(f.decide().due, false);
+  f.advance(1000); f.update({phase:'InProgress', stage:'live', connection:{status:'waiting'}});
+  assert.equal(f.decide().mode, 'unknown'); assert.equal(f.decide().windowId, null);
+  f.advance(1000); f.update({connection:{status:'connected'}});
+  const opening = f.decide();
+  assert.equal(opening.mode, 'window'); assert.equal(opening.windowRemainingMs, 60000);
+  assert.equal(opening.trigger, 'game-start'); assert.equal(opening.windowId, 1);
+  f.advance(1000); f.update({gameTime:2});
+  assert.equal(f.decide().windowRemainingMs, 59000); assert.equal(f.decide().windowId, 1);
+});
+
+test('a new game receives its own full opening minute after old late-game clock and unknown life', () => {
+  const f = fixture(); f.update({gameTime:900}); assert.equal(f.decide().due, false);
+  f.epoch(2); f.advance(1000);
+  f.update({phase:'GameStart', stage:'loading', gameTime:null, life:{status:'unavailable', isDead:null}});
+  assert.equal(f.decide().mode, 'loading');
+  f.advance(2000); f.update({phase:'InProgress', stage:'live', gameTime:1});
+  const opening = f.decide();
+  assert.equal(opening.mode, 'window'); assert.equal(opening.intervalMs, 500);
+  assert.equal(opening.windowRemainingMs, 60000); assert.equal(opening.trigger, 'game-start');
+  f.advance(60000); assert.equal(f.decide().mode, 'follow-up'); assert.equal(f.decide().intervalMs, 5000);
 });
 
 test('mid or late game attachment never invents an opening event from alive, level or existing offers', () => {
@@ -88,13 +143,13 @@ test('mid or late game attachment never invents an opening event from alive, lev
     const decision = f.decide({hasOffers:true, armed:true});
     assert.equal(decision.mode, 'idle'); assert.equal(decision.due, false);
     assert.equal(decision.trigger, null); assert.equal(decision.windowId, null);
-    f.advance(1000); assert.equal(f.decide({hasOffers:true}).due, false);
+    f.advance(1000); f.update({gameTime}); assert.equal(f.decide({hasOffers:true}).due, false);
   }
 });
 
 test('a delayed first live sample deducts its age rather than receiving a fresh minute', () => {
   const f = fixture(); f.update({gameTime:20}); f.advance(4000, false);
-  assert.equal(f.decide().windowRemainingMs, 36000);
+  assert.equal(f.decide().windowRemainingMs, 56000);
   const transition = fixture(); transition.update({stage:'loading'}); transition.observe();
   transition.advance(1000); transition.update({stage:'live', gameTime:1}); transition.advance(3000, false);
   assert.equal(transition.decide().windowRemainingMs, 57000);

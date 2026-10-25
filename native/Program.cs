@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.11.4.0")]
-[assembly: AssemblyFileVersion("1.11.4.0")]
-[assembly: AssemblyInformationalVersion("1.11.4")]
+[assembly: AssemblyVersion("1.12.0.0")]
+[assembly: AssemblyFileVersion("1.12.0.0")]
+[assembly: AssemblyInformationalVersion("1.12.0")]
 
 namespace HexGuide.Desktop
 {
@@ -49,9 +49,9 @@ namespace HexGuide.Desktop
                 {
                     int ownedChecks = Convert.ToInt32(OwnedAugmentVerificationFixtures.Run()["checks"]);
                     int checks = ScreenSelectionWatcher.ValidateFixtures() + MainWindow.ValidateSelectionDiagnosticFixtures() + ownedChecks
-                        + ScreenLifeObserver.ValidateFixtures() + ScreenLifeController.ValidateFixtures();
+                        + ScreenLifeObserver.ValidateFixtures() + ScreenLifeController.ValidateFixtures() + OwnedPanelWatcher.ValidateFixtures();
                     Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                        { "version", "1.11.4" }, { "checks", checks },
+                        { "version", "1.12.0" }, { "checks", checks },
                         { "titleProbeVersion", 1 },
                         { "nativeDiagnosticMaxBytes", ScreenSelectionWatcher.LargestDiagnosticFixtureBytes },
                         { "mode", "offline-no-ui" }, { "liveGameVerified", false }
@@ -190,6 +190,7 @@ namespace HexGuide.Desktop
         private readonly SidebarVisibilityState sidebarVisibility;
         private readonly SidebarShortcut shortcut;
         private readonly ScreenSelectionWatcher selectionWatcher;
+        private readonly OwnedPanelWatcher panelWatcher;
         private readonly ScreenLifeController lifeController;
         private Dictionary<string, object> pendingLifeProof;
         private bool lifePosting;
@@ -209,7 +210,7 @@ namespace HexGuide.Desktop
             this.dataDirectory = dataDirectory;
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.11.4 · 我的这一局";
+            Text = "海克斯指南 1.12.0 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -276,9 +277,15 @@ namespace HexGuide.Desktop
             selectionWatcher = new ScreenSelectionWatcher();
             selectionWatcher.StatusChanged += delegate(string message)
             {
-                if (!closing && !confirmChanging) { sidebar.Notice = message; sidebar.Invalidate(); }
+                if (!closing && !confirmChanging && ModelValue.Object(sidebar.Model, "panelSelection") == null) { sidebar.Notice = message; sidebar.Invalidate(); }
             };
             selectionWatcher.SelectionObserved += async delegate(Dictionary<string, object> evidence) { await ConfirmScreenSelectionAsync(evidence); };
+            panelWatcher = new OwnedPanelWatcher();
+            panelWatcher.EvidenceReady += async delegate(Dictionary<string, object> evidence) { await ConfirmPanelSelectionAsync(evidence); };
+            panelWatcher.StatusChanged += delegate(string message)
+            {
+                if (!closing && !confirmChanging) { sidebar.Notice = message; sidebar.Invalidate(); }
+            };
             lifeController = new ScreenLifeController(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "native"), dataDirectory);
             lifeController.ProofReady += delegate(Dictionary<string, object> evidence)
             {
@@ -333,6 +340,7 @@ namespace HexGuide.Desktop
                 closing = true;
                 refreshTimer.Stop(); refreshTimer.Dispose();
                 selectionWatcher.Dispose();
+                panelWatcher.Dispose();
                 lifeController.Dispose();
                 shortcut.Dispose();
                 sidebar.Close();
@@ -582,14 +590,31 @@ namespace HexGuide.Desktop
                 var model = await RequestModelAsync("api/sidebar", null);
                 if (closing || IsDisposed || generation != sidebarRequestGeneration || confirmChanging || scanChanging) return;
                 sidebar.Model = model;
-                selectionWatcher.UpdateModel(model);
+                UpdateSelectionWatchers(model);
                 lifeController.UpdateModel(model);
                 scanMenu.Checked = ModelValue.Boolean(ModelValue.Object(model, "ocr"), "enabled");
                 scanMenu.Enabled = !scanChanging;
                 sidebar.Invalidate();
             }
-            catch { if (!closing && generation == sidebarRequestGeneration && !confirmChanging && !scanChanging) { selectionWatcher.CancelForLocalAction(); lifeController.UpdateModel(null); sidebar.Model = ModelValue.Failure("正在等待本地连接…"); sidebar.Invalidate(); } }
+            catch { if (!closing && generation == sidebarRequestGeneration && !confirmChanging && !scanChanging) { selectionWatcher.CancelForLocalAction(); panelWatcher.CancelForLocalAction(); lifeController.UpdateModel(null); sidebar.Model = ModelValue.Failure("正在等待本地连接…"); sidebar.Invalidate(); } }
             finally { fetching = false; }
+        }
+
+        private void UpdateSelectionWatchers(Dictionary<string, object> model)
+        {
+            // A backend that advertises player-opened panel confirmation uses
+            // one automatic source. Keep the historical animation observer
+            // available for older backends and its isolated regression tests.
+            if (ModelValue.Object(model, "panelSelection") != null)
+            {
+                selectionWatcher.CancelForLocalAction();
+                panelWatcher.UpdateModel(model);
+            }
+            else
+            {
+                panelWatcher.CancelForLocalAction();
+                selectionWatcher.UpdateModel(model);
+            }
         }
 
         private void PulseSelectionDiagnostics()
@@ -597,28 +622,41 @@ namespace HexGuide.Desktop
             DateTime now = DateTime.UtcNow;
             if (closing || now < nextSelectionDiagnostics || System.Threading.Interlocked.CompareExchange(ref selectionDiagnosticsWriting, 1, 0) != 0) return;
             nextSelectionDiagnostics = now.AddSeconds(2);
-            string json;
+            string json, panelJson;
             try
             {
                 json = SelectionDiagnosticsJson(selectionWatcher, sidebar.Model, now);
+                var panelSnapshot = panelWatcher.Diagnostics();
+                panelSnapshot["schemaVersion"] = 1;
+                panelSnapshot["appVersion"] = "1.12.0";
+                panelSnapshot["updatedAtUtc"] = now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);
+                panelSnapshot["backendReason"] = PanelReason(sidebar.Model);
+                panelJson = new JavaScriptSerializer().Serialize(panelSnapshot);
+                if (Encoding.UTF8.GetByteCount(panelJson) > 2048) throw new InvalidOperationException("Panel diagnostic snapshot exceeds its fixed bound.");
             }
             catch { System.Threading.Interlocked.Exchange(ref selectionDiagnosticsWriting, 0); return; }
             string path = Path.Combine(dataDirectory, "diagnostics", "screen-selection-status.json");
+            string panelPath = Path.Combine(dataDirectory, "diagnostics", "panel-selection-status.json");
             Task.Run(delegate
             {
                 string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                string panelTemporary = panelPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(path));
                     File.WriteAllText(temporary, json, new UTF8Encoding(false));
                     if (File.Exists(path)) File.Replace(temporary, path, null);
                     else File.Move(temporary, path);
+                    File.WriteAllText(panelTemporary, panelJson, new UTF8Encoding(false));
+                    if (File.Exists(panelPath)) File.Replace(panelTemporary, panelPath, null);
+                    else File.Move(panelTemporary, panelPath);
                 }
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
                 finally
                 {
                     try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
+                    try { if (File.Exists(panelTemporary)) File.Delete(panelTemporary); } catch { }
                     System.Threading.Interlocked.Exchange(ref selectionDiagnosticsWriting, 0);
                 }
             });
@@ -627,7 +665,7 @@ namespace HexGuide.Desktop
         internal static string SelectionDiagnosticsJson(ScreenSelectionWatcher watcher, Dictionary<string, object> model, DateTime now)
         {
             var snapshot = new Dictionary<string, object> {
-                { "version", "1.11.4" }, { "schemaVersion", 2 },
+                { "version", "1.12.0" }, { "schemaVersion", 2 },
                 { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
                 { "native", watcher.Diagnostics() },
                 { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
@@ -635,6 +673,18 @@ namespace HexGuide.Desktop
             string json = new JavaScriptSerializer().Serialize(snapshot);
             if (Encoding.UTF8.GetByteCount(json) > 4096) throw new InvalidOperationException("Selection diagnostic snapshot exceeds its fixed bound.");
             return json;
+        }
+
+        private static string PanelReason(Dictionary<string, object> model)
+        {
+            string reason = ModelValue.Text(ModelValue.Object(model, "panelSelection"), "reason");
+            switch (reason)
+            {
+                case "waiting-offer": case "waiting-panel": case "panel-statistics-unavailable":
+                case "panel-statistics-tied": case "panel-collision-unverified": case "panel-no-new-match":
+                case "panel-multiple-new-groups": case "panel-unstable": return reason;
+                default: return "unavailable";
+            }
         }
 
         internal static int ValidateSelectionDiagnosticFixtures()
@@ -653,7 +703,7 @@ namespace HexGuide.Desktop
                 string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
                 var snapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
                 if (snapshot.Count != 5 || Encoding.UTF8.GetByteCount(json) > 4096
-                    || ModelValue.Text(snapshot, "version") != "1.11.4" || ModelValue.Text(snapshot, "schemaVersion") != "2")
+                    || ModelValue.Text(snapshot, "version") != "1.12.0" || ModelValue.Text(snapshot, "schemaVersion") != "2")
                     throw new InvalidOperationException("The persisted selection diagnostic snapshot exceeded its schema or byte bound.");
                 if (json.Contains("PRIVATE-MARKER") || json.Contains("\"ids\"") || json.Contains("windowHandle")
                     || json.Contains("\"signature\"") || json.Contains("\"signatures\"") || json.Contains("\"delta\""))
@@ -666,6 +716,7 @@ namespace HexGuide.Desktop
         {
             if (closing || localOrigin == null || scanChanging) return;
             selectionWatcher.CancelForLocalAction();
+            panelWatcher.CancelForLocalAction();
             sidebarRequestGeneration++;
             scanChanging = true; scanMenu.Enabled = false;
             try
@@ -673,7 +724,7 @@ namespace HexGuide.Desktop
                 var model = await RequestModelAsync("api/sidebar/ocr", "{\"enabled\":" + (scanMenu.Checked ? "false" : "true") + "}");
                 if (closing) return;
                 sidebar.Model = model;
-                selectionWatcher.UpdateModel(model);
+                UpdateSelectionWatchers(model);
                 scanMenu.Checked = ModelValue.Boolean(ModelValue.Object(model, "ocr"), "enabled");
                 sidebar.Invalidate();
             }
@@ -685,6 +736,7 @@ namespace HexGuide.Desktop
         {
             if (closing || localOrigin == null || confirmChanging || string.IsNullOrEmpty(id)) return;
             selectionWatcher.CancelForLocalAction();
+            panelWatcher.CancelForLocalAction();
             sidebarRequestGeneration++;
             confirmChanging = true;
             shortcut.ConfirmRequests++;
@@ -717,7 +769,7 @@ namespace HexGuide.Desktop
                     return;
                 }
                 sidebar.Model = confirmed;
-                selectionWatcher.UpdateModel(confirmed);
+                UpdateSelectionWatchers(confirmed);
                 sidebar.ExpandBuild();
                 shortcut.ConfirmSuccesses++;
                 sidebar.Notice = "已记录本局选择，推荐已更新";
@@ -759,7 +811,7 @@ namespace HexGuide.Desktop
                     return;
                 }
                 sidebar.Model = confirmed;
-                selectionWatcher.UpdateModel(confirmed);
+                UpdateSelectionWatchers(confirmed);
                 sidebar.ExpandBuild();
                 sidebar.Notice = "屏幕自动确认（实验）：已记录选择，推荐已更新";
                 nextFetch = DateTime.MinValue;
@@ -773,6 +825,47 @@ namespace HexGuide.Desktop
             }
             catch { if (!closing) sidebar.Notice = "屏幕自动确认（实验）：记录未完成，可手动确认"; }
             finally { confirmChanging = false; if (!closing) sidebar.Invalidate(); }
+        }
+
+        private async Task ConfirmPanelSelectionAsync(Dictionary<string, object> evidence)
+        {
+            if (closing || localOrigin == null || confirmChanging || scanChanging || evidence == null) return;
+            long epoch, revision;
+            var before = sidebar.Model;
+            if (!ModelValue.Integer(evidence, "gameEpoch", out epoch) || !ModelValue.Integer(evidence, "revision", out revision)) return;
+            sidebarRequestGeneration++;
+            confirmChanging = true;
+            bool accepted = false;
+            try
+            {
+                string body = new JavaScriptSerializer().Serialize(evidence);
+                var confirmed = await RequestModelAsync("api/sidebar/panel", body);
+                if (closing) return;
+                long afterEpoch, afterRevision;
+                if (!ModelValue.Integer(confirmed, "gameEpoch", out afterEpoch) || afterEpoch != epoch
+                    || !ModelValue.Integer(confirmed, "sessionRevision", out afterRevision) || afterRevision < revision)
+                { nextFetch = DateTime.MinValue; return; }
+                sidebar.Model = confirmed;
+                UpdateSelectionWatchers(confirmed);
+                accepted = afterRevision > revision;
+                if (afterRevision > revision && ModelValue.Array(confirmed, "owned").Count > ModelValue.Array(before, "owned").Count)
+                {
+                    sidebar.ExpandBuild();
+                    bool inferred = false;
+                    foreach (object entry in ModelValue.Array(confirmed, "owned"))
+                        if (ModelValue.Boolean(entry as Dictionary<string, object>, "inferred")) inferred = true;
+                    sidebar.Notice = inferred ? "推定已选：同图标按统计区分；可打开详细纠正" : "面板图标已匹配，出装与后续海克斯已更新";
+                }
+                else if (PanelReason(confirmed) == "panel-statistics-unavailable" || PanelReason(confirmed) == "panel-statistics-tied")
+                    sidebar.Notice = "同图标统计不足或并列，请在侧栏手动确认";
+                nextFetch = DateTime.MinValue;
+            }
+            catch
+            {
+                if (!closing) sidebar.Notice = "面板核对未记录，可继续打开面板或手动确认";
+                nextFetch = DateTime.MinValue;
+            }
+            finally { panelWatcher.SubmissionCompleted(accepted); confirmChanging = false; if (!closing) sidebar.Invalidate(); }
         }
 
         private async Task PublishScreenLifeAsync(Dictionary<string, object> evidence)
@@ -1215,7 +1308,7 @@ namespace HexGuide.Desktop
             {
                 int count = Math.Min(12, ModelValue.Array(Model, "owned").Count);
                 int columns = OwnedIconColumns(Math.Max(1, Width - 34));
-                return S(25) + (count == 0 ? S(38) : ((count + columns - 1) / columns) * (S(39) + S(7)) + S(5));
+                return S(25) + (count == 0 ? S(38) : ((count + columns - 1) / columns) * (S(39) + S(7)) + S(5)) + (HasInferredOwned() ? S(35) : 0);
             }
             if (section == "offers")
             {
@@ -1512,6 +1605,15 @@ namespace HexGuide.Desktop
                 DrawAugmentIcon(g, item as Dictionary<string, object>, new Rectangle(x + (index % columns) * cell, y + (index / columns) * cell, S(39), S(39)));
                 index++;
             }
+            if (HasInferredOwned())
+                Write(g, "含推定已选：同图标按统计区分\n打开详细可移除并改选", smallFont, muted,
+                    new Rectangle(x, y + ((index + columns - 1) / columns) * cell, width, S(35)));
+        }
+        private bool HasInferredOwned()
+        {
+            foreach (object entry in ModelValue.Array(Model, "owned"))
+                if (ModelValue.Boolean(entry as Dictionary<string, object>, "inferred")) return true;
+            return false;
         }
         private void DrawOffers(Graphics g, int x, int y, int width)
         {

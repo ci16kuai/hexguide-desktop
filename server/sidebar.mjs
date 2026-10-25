@@ -9,6 +9,7 @@ import {OCR_SCAN_CODES, sanitizeScanCode} from './scan-diagnostics.mjs';
 import {OcrScanSchedule} from './ocr-schedule.mjs';
 import {OcrScheduleDiagnostics} from './ocr-schedule-diagnostics.mjs';
 import {ScreenLifeSource, ScreenLifeValidationError, ScreenLifeConflictError} from './screen-life.mjs';
+import {validatePanelEvidence} from './panel-selection.mjs';
 
 const ROUTES = new Set(['auto', 'attack', 'spell', 'tank', 'support', 'crit']);
 const END_PHASES = new Set(['ChampSelect', 'Lobby', 'Matchmaking', 'ReadyCheck', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
@@ -41,9 +42,9 @@ function publicOcrDetails(raw) {
 
 /** Confirmed choices and public game observations, shared by both app windows. */
 export class BackgroundSidebar {
-  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, recommendationRepository, recommendationPolicy = {}, scanPolicy = {}, timers = {}, now = () => Date.now(), offerLifetime = 60000} = {}) {
+  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, recommendationRepository, recommendationPolicy = {}, scanPolicy = {}, panelPolicy = {}, timers = {}, now = () => Date.now(), offerLifetime = 60000} = {}) {
     if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
-    Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, recommendationRepository, recommendationPolicy, now, offerLifetime});
+    Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, recommendationRepository, recommendationPolicy, panelPolicy, now, offerLifetime});
     this.scanSchedule = new OcrScanSchedule({now, policy:scanPolicy});
     this.lifeSource = new ScreenLifeSource({now});
     this.scanDiagnostics = new OcrScheduleDiagnostics({dataDirectory, now});
@@ -56,6 +57,9 @@ export class BackgroundSidebar {
     this.augments = new Map(enrichData({augments:(data.augments || []).filter(eligible)}).augments.map(augment => [augment.id, augment]));
     this.session = {owned:[], route:'auto', gameId:null, revision:0};
     this.snapshotBlocked = false;
+    this.choiceSources = Object.create(null);
+    this.panelLease = null;
+    this.panelStatus = {status:'waiting', reason:'waiting-offer'};
     this.ocr = {enabled:true, status:'waiting', message:'自动识别已开启；等待开局或复活后的识别窗口。', observedAt:null};
     this.offers = [];
     this.offerToken = null;
@@ -78,6 +82,10 @@ export class BackgroundSidebar {
       const selected = this.validateSession({owned:saved.owned, route:saved.route});
       this.session = {...selected, gameId:gameId(saved.gameId), revision:Number.isSafeInteger(saved.revision) && saved.revision >= 0 ? saved.revision : 0};
       this.snapshotBlocked = saved.selectionSources?.manualBarrier === true;
+      const inferred = saved.selectionSources?.inferredChoices;
+      if (Array.isArray(inferred) && inferred.length <= 12 && inferred.every(id => typeof id === 'string' && this.session.owned.includes(id))) {
+        for (const id of inferred) this.choiceSources[id] = 'panel-statistical';
+      }
     } catch { /* Missing or corrupt assistant state is safe to start afresh. */ }
     try {
       const saved = JSON.parse(await readFile(path.join(this.dataDirectory, 'recognition.json'), 'utf8'));
@@ -101,7 +109,9 @@ export class BackgroundSidebar {
   persist() {
     if (!this.dataDirectory) return Promise.resolve();
     // Serialize writes so a slower previous write cannot restore old selections.
-    const payload = JSON.stringify({...this.session, selectionSources:{manualBarrier:this.snapshotBlocked}}, null, 2) + '\n';
+    const inferredChoices = this.session.owned.filter(id => this.choiceSources[id] === 'panel-statistical');
+    const payload = JSON.stringify({...this.session, selectionSources:{manualBarrier:this.snapshotBlocked,
+      ...(inferredChoices.length ? {inferredChoices} : {})}}, null, 2) + '\n';
     this.persistTail = this.persistTail.catch(() => {}).then(async () => {
       await mkdir(this.dataDirectory, {recursive:true});
       const file = path.join(this.dataDirectory, 'session.json');
@@ -131,6 +141,9 @@ export class BackgroundSidebar {
   clearGame() {
     this.lifeSource.reset();
     this.snapshotBlocked = false;
+    this.choiceSources = Object.create(null);
+    this.panelLease = null;
+    this.panelStatus = {status:'waiting', reason:'waiting-offer'};
     this.session = {owned:[], route:'auto', gameId:null, revision:this.session.revision + 1};
     this.offers = [];
     this.offerToken = null;
@@ -230,6 +243,44 @@ export class BackgroundSidebar {
   selectionEligible(live) { return this.ocr.enabled && live.phase === 'InProgress' && live.stage !== 'loading' && !(live.mode?.known && !live.mode.isMayhem); }
   getSelectionObservation() { const live = this.observe(); return this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live)); }
 
+  // The result panel is opened by the player after choosing. It therefore has
+  // its own bounded result scope, independent of the animation/click lease and
+  // the shorter lifetime of the visible three-card suggestions.
+  getPanelSelection(live) {
+    const lease = this.panelLease, current = this.selectionContext();
+    const active = lease && this.selectionEligible(live) && live.stage === 'live'
+      && live.connection?.status === 'connected' && live.mode?.known === true && live.mode.isMayhem === true
+      && this.champions.has(live.championId) && this.now() - lease.offeredAt <= 300000
+      && ['gameId','gameEpoch','revision'].every(key => lease[key] === current[key]);
+    if (!active) return {status:'waiting', reason:'waiting-offer'};
+    const icon = id => { const a = this.augments.get(id); return {id, icon:text(a?.icon, 400), rarity:text(a?.rarity, 40)}; };
+    return {...current, status:'watching', reason:this.panelStatus.reason, offerToken:lease.offerToken,
+      ids:[...lease.ids], offeredAt:lease.offeredAt, capture:structuredClone(lease.capture),
+      offers:lease.ids.map(icon), owned:this.session.owned.map(icon)};
+  }
+
+  async observePanelEvidence(value) {
+    const live = this.observe(), scope = this.getPanelSelection(live), lease = this.panelLease;
+    if (scope.status !== 'watching' || !lease) throw new SessionConflictError('The current panel scope has changed.');
+    const champion = this.champions.get(live.championId);
+    const entry = this.recommendationRepository?.get(champion.id);
+    const patch = entry?.patch || '16.21';
+    const scopedEntry = entry?.championId === champion.id && entry.patch === patch ? entry : null;
+    const evidence = selectBuildEvidence(scopedEntry, {champion, owned:[], augments:[...this.augments.values()], patch});
+    const identity = id => ({id, iconKey:this.augments.get(id)?.icon || '', kind:'augment'});
+    const offers = lease.ids.map(id => ({...identity(id), statistic:evidence.augmentStatistics[id]
+      ? {...evidence.augmentStatistics[id], championId:champion.id, mode:'mayhem'} : null}));
+    const result = validatePanelEvidence(value, {...this.selectionContext(), eligible:true, now:this.now(),
+      offerToken:lease.offerToken, ids:lease.ids, offeredAt:lease.offeredAt, championId:champion.id, patch,
+      offers, owned:this.session.owned.map(identity)}, this.panelPolicy);
+    this.panelStatus = {status:result.status, reason:result.reason};
+    if (['panel-context-mismatch', 'panel-offer-expired', 'panel-ineligible'].includes(result.reason)) throw new SessionConflictError('The current panel scope has changed.');
+    if (result.status === 'rejected') throw new SessionValidationError('Invalid panel evidence.');
+    if (!result.id) return this.getModel();
+    if (this.session.owned.includes(result.id) || this.session.owned.length >= 12) throw new SessionConflictError('The choice has already been recorded.');
+    return this.commitChoice(result.id, result.inferred ? 'panel-statistical' : 'panel-icon');
+  }
+
   suspendSelectionForScan(raw, live, hard = false) {
     if (hard || !live || !this.selectionEligible(live) || FOREGROUND_SCAN_FAILURES.has(raw?.code)) this.selectionObserver.invalidate();
     else this.selectionObserver.suspendForResultCheck(this.selectionContext(), true);
@@ -276,6 +327,8 @@ export class BackgroundSidebar {
       if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) && this.offers.length === 3) this.consumedOfferKey = JSON.stringify(this.offers.map(offer => offer.id));
       this.generation++;
       this.selectionObserver.invalidate();
+      this.panelLease = null;
+      this.choiceSources = Object.fromEntries(Object.entries(this.choiceSources).filter(([id]) => selected.owned.includes(id)));
       this.session = {...this.session, ...selected, revision:this.session.revision + 1};
       // Once the player confirms a card, that previous round is no longer offered.
       if (this.offers.some(offer => selected.owned.includes(offer.id))) {
@@ -326,13 +379,17 @@ export class BackgroundSidebar {
     this.scanSchedule.confirmed();
     this.generation++;
     this.selectionObserver.invalidate();
+    this.panelLease = null;
+    this.choiceSources[id] = provider;
     this.consumedOfferKey = JSON.stringify(this.offers.map(offer => offer.id));
     this.session = {...this.session, owned:[...this.session.owned, id], revision:this.session.revision + 1};
     this.offers = [];
     this.offerToken = null;
     this.offerTime = 0;
     this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
-    this.ocr.message = provider === 'screen' ? '实验性屏幕确认已记录；可手动纠正，等待下一轮三选一卡片。' : provider === 'live-client'
+    this.ocr.message = provider === 'panel-statistical' ? '同图标按当前英雄使用人数推定已选；请核对，可在完整助手移除并改选。'
+      : provider === 'panel-icon' ? '六格面板图标已匹配，推荐已更新；可手动纠正。'
+      : provider === 'screen' ? '实验性屏幕确认已记录；可手动纠正，等待下一轮三选一卡片。' : provider === 'live-client'
       ? '游戏接口的明确已选结果已记录；推荐已更新，可手动纠正。' : '已确认选择；等待下一轮三选一卡片。';
     delete this.ocr.code;
     delete this.ocr.diagnostics;
@@ -343,7 +400,7 @@ export class BackgroundSidebar {
     this.ocr.enabled = value.enabled;
     delete this.ocr.code;
     delete this.ocr.diagnostics;
-    if (!value.enabled) { this.generation++; this.selectionObserver.invalidate(); this.ocr.status = 'disabled'; this.ocr.message = '自动识别已暂停；已确认海克斯仍保留。'; }
+    if (!value.enabled) { this.generation++; this.selectionObserver.invalidate(); this.panelLease = null; this.ocr.status = 'disabled'; this.ocr.message = '自动识别已暂停；已确认海克斯仍保留。'; }
     else if (!this.offers.length) { this.ocr.status = 'waiting'; this.ocr.message = '后台识别已开启；等待开局或复活后的识别窗口。'; }
     void this.persistRecognition();
     return this.getModel();
@@ -398,6 +455,11 @@ export class BackgroundSidebar {
         if (changedOffers || !this.offerToken) this.offerToken = createOfferToken();
         this.offers = proposals;
         const capture = sanitizeSelectionCapture(raw?.selectionCapture);
+        if (capture?.identityAnchors && this.selectionAttempt.metadataStatus === 'accepted' && this.selectionEligible(current)) {
+          this.panelLease = {...this.selectionContext(), offerToken:this.offerToken, ids:proposals.map(offer => offer.id),
+            offeredAt:capture.capturedAt, capture};
+          this.panelStatus = {status:'watching', reason:'waiting-panel'};
+        } else if (changedOffers) this.panelLease = null;
         if (capture?.identityAnchors && this.selectionEligible(current)) this.selectionObserver.arm({...this.selectionContext(), offerToken:this.offerToken, ids:proposals.map(offer => offer.id), capture});
         else this.suspendSelectionForScan(raw, current, changedOffers);
         this.offerTime = this.now();
@@ -454,14 +516,16 @@ export class BackgroundSidebar {
     const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live));
     const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), this.selectionEligible(live));
     return {
-      version:'1.11.4', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
-      gameEpoch:this.gameEpoch, selection, selectionResult, selectionDiagnostics:this.selectionDiagnostics(selection),
+      version:'1.12.0', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      gameEpoch:this.gameEpoch, selection, selectionResult, panelSelection:this.getPanelSelection(live), selectionDiagnostics:this.selectionDiagnostics(selection),
       life:this.lifeSource.resolve(live, this.selectionContext()),
       mode:live.mode || {queueId:null, isMayhem:false, known:false},
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
       level:live.level ?? null, gameTime:live.gameTime ?? null, currentGold:live.currentGold ?? null, items:live.items || [],
       teams:live.teams || {status:'unavailable', ownTeam:null, allies:[], enemies:[], observedAt:live.observedAt || null},
-      owned:owned.map(augment => ({id:augment.id, name:augment.name, icon:text(augment.icon, 400), rarity:text(augment.rarity, 40), summary:text(String(augment.summary || augment.description || '').replace(/<[^>]*>/g, ''), 300)})), offers,
+      owned:owned.map(augment => ({id:augment.id, name:augment.name, icon:text(augment.icon, 400), rarity:text(augment.rarity, 40),
+        ...(this.choiceSources[augment.id] === 'panel-statistical' ? {inferred:true, confirmationLabel:'推定已选（同图标统计）'} : {}),
+        summary:text(String(augment.summary || augment.description || '').replace(/<[^>]*>/g, ''), 300)})), offers,
       ocr:{...this.ocr, schedule:this.scanScheduleState(live), proposals:this.offers.map(offer => ({...offer}))}, route:this.session.route, updatedAt:live.observedAt || new Date(this.now()).toISOString(),
       plan,
       ...(this.appearance ? {appearance:this.appearance.get()} : {}),

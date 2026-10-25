@@ -156,11 +156,15 @@ export class OcrScanSchedule {
     if (gameTime !== null && this.highestGameTime !== null && gameTime < this.highestGameTime) return;
     this.lastObservedAt = observed;
     if (gameTime !== null) this.highestGameTime = Math.max(this.highestGameTime ?? 0, gameTime);
-    if (!this.enteredLive && newSnapshot) {
+    if (!this.enteredLive && newSnapshot && (this.loadingObserved || gameTime !== null)) {
+      // A partial first live response may have no clock yet. Do not consume
+      // the opening edge until loading or a usable clock identifies it. A
+      // valid late clock seals mid-game attachment without inventing a start.
       this.enteredLive = true;
-      const startedAt = this.loadingObserved ? Math.min(now, observed)
-        : gameTime !== null && gameTime * 1000 < this.policy.windowMs ? Math.min(now, observed) - gameTime * 1000 : null;
-      if (startedAt !== null) this.beginWindow('game-start', startedAt + this.policy.windowMs);
+      const opening = this.loadingObserved || gameTime * 1000 < this.policy.windowMs;
+      // Give a witnessed opening its full minute from the usable live sample,
+      // rather than spending that minute while the client/API was loading.
+      if (opening) this.beginWindow('game-start', Math.min(now, observed) + this.policy.windowMs);
     }
     const life = this.lifeEvidence(live, observed, now);
     if (life === null || this.lastLife && life.observedAt <= this.lastLife.observedAt) return;

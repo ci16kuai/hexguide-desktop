@@ -120,3 +120,14 @@ test('selection confirmation requests a fresh authoritative plan immediately wit
   h.model(m=>({...m,plan:{...m.plan,buildItems:[{id:'1001',name:'FRESH-AFTER-CONFIRM',effect:'fixture'}]}}));
   await h.confirmed();assert.match(h.html(),/FRESH-AFTER-CONFIRM/);
 });
+
+test('statistical panel choices are visibly inferred only with matching session authority',async()=>{
+  const h=await harness();
+  h.setOwned(['chosen']);h.session({owned:['chosen']});
+  h.model(m=>({...m,owned:[{id:'chosen',inferred:true}],plan:{...m.plan,ownedIds:['chosen']}}));
+  await h.tick();
+  assert.match(h.html(),/推定已选（同图标统计）/);
+  assert.match(h.html(),/对局选择次数推定/);
+  h.session({revision:8});
+  assert.doesNotMatch(h.html(),/推定已选（同图标统计）/,'stale metadata cannot label another session');
+});
