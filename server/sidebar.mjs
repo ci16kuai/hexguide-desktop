@@ -60,6 +60,8 @@ export class BackgroundSidebar {
     this.choiceSources = Object.create(null);
     this.panelLease = null;
     this.observedScanLifecycle = null;
+    this.captureEligible = null;
+    this.captureEligibleSince = 0;
     this.panelStatus = {status:'waiting', reason:'waiting-offer'};
     this.ocr = {enabled:true, status:'waiting', message:'自动识别已开启；等待开局或复活后的识别窗口。', observedAt:null};
     this.offers = [];
@@ -180,8 +182,10 @@ export class BackgroundSidebar {
     }
     // Observe a new game/respawn before selected-ID confirmation from this
     // snapshot. A confirmed choice must end, rather than reopen, that window.
-    this.scanSchedule.observe({live:this.schedulingSnapshot(live), gameEpoch:this.gameEpoch});
+    const schedulingLive = this.schedulingSnapshot(live);
+    this.scanSchedule.observe({live:schedulingLive, gameEpoch:this.gameEpoch});
     this.syncScanLifecycle();
+    this.syncCaptureEligibility(schedulingLive);
     // Only explicit, completely mapped selected IDs from the collector qualify.
     // OCR proposals never enter this path. Empty/unreadable snapshots do not
     // erase choices, and a manual correction blocks future snapshot additions.
@@ -225,6 +229,28 @@ export class BackgroundSidebar {
     if (previous === null || previous === lifecycle) return;
     // An offer/result proof belongs to one opening/respawn lifecycle. Reusing
     // the same card IDs after death still requires a new capture and token.
+    this.revokeCaptureEvidence('识别周期已更新；等待当前三选一卡片。');
+  }
+  captureContextEligible(live) {
+    if (live.phase !== 'InProgress' || live.connection?.status !== 'connected'
+      || live.mode?.known && !live.mode.isMayhem || this.scanSchedule.lastLife?.isDead === true
+      || live.stage !== undefined && !['live','playing'].includes(live.stage)) return false;
+    // Preserve legacy manual-only snapshots that predate the live-stage
+    // contract. Current collector snapshots must be fresh and in order.
+    if (live.stage !== 'live') return true;
+    const observed = this.scanSchedule.snapshotTime(live,this.scanSchedule.time());
+    return observed !== null && this.scanSchedule.lastObservedAt === observed;
+  }
+  syncCaptureEligibility(live) {
+    const eligible = this.captureContextEligible(live), previous = this.captureEligible;
+    this.captureEligible = eligible;
+    if (eligible === previous) return;
+    if (eligible) { this.captureEligibleSince = this.scanSchedule.time(); return; }
+    if (previous !== true) return;
+    this.scanSchedule.revokeCapture();
+    this.revokeCaptureEvidence('暂时无法确认游戏状态；恢复后将重新识别。');
+  }
+  revokeCaptureEvidence(message) {
     if (this.offers.length || this.panelLease || this.selectionObserver.observation || this.selectionObserver.resultLease
       || this.selectionObserver.fxContinuation) {
       this.selectionObserver.invalidate();
@@ -235,7 +261,7 @@ export class BackgroundSidebar {
     this.offerToken = null;
     this.offerTime = 0;
     this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
-    this.ocr.message = this.ocr.enabled ? '识别周期已更新；等待当前三选一卡片。' : '自动识别已暂停；已确认海克斯仍保留。';
+    this.ocr.message = this.ocr.enabled ? message : '自动识别已暂停；已确认海克斯仍保留。';
     delete this.ocr.code;
     delete this.ocr.diagnostics;
   }
@@ -262,7 +288,7 @@ export class BackgroundSidebar {
     if (value.state === 'unknown' && life.source === 'unavailable') this.scanSchedule.forgetLife();
     return this.getModel();
   }
-  selectionEligible(live) { return this.ocr.enabled && live.phase === 'InProgress' && live.stage !== 'loading' && !(live.mode?.known && !live.mode.isMayhem); }
+  selectionEligible(live) { return this.ocr.enabled && this.captureEligible !== false && live.phase === 'InProgress' && live.stage !== 'loading' && !(live.mode?.known && !live.mode.isMayhem); }
   getSelectionObservation() { const live = this.observe(); return this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live)); }
 
   // The result panel is opened by the player after choosing. It therefore has
@@ -272,6 +298,7 @@ export class BackgroundSidebar {
     const lease = this.panelLease, current = this.selectionContext();
     const active = lease && this.selectionEligible(live) && live.stage === 'live'
       && lease.lifecycle === this.scanSchedule.lifecycle && this.scanSchedule.lastLife?.isDead !== true
+      && lease.captureRevision === this.scanSchedule.captureRevision
       && live.connection?.status === 'connected' && live.mode?.known === true && live.mode.isMayhem === true
       && this.champions.has(live.championId) && this.now() - lease.offeredAt <= 300000
       && ['gameId','gameEpoch','revision'].every(key => lease[key] === current[key]);
@@ -320,7 +347,8 @@ export class BackgroundSidebar {
       if (!complete || !this.selectionEligible(live)) { metadataStatus = 'context-ineligible'; if (!rejectionCode) scanCode = 'scan-context-ineligible'; }
       else if (!capture) metadataStatus = 'shape-invalid';
       else if (!capture.identityAnchors) metadataStatus = 'missing';
-      else if (capture.capturedAt < this.scanSchedule.lifecycleStartedAt || capture.capturedAt <= this.selectionObserver.invalidatedAt || capture.capturedAt > this.now() + 1000
+      else if (capture.capturedAt < Math.max(this.scanSchedule.lifecycleStartedAt,this.captureEligibleSince)
+        || capture.capturedAt <= this.selectionObserver.invalidatedAt || capture.capturedAt > this.now() + 1000
         || this.now() - capture.capturedAt > this.selectionObserver.maxAge) { metadataStatus = 'stale'; scanCode = 'scan-capture-stale'; }
     }
     this.selectionAttempt = {metadataStatus, scanCode, capturedAt:capture?.capturedAt ?? null, completedAt:this.now()};
@@ -435,13 +463,13 @@ export class BackgroundSidebar {
     if (this.pending) return this.pending;
     const startingWindow = this.scanScheduleState(live);
     if (automatic && !startingWindow.due) return {status:'waiting', message:'等待开局或复活后的识别窗口。', proposals:[]};
-    if (live.phase !== 'InProgress' || live.stage === 'loading' || live.mode?.known && !live.mode.isMayhem
-      || this.scanSchedule.lastLife?.isDead === true) {
+    if (!this.captureEligible) {
       this.recordSelectionAttempt(null, false, live, false);
       return {status:'waiting', message:'等待进入海克斯大乱斗对局后识别。', proposals:[]};
     }
     const generation = this.generation;
     const lifecycle = this.scanSchedule.lifecycle;
+    const captureRevision = this.scanSchedule.captureRevision;
     const startedAt = this.now();
     this.scanSchedule.started();
     this.scanCount++;
@@ -451,12 +479,9 @@ export class BackgroundSidebar {
       try { raw = this.scanner ? await this.scanner() : null; }
       catch { raw = {code:'scan-execution-failed'}; }
       const current = this.observe();
-      const currentWindow = this.scanScheduleState(current);
+      this.scanScheduleState(current);
       if (generation !== this.generation || lifecycle !== this.scanSchedule.lifecycle
-        || current.phase !== 'InProgress' || current.stage === 'loading'
-        || current.mode?.known && !current.mode.isMayhem || this.scanSchedule.lastLife?.isDead === true
-        || current.connection?.status !== 'connected' || currentWindow.mode === 'unknown'
-        || current.stage !== undefined && !['live','playing'].includes(current.stage)) {
+        || captureRevision !== this.scanSchedule.captureRevision || !this.captureEligible) {
         completion = {status:'waiting', code:'scan-context-changed'};
         this.recordSelectionAttempt(raw, false, current, false, 'scan-context-changed');
         return {status:'waiting', code:'scan-context-changed', message:'识别周期已变化，请等待当前三选一卡片。', proposals:[]};
@@ -480,7 +505,7 @@ export class BackgroundSidebar {
         this.offers = proposals;
         const capture = sanitizeSelectionCapture(raw?.selectionCapture);
         if (capture?.identityAnchors && this.selectionAttempt.metadataStatus === 'accepted' && this.selectionEligible(current)) {
-          this.panelLease = {...this.selectionContext(), lifecycle, offerToken:this.offerToken, ids:proposals.map(offer => offer.id),
+          this.panelLease = {...this.selectionContext(), lifecycle, captureRevision, offerToken:this.offerToken, ids:proposals.map(offer => offer.id),
             offeredAt:capture.capturedAt, capture};
           this.panelStatus = {status:'watching', reason:'waiting-panel'};
         } else if (changedOffers) this.panelLease = null;
@@ -566,10 +591,10 @@ export class BackgroundSidebar {
 
   scanScheduleState(live) {
     const current = this.schedulingSnapshot(live || this.collector.getSnapshot());
-    const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(current));
     const schedule = this.scanSchedule.decision({live:current, gameEpoch:this.gameEpoch, enabled:this.ocr.enabled,
-      hasOffers:this.offers.length === 3, armed:selection.status === 'armed', inFlight:Boolean(this.pending)});
+      inFlight:Boolean(this.pending)});
     this.syncScanLifecycle();
+    this.syncCaptureEligibility(current);
     return schedule;
   }
 

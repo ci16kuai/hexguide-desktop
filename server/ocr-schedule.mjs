@@ -71,10 +71,12 @@ export class OcrScanSchedule {
     // the fast/follow-up pacing window. Death revokes it before respawn exists.
     this.lifecycle = 0;
     this.lifecycleStartedAt = 0;
+    this.captureRevision = 0;
     this.windowSequence = 0;
     this.activeScan = false;
     this.activeEpoch = null;
     this.activeLifecycle = null;
+    this.activeCaptureRevision = null;
     this.resetTiming();
   }
 
@@ -138,6 +140,12 @@ export class OcrScanSchedule {
   advanceLifecycle() {
     this.lifecycle = this.lifecycle < Number.MAX_SAFE_INTEGER ? this.lifecycle + 1 : 1;
     this.lifecycleStartedAt = this.time();
+  }
+
+  revokeCapture() {
+    // Losing a usable game snapshot revokes a capture without inventing a
+    // death/respawn event or restarting the current fast/follow-up clock.
+    this.captureRevision = this.captureRevision < Number.MAX_SAFE_INTEGER ? this.captureRevision + 1 : 1;
   }
 
   observe({live, gameEpoch} = {}) {
@@ -244,6 +252,7 @@ export class OcrScanSchedule {
     this.activeScan = true;
     this.activeEpoch = this.epoch;
     this.activeLifecycle = this.lifecycle;
+    this.activeCaptureRevision = this.captureRevision;
     this.lastStartedAt = this.time();
   }
 
@@ -254,10 +263,12 @@ export class OcrScanSchedule {
 
   completed({status, code} = {}) {
     const now = this.time();
-    const current = this.activeScan && this.activeEpoch === this.epoch && this.activeLifecycle === this.lifecycle;
+    const current = this.activeScan && this.activeEpoch === this.epoch && this.activeLifecycle === this.lifecycle
+      && this.activeCaptureRevision === this.captureRevision;
     this.activeScan = false;
     this.activeEpoch = null;
     this.activeLifecycle = null;
+    this.activeCaptureRevision = null;
     if (!current || !this.awaitingConfirmation) return;
     this.lastCompletedAt = now;
     // Empty battle frames and a busy response are expected, not engine faults.

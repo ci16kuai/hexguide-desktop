@@ -27,6 +27,7 @@ function fixture({scanner, gameTime = 20} = {}) {
     scanner:() => {scans++; return scanner ? scanner({scans,time:() => now}) : Promise.resolve(cards(now));}});
   return {sidebar,time:() => now,scans:() => scans,
     advance(ms, patch = {}) {now += ms; live = {...live,...patch,observedAt:new Date(now).toISOString(),gameTime:live.gameTime+ms/1000};},
+    update(patch) {live = {...live,...patch};},
     model:() => sidebar.getModel()};
 }
 
@@ -197,4 +198,95 @@ test('a fresh scan cannot establish evidence using a cached capture from before 
   await h.sidebar.scan(); const model = h.model();
   assert.equal(model.panelSelection.status,'waiting'); assert.equal(model.selection.status,'waiting');
   assert.equal(model.selectionDiagnostics.metadataStatus,'stale'); assert.deepEqual(model.plan.ownedIds,[]);
+});
+
+function loseCaptureEligibility(h, boundary) {
+  h.advance(1000);
+  h.update(boundary === 'disconnected' ? {connection:{status:'waiting'}}
+    : boundary === 'inactive-stage' ? {stage:'waiting'}
+      : {observedAt:new Date(h.time()-11001).toISOString()});
+  return h.model();
+}
+function recoverCaptureEligibility(h) {
+  h.advance(1000,{connection:{status:'connected'},stage:'live'});
+  return h.model();
+}
+function clickProof(h, scope) {
+  return {provider:'screen',offerToken:scope.offerToken,gameId:scope.gameId,gameEpoch:scope.gameEpoch,
+    revision:scope.revision,ids:[...scope.ids],selectedIndex:0,capturedAt:scope.capturedAt,
+    clickedAt:scope.capturedAt,observedAt:h.time(),
+    evidence:{click:true,uniqueFeedback:true,cardsDismissed:true,stableFrames:3,feedbackFrames:1}};
+}
+
+for (const firstAutomatic of [false,true]) for (const secondAutomatic of [false,true]) {
+  for (const boundary of ['disconnected','inactive-stage','stale-snapshot']) {
+    test(`${firstAutomatic ? 'automatic' : 'manual'} task shared with ${secondAutomatic ? 'automatic' : 'manual'} rejects observed ${boundary} loss even after recovery`, async t => {
+      let finish;
+      const h = fixture({scanner:({scans,time}) => scans === 1 ? new Promise(resolve => {finish=resolve;}) : Promise.resolve(cards(time()))});
+      t.after(() => h.sidebar.stop()); const capturedAt = h.time();
+      const first = h.sidebar.scan({automatic:firstAutomatic}), original = h.model();
+      const lifecycle = h.sidebar.scanSchedule.lifecycle, revision = h.sidebar.scanSchedule.captureRevision;
+      const lost = loseCaptureEligibility(h,boundary), revoked = h.sidebar.scanSchedule.captureRevision;
+      assert.ok(revoked > revision); assert.equal(lost.panelSelection.status,'waiting');
+      const second = h.sidebar.scan({automatic:secondAutomatic});
+      assert.equal(h.sidebar.scanSchedule.captureRevision,revoked,'repeated ineligible reads cannot repeatedly revoke the capture');
+      const recovered = recoverCaptureEligibility(h);
+      assert.equal(h.sidebar.scanSchedule.captureRevision,revoked); assert.equal(h.sidebar.scanSchedule.lifecycle,lifecycle);
+      assert.equal(recovered.ocr.schedule.windowId,original.ocr.schedule.windowId);
+      assert.equal(recovered.ocr.schedule.windowRemainingMs,original.ocr.schedule.windowRemainingMs-2000);
+      assert.equal(h.scans(),1); finish(cards(capturedAt));
+      const results = await Promise.all([first,second]); assert.deepEqual(results[0],results[1]);
+      assert.equal(results[0].status,'waiting'); assert.equal(results[0].code,'scan-context-changed');
+      const rejected = h.model(); assert.deepEqual(rejected.offers,[]); assert.equal(rejected.selection.status,'waiting');
+      assert.equal(rejected.panelSelection.status,'waiting'); assert.deepEqual(rejected.plan.ownedIds,[]);
+      assert.equal(rejected.selectionDiagnostics.metadataStatus,'context-ineligible');
+      assert.equal(h.sidebar.scanSchedule.lastCompletedAt,null,'revoked task cannot carry completion pacing into recovered capture scope');
+      assert.equal(h.sidebar.scanSchedule.backoffUntil,0);
+      await h.sidebar.pollOnce(); const fresh = h.model();
+      assert.equal(h.scans(),2); assert.equal(fresh.panelSelection.status,'watching');
+      assert.equal(fresh.selectionDiagnostics.metadataStatus,'accepted');
+      assert.equal(fresh.ocr.schedule.windowId,original.ocr.schedule.windowId,'recovery resumes the same timing cycle');
+    });
+  }
+}
+
+for (const boundary of ['disconnected','inactive-stage','stale-snapshot']) {
+  test(`existing panel, click and manual offer leases cannot revive after observed ${boundary} loss`, async t => {
+    const h = fixture(); t.after(() => h.sidebar.stop()); const old = await offer(h), click = h.sidebar.getSelectionObservation();
+    h.advance(400); const panel = proof(h,old), lifecycle = h.sidebar.scanSchedule.lifecycle, windowId = h.model().ocr.schedule.windowId;
+    loseCaptureEligibility(h,boundary); const recovered = recoverCaptureEligibility(h);
+    assert.equal(h.sidebar.scanSchedule.lifecycle,lifecycle); assert.equal(recovered.ocr.schedule.windowId,windowId);
+    assert.equal(recovered.panelSelection.status,'waiting'); assert.equal(recovered.selection.status,'waiting');
+    assert.equal(recovered.selectionResult.status,'waiting'); assert.deepEqual(recovered.offers,[]);
+    await assert.rejects(h.sidebar.observePanelEvidence(panel),SessionConflictError);
+    await assert.rejects(h.sidebar.observeSelectionEvidence(clickProof(h,click)),SessionConflictError);
+    await assert.rejects(h.sidebar.confirmOffer({id:ids[0],gameId:old.gameId,revision:old.revision,offerToken:old.offerToken}),SessionConflictError);
+    const fresh = await offer(h); assert.notEqual(fresh.offerToken,old.offerToken);
+    await assert.rejects(h.sidebar.observePanelEvidence(panel),SessionConflictError);
+    h.advance(400); const confirmed = await h.sidebar.observePanelEvidence(proof(h,fresh,1));
+    assert.deepEqual(confirmed.plan.ownedIds,[ids[1]]); assert.equal(confirmed.ocr.schedule.mode,'idle');
+  });
+}
+
+test('recovery cannot arm a new scan with a cached frame from before capture eligibility returned', async t => {
+  let cachedAt;
+  const h = fixture({scanner:() => Promise.resolve(cards(cachedAt))}); t.after(() => h.sidebar.stop());
+  h.model(); loseCaptureEligibility(h,'disconnected'); cachedAt = h.time()+500; recoverCaptureEligibility(h);
+  await h.sidebar.scan(); const model = h.model();
+  assert.equal(model.selectionDiagnostics.metadataStatus,'stale'); assert.equal(model.panelSelection.status,'waiting');
+  assert.equal(model.selection.status,'waiting'); assert.deepEqual(model.plan.ownedIds,[]);
+});
+
+test('a focus-only unknown life update does not revoke an otherwise eligible shared capture', async t => {
+  let finish;
+  const h = fixture({scanner:() => new Promise(resolve => {finish=resolve;})}); t.after(() => h.sidebar.stop());
+  const capturedAt = h.time(), first = h.sidebar.scan(), scope = h.model();
+  const revision = h.sidebar.scanSchedule.captureRevision, lifecycle = h.sidebar.scanSchedule.lifecycle;
+  h.advance(1000,{life:{status:'unavailable',isDead:null}});
+  h.sidebar.observeScreenLife({provider:'screen',gameId:scope.gameId,gameEpoch:scope.gameEpoch,observedAt:h.time(),
+    state:'unknown',code:'unavailable',stableFrames:0,countdownSeconds:null});
+  const second = h.sidebar.scan({automatic:true}); finish(cards(capturedAt));
+  const results = await Promise.all([first,second]); assert.equal(results[0].status,'recognized'); assert.deepEqual(results[0],results[1]);
+  assert.equal(h.sidebar.scanSchedule.captureRevision,revision); assert.equal(h.sidebar.scanSchedule.lifecycle,lifecycle);
+  assert.equal(h.model().panelSelection.status,'watching');
 });
