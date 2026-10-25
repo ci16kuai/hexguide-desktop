@@ -1,12 +1,14 @@
-// Heavy title OCR runs only in a bounded opening or respawn window. The
-// lightweight click/FX observer is independent and keeps its own cadence.
+// Heavy title OCR begins after an opening or verified respawn event. It scans
+// quickly for the first minute, then follows up more slowly until a choice is
+// confirmed. The lightweight click/FX observer keeps its independent cadence.
 export const OCR_SCHEDULE_MODES = Object.freeze([
-  'disabled', 'inactive', 'loading', 'other-mode', 'unknown', 'dead', 'idle', 'window', 'backoff',
+  'disabled', 'inactive', 'loading', 'other-mode', 'unknown', 'dead', 'idle', 'window', 'follow-up', 'backoff',
 ]);
 
 export const DEFAULT_OCR_SCHEDULE_POLICY = Object.freeze({
   windowMs:60000,
   intervalMs:500,
+  followUpIntervalMs:5000,
   cooldownMs:100,
   snapshotFreshnessMs:10000,
   futureToleranceMs:1000,
@@ -36,6 +38,7 @@ function normalizePolicy(value) {
     windowMs:bounded(candidate.windowMs, defaults.windowMs, 1000, 120000),
     // A target is start-to-start, not a promise that OCR finishes in 500ms.
     intervalMs:bounded(candidate.intervalMs, defaults.intervalMs, 500, 30000),
+    followUpIntervalMs:bounded(candidate.followUpIntervalMs, defaults.followUpIntervalMs, 1000, 30000),
     cooldownMs:bounded(candidate.cooldownMs, defaults.cooldownMs, 100, 30000),
     snapshotFreshnessMs:bounded(candidate.snapshotFreshnessMs, defaults.snapshotFreshnessMs, 1000, 30000),
     futureToleranceMs:bounded(candidate.futureToleranceMs, defaults.futureToleranceMs, 0, 5000),
@@ -84,6 +87,7 @@ export class OcrScanSchedule {
     this.highestGameTime = null;
     this.lastLife = null;
     this.windowUntil = 0;
+    this.awaitingConfirmation = false;
     this.windowId = null;
     this.trigger = null;
     this.resetPacing();
@@ -121,6 +125,7 @@ export class OcrScanSchedule {
     this.windowId = this.windowSequence;
     this.trigger = trigger;
     this.windowUntil = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(until)));
+    this.awaitingConfirmation = true;
     this.resetPacing();
   }
 
@@ -165,6 +170,7 @@ export class OcrScanSchedule {
       // Death ends the prior choice window. The following verified alive edge
       // receives a fresh ID/deadline, so late pre-death OCR cannot be applied.
       this.windowUntil = 0;
+      this.awaitingConfirmation = false;
       return;
     }
     if (previous?.isDead === true && life.observedAt - previous.observedAt <= this.policy.snapshotFreshnessMs) {
@@ -174,7 +180,7 @@ export class OcrScanSchedule {
 
   decision({live, gameEpoch, enabled = true, hasOffers = false, armed = false, inFlight = false} = {}) {
     // Keep arguments stable for callers; offers/armed deliberately cannot open
-    // or renew a window after its deadline or a confirmed selection.
+    // or renew a cycle after a confirmed selection.
     void hasOffers; void armed;
     this.observe({live, gameEpoch});
     const now = this.time();
@@ -187,8 +193,10 @@ export class OcrScanSchedule {
     if (validEpoch(gameEpoch) && gameEpoch !== this.epoch || live?.connection?.status !== 'connected'
       || observed === null || this.lastObservedAt !== observed) return result('unknown');
     if (this.lastLife?.isDead === true) return result('dead');
-    if (!windowRemainingMs) return result('idle');
-    let mode = 'window', intervalMs = this.policy.intervalMs;
+    if (!this.awaitingConfirmation) return result('idle');
+    const fast = windowRemainingMs > 0;
+    let mode = fast ? 'window' : 'follow-up';
+    let intervalMs = fast ? this.policy.intervalMs : this.policy.followUpIntervalMs;
     let dueAt = Math.max(this.lastStartedAt === null ? now : this.lastStartedAt + intervalMs,
       this.lastCompletedAt === null ? now : this.lastCompletedAt + this.policy.cooldownMs);
     if (this.backoffUntil > now) {
@@ -197,8 +205,9 @@ export class OcrScanSchedule {
       dueAt = Math.max(dueAt, this.backoffUntil);
     }
     const busy = inFlight || this.activeScan;
-    const nextInMs = Math.min(windowRemainingMs, 30000, Math.max(busy ? this.policy.cooldownMs : 0, Math.ceil(dueAt - now)));
-    return result(mode, {due:!busy && dueAt <= now && dueAt < this.windowUntil, intervalMs, nextInMs});
+    const nextInMs = Math.min(fast ? windowRemainingMs : 30000, 30000,
+      Math.max(busy ? this.policy.cooldownMs : 0, Math.ceil(dueAt - now)));
+    return result(mode, {due:!busy && dueAt <= now && (!fast || dueAt < this.windowUntil), intervalMs, nextInMs});
   }
 
   started() {
@@ -220,7 +229,7 @@ export class OcrScanSchedule {
     this.activeScan = false;
     this.activeEpoch = null;
     this.activeWindowId = null;
-    if (!current || this.windowUntil <= now) return;
+    if (!current || !this.awaitingConfirmation) return;
     this.lastCompletedAt = now;
     // Empty battle frames and a busy response are expected, not engine faults.
     const failure = code !== 'scan-busy' && !normalEmptyCodes.has(code)
@@ -239,6 +248,7 @@ export class OcrScanSchedule {
 
   confirmed() {
     this.windowUntil = 0;
+    this.awaitingConfirmation = false;
   }
 
   forgetLife() {

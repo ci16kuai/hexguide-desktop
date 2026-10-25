@@ -48,7 +48,7 @@ test('mid-game attachment does not scan until an observed dead to alive edge', a
   assert.equal(h.sidebar.getModel().ocr.schedule.windowRemainingMs, 60000);
 });
 
-test('slow OCR is serial and rests one hundred milliseconds before the next opening scan', async t => {
+test('slow OCR is serial and rests one hundred milliseconds in the fast and follow-up phases', async t => {
   const h = harness({scanner:async ({advance}) => { advance(8000); return noCards; }});
   t.after(() => h.sidebar.stop());
   await h.sidebar.pollOnce(); assert.equal(h.scans(), 1);
@@ -56,9 +56,14 @@ test('slow OCR is serial and rests one hundred milliseconds before the next open
   h.advance(1); await h.sidebar.pollOnce(); assert.equal(h.scans(), 2);
   assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'window');
   h.advance(60000); await h.sidebar.pollOnce();
-  assert.equal(h.scans(), 2); assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'idle');
-  h.update({level:15}); h.advance(1000); await h.sidebar.pollOnce();
-  assert.equal(h.scans(), 2, 'a level is no longer an OCR trigger');
+  assert.equal(h.scans(), 3); assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'follow-up');
+  const windowId = h.sidebar.getModel().ocr.schedule.windowId;
+  h.advance(99); await h.sidebar.pollOnce(); assert.equal(h.scans(), 3);
+  h.advance(1); await h.sidebar.pollOnce(); assert.equal(h.scans(), 4);
+  h.update({level:15}); h.advance(1); await h.sidebar.pollOnce();
+  assert.equal(h.scans(), 4, 'a level cannot bypass post-completion rest or restart the fast phase');
+  assert.equal(h.sidebar.getModel().ocr.schedule.windowId, windowId);
+  assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'follow-up');
 });
 
 test('manual scans stay immediate outside windows and reuse the single capture while busy', async t => {
@@ -106,15 +111,21 @@ test('confirming current offers stops scanning until an actual respawn regardles
   assert.equal(h.scans(), 2); assert.equal(h.sidebar.getModel().ocr.schedule.trigger, 'respawn');
 });
 
-test('recognized candidates never renew an expired window or create battle scanning', async t => {
+test('unconfirmed candidates continue every five seconds after the fast phase without renewing it', async t => {
   const h = harness({scanner:async () => cards()}); t.after(() => h.sidebar.stop());
   await h.sidebar.pollOnce(); const original = h.sidebar.getModel().ocr.schedule;
   h.advance(59000); await h.sidebar.pollOnce();
-  const expired = h.sidebar.getModel();
-  assert.equal(h.scans(), 1); assert.equal(expired.offers.length, 3);
-  assert.equal(expired.ocr.schedule.windowId, original.windowId);
-  assert.equal(expired.ocr.schedule.mode, 'idle'); assert.equal(expired.ocr.schedule.windowRemainingMs, 0);
-  h.advance(5000); await h.sidebar.pollOnce(); assert.equal(h.scans(), 1);
+  const followUp = h.sidebar.getModel();
+  assert.equal(h.scans(), 2); assert.equal(followUp.offers.length, 3);
+  assert.equal(followUp.ocr.schedule.windowId, original.windowId);
+  assert.equal(followUp.ocr.schedule.mode, 'follow-up');
+  assert.equal(followUp.ocr.schedule.windowRemainingMs, 0);
+  assert.equal(followUp.ocr.schedule.intervalMs, 5000);
+  h.advance(4999); await h.sidebar.pollOnce(); assert.equal(h.scans(), 2);
+  h.advance(1); await h.sidebar.pollOnce(); assert.equal(h.scans(), 3);
+  h.advance(300000); await h.sidebar.pollOnce(); assert.equal(h.scans(), 4);
+  assert.equal(h.sidebar.getModel().ocr.schedule.windowId, original.windowId);
+  assert.equal(h.sidebar.getModel().ocr.schedule.windowRemainingMs, 0);
 });
 
 test('an automatic late completion from a previous respawn window cannot publish or arm its cards', async t => {
@@ -132,7 +143,7 @@ test('an automatic late completion from a previous respawn window cannot publish
   await h.sidebar.pollOnce(); assert.equal(h.scans(), 2, 'the late old result cannot impose a new-window cooldown');
 });
 
-test('an automatic result finishing after expiry is discarded without revoking same-window lightweight evidence', async t => {
+test('an automatic capture completing across the fast boundary is accepted in the same follow-up cycle', async t => {
   let finish;
   const h = harness({scanner:({scans, time, advance}) => {
     if (scans === 3) return new Promise(resolve => { finish = resolve; });
@@ -140,14 +151,91 @@ test('an automatic result finishing after expiry is discarded without revoking s
   }});
   t.after(() => h.sidebar.stop());
   await h.sidebar.pollOnce(); h.advance(58000); await h.sidebar.pollOnce();
-  const observation = h.sidebar.getSelectionObservation();
+  const observation = h.sidebar.getSelectionObservation(), cycle = h.sidebar.getModel().ocr.schedule.windowId;
   assert.equal(observation.status, 'armed');
   h.advance(500); const lateTime = h.time(), late = h.sidebar.scan({automatic:true});
   h.advance(501); finish(cards(lateTime)); const result = await late;
-  assert.equal(result.status, 'waiting'); assert.equal(result.code, 'scan-context-changed');
-  assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'idle');
+  assert.equal(result.status, 'recognized');
+  assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'follow-up');
+  assert.equal(h.sidebar.getModel().ocr.schedule.windowId, cycle);
+  assert.equal(h.sidebar.getModel().offers.length, 3);
   assert.equal(h.sidebar.getSelectionObservation().status, 'armed');
-  assert.equal(h.sidebar.getSelectionObservation().capturedAt, observation.capturedAt);
+  assert.equal(h.sidebar.getSelectionObservation().capturedAt, lateTime);
+  assert.equal(h.sidebar.getSelectionObservation().offerToken, observation.offerToken);
+});
+
+test('two same-offer captures spanning the fast boundary retain their evidence and permit confirmed selection', async t => {
+  const h = harness({scanner:async ({advance, time}) => { advance(1); return cards(time()); }});
+  t.after(() => h.sidebar.stop()); h.sidebar.getModel();
+  h.advance(58000); await h.sidebar.pollOnce();
+  const first = h.sidebar.getSelectionObservation(), cycle = h.sidebar.getModel().ocr.schedule.windowId;
+  assert.equal(first.status, 'armed');
+  assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'window');
+  h.advance(5000); await h.sidebar.pollOnce();
+  const second = h.sidebar.getSelectionObservation();
+  assert.equal(second.status, 'armed');
+  assert.ok(second.capturedAt > first.capturedAt);
+  assert.equal(second.offerToken, first.offerToken);
+  assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'follow-up');
+  assert.equal(h.sidebar.getModel().ocr.schedule.windowId, cycle);
+  // Synthetic provider evidence verifies retained capture history, not actual
+  // visual accuracy. The earlier capture remains valid after the fresh rearm.
+  const model = await h.sidebar.observeSelectionEvidence({provider:'screen', offerToken:first.offerToken,
+    gameId:first.gameId, gameEpoch:first.gameEpoch, revision:first.revision, ids:[...first.ids], selectedIndex:1,
+    capturedAt:first.capturedAt, clickedAt:h.time(), observedAt:h.time(),
+    evidence:{click:true, uniqueFeedback:true, cardsDismissed:true, stableFrames:3, feedbackFrames:1}});
+  assert.deepEqual(model.plan.ownedIds, [ids[1]]);
+  assert.equal(model.ocr.schedule.mode, 'idle');
+  assert.equal(model.offers.length, 0);
+  h.advance(300000); await h.sidebar.pollOnce(); assert.equal(h.scans(), 2);
+});
+
+test('death rejects an in-flight follow-up capture and a real respawn starts a new fast cycle', async t => {
+  let finish;
+  const h = harness({scanner:({scans}) => scans === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(noCards)});
+  t.after(() => h.sidebar.stop()); h.sidebar.getModel();
+  h.advance(60000); const capturedAt = h.time(), pending = h.sidebar.scan({automatic:true});
+  const previousCycle = h.sidebar.getModel().ocr.schedule.windowId;
+  assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'follow-up');
+  h.advance(1000); h.update({life:{status:'detected', isDead:true}});
+  assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'dead');
+  finish(cards(capturedAt)); const result = await pending;
+  assert.equal(result.status, 'waiting'); assert.equal(result.code, 'scan-context-changed');
+  assert.equal(h.sidebar.getModel().offers.length, 0);
+  assert.equal(h.sidebar.getSelectionObservation().status, 'waiting');
+  h.advance(5000); await h.sidebar.pollOnce(); assert.equal(h.scans(), 1);
+  h.advance(1000); h.update({life:{status:'detected', isDead:false}});
+  await h.sidebar.pollOnce();
+  const resumed = h.sidebar.getModel().ocr.schedule;
+  assert.equal(h.scans(), 2);
+  assert.equal(resumed.mode, 'window'); assert.equal(resumed.trigger, 'respawn');
+  assert.notEqual(resumed.windowId, previousCycle);
+  assert.equal(resumed.windowRemainingMs, 60000);
+});
+
+test('confirmation during a follow-up OCR task prevents its late cards from publishing or rearming', async t => {
+  let finish;
+  const h = harness({scanner:({scans, advance, time}) => {
+    if (scans === 3) return new Promise(resolve => { finish = resolve; });
+    advance(1); return Promise.resolve(cards(time()));
+  }});
+  t.after(() => h.sidebar.stop());
+  await h.sidebar.pollOnce(); h.advance(58000); await h.sidebar.pollOnce();
+  const offered = h.sidebar.getModel();
+  h.advance(5000); const capturedAt = h.time(), pending = h.sidebar.scan({automatic:true});
+  assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'follow-up');
+  let confirmed;
+  try {
+    confirmed = await h.sidebar.confirmOffer({id:ids[0], gameId:offered.gameId, revision:offered.sessionRevision});
+    assert.equal(confirmed.ocr.schedule.mode, 'idle');
+  } finally { h.advance(1); finish(cards(capturedAt)); }
+  const result = await pending;
+  assert.equal(result.status, 'waiting');
+  const model = h.sidebar.getModel();
+  assert.deepEqual(model.plan.ownedIds, [ids[0]]);
+  assert.equal(model.offers.length, 0); assert.equal(model.selection.status, 'waiting');
+  assert.equal(model.ocr.schedule.mode, 'idle');
+  h.advance(300000); await h.sidebar.pollOnce(); assert.equal(h.scans(), 3);
 });
 
 test('stored schedule diagnostics describe current window and actual count/duration without identity', async t => {
@@ -157,7 +245,7 @@ test('stored schedule diagnostics describe current window and actual count/durat
   const h = harness({dataDirectory:folder, scanner:async ({advance}) => { advance(1500); return noCards; }});
   await h.sidebar.pollOnce(); await h.sidebar.stop();
   const storedText = await readFile(path.join(folder, 'diagnostics', 'ocr-schedule.json'), 'utf8'), stored = JSON.parse(storedText);
-  assert.equal(stored.schemaVersion, 2); assert.equal(stored.appVersion, '1.11.3');
+  assert.equal(stored.schemaVersion, 2); assert.equal(stored.appVersion, '1.11.4');
   assert.equal(stored.scanCount, 1); assert.equal(stored.lastDurationMs, 1500);
   assert.equal(stored.mode, 'window'); assert.equal(stored.trigger, 'game-start'); assert.equal(stored.windowId, 1);
   assert.ok(stored.windowRemainingMs > 0); assert.ok(Buffer.byteLength(storedText) < 2048);
@@ -202,4 +290,25 @@ test('the real loop waits for a long task plus minimum rest with no catch-up que
   assert.equal(h.scans(), 1); assert.equal(queue.length, 1); assert.equal(queue[0].delay, 100);
   const next = queue.shift(); h.advance(next.delay); await next.fn();
   assert.equal(starts[1] - starts[0], 1600); assert.equal(h.scans(), 2); assert.equal(queue.length, 1);
+});
+
+test('the real loop keeps life polling responsive while text scans use five-second follow-up starts', async t => {
+  const queue = [], starts = [];
+  const timers = {setTimeout:(fn, delay) => { const task = {fn, delay}; queue.push(task); return task; }, clearTimeout:task => { if (task) task.cancelled = true; }};
+  const h = harness({timers, scanner:async ({advance}) => { starts.push(h.time()); advance(200); return noCards; }});
+  t.after(() => h.sidebar.stop()); h.sidebar.start(); await new Promise(resolve => setImmediate(resolve));
+  h.advance(60000);
+  let next = queue.shift(); h.advance(next.delay); await next.fn();
+  assert.equal(h.scans(), 2); assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'follow-up');
+  const secondStart = starts[1];
+  while (h.scans() === 2) {
+    next = queue.shift();
+    assert.ok(next.delay >= 100 && next.delay <= 1000, 'life observation stays at most one second apart');
+    h.advance(next.delay); await next.fn();
+  }
+  assert.equal(starts[2] - secondStart, 5000);
+  assert.equal(queue.length, 1, 'the loop has one timer and no catch-up work queue');
+  h.advance(1000); h.update({life:{status:'detected', isDead:true}});
+  next = queue.shift(); h.advance(next.delay); await next.fn();
+  assert.equal(h.scans(), 3); assert.equal(h.sidebar.getModel().ocr.schedule.mode, 'dead');
 });

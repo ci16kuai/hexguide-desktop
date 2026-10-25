@@ -34,7 +34,7 @@ test('writes only fixed diagnostic fields and imports the scheduler mode allowli
   assert.deepEqual(Object.keys(value).sort(), ['schemaVersion','appVersion','updatedAtUtc','mode','due',
     'intervalMs','nextInMs','windowRemainingMs','trigger','windowId','scanCount','failureCount','lastDurationMs'].sort());
   assert.equal(value.schemaVersion, 2);
-  assert.equal(value.appVersion, '1.11.3');
+  assert.equal(value.appVersion, '1.11.4');
   assert.equal(value.updatedAtUtc, new Date(TIME).toISOString());
   assert.equal(value.trigger, 'respawn');
   assert.equal(value.windowId, 7);
@@ -110,6 +110,26 @@ test('mode, window or scan count changes bypass throttling; atomic serial writes
   assert.equal(value.mode, 'window');
   assert.equal(value.lastDurationMs, 300);
   assert.deepEqual(await readdir(path.join(folder, 'diagnostics')), ['ocr-schedule.json']);
+});
+
+test('fast to follow-up transition is persisted immediately without changing the cycle identity', async t => {
+  const folder = await directory(t);
+  let clock = TIME;
+  const store = new OcrScheduleDiagnostics({dataDirectory:folder, now:() => clock});
+  await store.publish(entry({trigger:'respawn', windowId:7, windowRemainingMs:100}));
+  clock += 100;
+  await store.publish(entry({mode:'follow-up', trigger:'respawn', windowId:7, intervalMs:5000,
+    nextInMs:4500, windowRemainingMs:0}));
+  const value = await read(folder);
+  assert.equal(value.mode, 'follow-up');
+  assert.equal(value.windowId, 7);
+  assert.equal(value.trigger, 'respawn');
+  assert.equal(value.intervalMs, 5000);
+  assert.equal(value.nextInMs, 4500);
+  assert.equal(value.windowRemainingMs, 0);
+  assert.equal(value.scanCount, 1);
+  assert.equal(value.updatedAtUtc, new Date(clock).toISOString());
+  await store.close();
 });
 
 test('the timer flushes the latest throttled state without another publication', async t => {

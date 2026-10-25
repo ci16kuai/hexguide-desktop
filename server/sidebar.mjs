@@ -375,13 +375,13 @@ export class BackgroundSidebar {
         this.selectionObserver.invalidate(); return {status:'waiting', message:'本局已变化，请等待新一轮三选一卡片。', proposals:[]};
       }
       const currentWindow = this.scanScheduleState(current);
-      if (automatic && (currentWindow.windowId !== startingWindow.windowId || currentWindow.windowRemainingMs <= 0
-        || !['window', 'backoff'].includes(currentWindow.mode))) {
-        // Do not arm a late pre-death/new-window frame. Expiry of the same
-        // window leaves existing short-lived click/FX verification untouched.
+      if (automatic && (currentWindow.windowId !== startingWindow.windowId
+        || !['window', 'follow-up', 'backoff'].includes(currentWindow.mode))) {
+        // Fast and follow-up scans share one choice cycle. Only cancellation,
+        // loss of eligibility or a new cycle rejects its in-flight result.
         completion = {status:'waiting', code:'scan-context-changed'};
-        if (currentWindow.windowId !== startingWindow.windowId) this.selectionObserver.invalidate();
-        return {status:'waiting', code:'scan-context-changed', message:'本次识别窗口已结束，等待下次开局或复活。', proposals:[]};
+        this.selectionObserver.invalidate();
+        return {status:'waiting', code:'scan-context-changed', message:'本次识别周期已结束，等待下次开局或复活。', proposals:[]};
       }
       const status = ['recognized', 'waiting', 'unavailable'].includes(raw?.status) ? raw.status : 'unavailable';
       const proposals = (Array.isArray(raw?.proposals) ? raw.proposals : []).filter(proposal => this.augments.has(proposal?.id)).map(proposal => ({id:proposal.id, name:this.augments.get(proposal.id).name, confidence:'exact'}));
@@ -454,7 +454,7 @@ export class BackgroundSidebar {
     const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live));
     const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), this.selectionEligible(live));
     return {
-      version:'1.11.3', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
+      version:'1.11.4', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
       gameEpoch:this.gameEpoch, selection, selectionResult, selectionDiagnostics:this.selectionDiagnostics(selection),
       life:this.lifeSource.resolve(live, this.selectionContext()),
       mode:live.mode || {queueId:null, isMayhem:false, known:false},

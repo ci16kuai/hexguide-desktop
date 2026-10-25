@@ -1,12 +1,14 @@
 # 海克斯指南 · Windows 桌面版
 
-面向英雄联盟海克斯大乱斗玩家的本局助手与资料查询工具。当前源码版本 **1.11.3（测试版，尚未发布）**，默认打开“我的这一局”。加载阶段识别本局双方阵容，只展示推荐装备；进入实战并记录实际选择后，结合所选海克斯、英雄和可读敌方阵容更新装备与后续海克斯方向。辅助页面保留独立全宽入口，英雄胜率原始榜单继续按同口径持有胜率差排序。资料对应 **海克斯大乱斗 4.0 / 26.21**，英雄与装备资料为 **Data Dragon 16.21.1**。
+面向英雄联盟海克斯大乱斗玩家的本局助手与资料查询工具。当前源码版本 **1.11.4（测试版，尚未发布）**，默认打开“我的这一局”。加载阶段识别本局双方阵容，只展示推荐装备；进入实战并记录实际选择后，结合所选海克斯、英雄和可读敌方阵容更新装备与后续海克斯方向。辅助页面保留独立全宽入口，英雄胜率原始榜单继续按同口径持有胜率差排序。资料对应 **海克斯大乱斗 4.0 / 26.21**，英雄与装备资料为 **Data Dragon 16.21.1**。
 
-## 1.11.3 开局／复活扫描（测试版）
+## 1.11.4 开局／复活扫描（测试版）
 
-重文字识别只在开局或确认自身复活后，按 500 毫秒目标间隔扫描，默认最长一分钟；确认实际选择、死亡或窗口到期后停止。普通战斗、等级和已有候选不启动或延长扫描。耗时超过目标的任务串行结束后至少休息 100 毫秒，不补扫堆积；手动扫描与轻量选择观察保持独立。
+重文字识别在开局或可信的自身死亡→复活后开始：前一分钟以 500 毫秒为目标间隔；仍未确认新海克斯时，改为每 5 秒一次的目标间隔继续，直到确认实际选择。死亡停止本次周期，下次复活重新开始；加载时不扫，普通战斗、等级和已有候选不能自行开启周期。中后期启动不把首次读到“存活”当成复活。目标间隔不保证实际完成频率；任务串行，耗时超过目标后至少休息 100 毫秒，不补扫堆积；手动扫描与轻量选择观察保持独立，慢速续扫不延长选后证据期限。
 
 优先读取自身 `isDead`；接口缺失时，预留已校准的画面灰度＋递减复活倒计时核对。屏幕备用默认未校准不启用，不能把变暗、切屏或 OCR 失败当成死亡／复活。具体调度、校准和当前遮挡限制见 [扫描调度](docs/ocr-scheduling.md)。源码与离线验证不代表新版实战已验收，正在运行的旧版需另行更新才生效。
+
+1.11.3 实战已验证死亡停扫、复活开启扫描及原规则的一分钟到期停扫；“伤不过三”仍未自动记录，后续三选一也曾未显示已就绪。1.11.4 只修正一分钟后不再扫描的问题，慢速续扫及自动记录、更新装备和后续海克斯的完整链路仍待实战验证。
 
 ## 1.11.0 当前范围与验证边界
 
@@ -28,7 +30,7 @@
 6. 顶部完整保留辅助功能入口，各自独立全宽展示。从“英雄胜率”浏览全部英雄和按胜率差排序的海克斯；展开查看共同海克斯、真实条件出装及胜率，不需要启动游戏。
 7. 主窗口的“游戏工具”中可收起后台、收放侧栏或返回游戏；托盘菜单“完全退出”才结束助手与本地服务。
 
-自动识别为实验功能，默认开启；后台服务只在开局或可信复活后开启最长一分钟的扫描窗口：目标每 500 毫秒开始一次，确认选择后提前停止，普通战斗不循环扫文本；具体节奏见 [扫描调度](docs/ocr-scheduling.md)，主窗口隐藏或页面不在实战页也继续。暂停偏好独立保存，重启后保留。识别成功会带入当前三选一，实验性屏幕观察在证据完整时自动确认实际选择；不确定时需手动确认。助手不会替你切窗口、按键或操作游戏。需要游戏卡片保持可见；Windows 没有可用 OCR 语言、布局不兼容、全屏截图失败或名称不确定时，可使用手动补录。**1.10.0 的选择动画尚未完成真实对局校准，合成测试不代表实战通过。**
+自动识别为实验功能，默认开启；后台服务在开局或可信复活后开启识别周期：前一分钟目标每 500 毫秒开始一次，未确认新海克斯则按每 5 秒的目标间隔继续，确认选择或死亡后停止；具体节奏见 [扫描调度](docs/ocr-scheduling.md)。主窗口隐藏或页面不在实战页时调度继续，但失焦时不截图；失败采用有界退避。暂停偏好独立保存，重启后保留。识别成功会带入当前三选一，实验性屏幕观察在证据完整时自动确认实际选择；不确定时需手动确认。助手不会替你切窗口、按键或操作游戏。需要游戏卡片保持可见；Windows 没有可用 OCR 语言、布局不兼容、全屏截图失败或名称不确定时，可使用手动补录。**1.10.0 的选择动画尚未完成真实对局校准，合成测试不代表实战通过。**
 
 系统要求：Windows 10/11 x64、.NET Framework 4.8、[Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。当前电脑已有所需运行环境。主程序未作代码签名，不会自行安装服务、修改防火墙或设置开机启动。
 
@@ -167,14 +169,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps
 安装版构建（需先构建独立暂存目录）：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -StagePath artifacts/portable-1.11.3
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -StagePath artifacts/portable-1.11.3
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -StagePath artifacts/portable-1.11.4
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -StagePath artifacts/portable-1.11.4
 ```
 
 仅运行自动确认的离线原生测试（不打开窗口、不启动后端、不采集游戏或读取安装版设置）：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-native-selection.ps1 -ExecutablePath artifacts/portable-1.11.3/HexGuide.exe
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-native-selection.ps1 -ExecutablePath artifacts/portable-1.11.4/HexGuide.exe
 ```
 
 安装程序以当前用户身份运行，允许选择安装目录与桌面图标，提供开始菜单和 Windows 设置中的卸载入口；详情见 `installer/README.md`。安装包尚未进行代码签名。浏览器下载文件保存位置由浏览器决定，可使用“另存为”或浏览器的下载位置设置。
