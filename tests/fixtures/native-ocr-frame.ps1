@@ -1,4 +1,4 @@
-param([string]$Source)
+param([string]$Source, [switch]$StageWorker, [switch]$BlankFrame)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -31,7 +31,28 @@ if ($parseErrors.Count) { throw 'Production OCR script has parse errors.' }
 $selectionFunction = $sourceAst.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-SelectionRegions'}, $true)
 if (-not $selectionFunction) { throw 'Production card-region function was not found.' }
 Invoke-Expression $selectionFunction.Extent.Text
+if ($StageWorker) {
+    # Import production staging/protocol functions, with a generated in-memory
+    # frame instead of importing or invoking any foreground/capture code.
+    foreach ($name in @('Update-TimingDiagnostics','New-ResultPayload','Write-Result','Read-WorkerRecord','Test-StageAccepted','Invoke-StagedOcr')) {
+        $function = $sourceAst.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $true)
+        if (-not $function) { throw 'Production staging helper was not found.' }
+        Invoke-Expression $function.Extent.Text
+    }
+    Add-Type -Path (Join-Path (Split-Path -Parent $Source) 'OcrWorkerProtocol.cs')
+    $Worker = $true
+    $request = Read-WorkerRecord
+    if ($null -eq $request -or $request.type -cne 'scan') { exit 1 }
+    $requestId = $request.id
+}
 $frameId = 'synthetic-fixture-not-live-game'
+$stage = 'fixture'
+$diagnostics = @{width=2560; height=1440}
+$initializationMs = 0
+$captureMs = 0
+$recognitionMs = 0
+$workerPoisoned = $false
+$fixtureExitCode = 0
 $identityAnchors = $null
 $identityAnchorCounts = @{}
 $identityFeatureReady = $null
@@ -48,25 +69,39 @@ try {
     # match. This generated image is deliberately NOT claimed as a game capture.
     $names = @(([string][char]0x5347 + [char]0x7ea7 + [char]0xff1a + [char]0x8000 + [char]0x5149), ([string][char]0x8d2a + [char]0x6b32 + [char]0x675f + [char]0x7f1a), ([string][char]0x6025 + [char]0x6025 + [char]0x5c0f + [char]0x5b50))
     $xs = @(721, 1228, 1715)
-    for ($column = 0; $column -lt 3; $column++) { $graphics.DrawString($names[$column], $font, $brush, [single]$xs[$column], [single]580) }
+    if (-not $BlankFrame) {
+        for ($column = 0; $column -lt 3; $column++) { $graphics.DrawString($names[$column], $font, $brush, [single]$xs[$column], [single]580) }
+    }
     $graphics.Dispose()
     $graphics = $null
     $selectionCapture = @{capturedAt=1000; width=2560; height=1440; originX=0; originY=0; windowHandle='42'; regions=@(Get-SelectionRegions $bitmap 2560 1440)}
     $lines = @()
-    foreach ($variant in @(@{name='card-titles-color'; contrast=$false}, @{name='card-titles-contrast'; contrast=$true})) {
-        foreach ($region in @(Get-TitleRegions 2560 1440)) {
-            $lines += @(Invoke-ImageRegionOcr $bitmap $region 3.0 $variant.name $variant.contrast)
+    if ($StageWorker) {
+        $scanDeadlineMs = 10000
+        $lines = @(Invoke-StagedOcr $bitmap 2560 1440)
+        $stage = 'result'
+        Write-Result 'recognized' 'Generated offline fixture.' $lines
+    } else {
+        foreach ($variant in @(@{name='card-titles-color'; contrast=$false}, @{name='card-titles-contrast'; contrast=$true})) {
+            foreach ($region in @(Get-TitleRegions 2560 1440)) {
+                $lines += @(Invoke-ImageRegionOcr $bitmap $region 3.0 $variant.name $variant.contrast)
+            }
         }
-    }
     # Crop geometry is also checked on small, ultrawide and over-limit images.
     $geometries = @()
     foreach ($size in @(@(1280, 720), @(2560, 1440), @(3440, 1440), @(8192, 8192))) {
         $geometries += @{width=$size[0]; height=$size[1]; regions=@(Get-TitleRegions $size[0] $size[1])}
     }
     [Console]::WriteLine((@{status='recognized'; frameId=$frameId; capture=@{width=2560; height=1440}; selectionCapture=$selectionCapture; identityAnchors=$identityAnchors; lines=$lines; geometries=$geometries; elapsedMs=$scanClock.ElapsedMilliseconds} | ConvertTo-Json -Compress -Depth 8))
+    }
+} catch {
+    if (-not $StageWorker) { throw }
+    Write-Result 'unavailable' 'Generated fixture failed.' @() '' 'fixture-failed'
+    $fixtureExitCode = 1
 } finally {
     if ($graphics) { $graphics.Dispose() }
     $brush.Dispose()
     $font.Dispose()
     $bitmap.Dispose()
 }
+if ($fixtureExitCode) { exit $fixtureExitCode }

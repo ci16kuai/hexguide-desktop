@@ -7,6 +7,31 @@ const record = value => value !== null && typeof value === 'object' && !Array.is
 const exactKeys = (value, keys) => record(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const failure = code => Object.assign(new Error('OCR worker unavailable.'), {code});
 
+function parseEnvelope(text) {
+  const envelope = JSON.parse(text);
+  if (!record(envelope)) throw failure('scan-output-invalid');
+  // JSON.parse discards earlier duplicate members. Check the wire keys as
+  // well, including escaped names, before trusting version or request IDs.
+  const keys = new Set();
+  let depth = 0, expectsKey = false;
+  for (const match of text.matchAll(/"(?:[^"\\]|\\[\s\S])*"|[{}\[\],:]/g)) {
+    const token = match[0];
+    if (token[0] === '"') {
+      if (depth === 1 && expectsKey) {
+        const key = JSON.parse(token);
+        if (keys.has(key)) throw failure('scan-output-invalid');
+        keys.add(key);
+        expectsKey = false;
+      }
+    } else if (token === '{' || token === '[') {
+      depth++;
+      if (depth === 1) expectsKey = true;
+    } else if (token === '}' || token === ']') depth--;
+    else if (token === ',' && depth === 1) expectsKey = true;
+  }
+  return envelope;
+}
+
 // Only this transport owns the hidden PowerShell process. Raw OCR observations
 // remain in memory; callers receive a result only after the native final check.
 export function createOcrWorker({applicationDirectory, dataDirectory, checkOnly = false, spawnProcess = spawn, timeoutMs = 15000} = {}) {
@@ -105,7 +130,7 @@ export function createOcrWorker({applicationDirectory, dataDirectory, checkOnly 
         instance.buffer = remaining.length ? remaining : Buffer.alloc(0);
         try {
           const text = new TextDecoder('utf-8', {fatal:true}).decode(line).replace(/^\uFEFF/, '');
-          receive(instance, JSON.parse(text));
+          receive(instance, parseEnvelope(text));
         } catch { retire(instance, 'scan-output-invalid'); }
       }
       if (job.finished && instance.buffer.length) retire(instance, 'scan-output-invalid');

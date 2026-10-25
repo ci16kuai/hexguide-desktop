@@ -111,6 +111,27 @@ test('stdout and stderr bounds kill the worker without forwarding their contents
   await rejected; await h.worker.close();
 });
 
+test('duplicate envelope keys are rejected before JSON parsing can hide contradictory IDs or versions', async () => {
+  const invalid = [
+    '{"version":2,"version":1,"type":"result","id":1,"payload":{}}',
+    '{"version":1,"type":"stage","type":"result","id":1,"payload":{}}',
+    '{"version":1,"type":"result","id":999,"id":1,"payload":{}}',
+    String.raw`{"version":1,"type":"result","id":999,"\u0069d":1,"payload":{}}`,
+    '{"version":1,"type":"result","id":1,"payload":{},"payload":{"status":"waiting"}}',
+  ];
+  for (const line of invalid) {
+    const h = harness(), pending = h.worker.scan(), rejected = assert.rejects(pending, {code:'scan-output-invalid'});
+    await tick(); h.children[0].stdout.write(line + '\n');
+    await rejected; await h.worker.close(); assert.equal(h.children[0].kills, 1);
+  }
+  const h = harness(), pending = h.worker.scan(); await tick();
+  // Nested names, punctuation and escaped quotes inside values are not keys of
+  // the envelope. A valid stage still reaches the normal semantic checks.
+  const payload = {status:'waiting',nested:{version:99,id:99},message:'"id":1, { [ ] }',list:[{id:2}]};
+  h.children[0].send(frame('result', 1, payload));
+  assert.deepEqual(await pending, payload); await h.worker.close();
+});
+
 test('EOF, process errors and timeouts settle the current job and never automatically rescan it', async () => {
   for (const trigger of [child => child.stdout.end(),child => child.emit('error', Error('Private')),child => child.finish()]) {
     const h = harness(), pending = h.worker.scan(), rejected = assert.rejects(pending, {code:'scan-execution-failed'});
