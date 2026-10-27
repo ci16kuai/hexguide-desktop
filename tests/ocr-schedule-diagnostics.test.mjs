@@ -34,7 +34,7 @@ test('writes only fixed diagnostic fields and imports the scheduler mode allowli
   assert.deepEqual(Object.keys(value).sort(), ['schemaVersion','appVersion','updatedAtUtc','mode','due',
     'intervalMs','nextInMs','windowRemainingMs','trigger','windowId','scanCount','failureCount','lastDurationMs'].sort());
   assert.equal(value.schemaVersion, 2);
-  assert.equal(value.appVersion, '1.13.0');
+  assert.equal(value.appVersion, '1.17.5');
   assert.equal(value.updatedAtUtc, new Date(TIME).toISOString());
   assert.equal(value.trigger, 'respawn');
   assert.equal(value.windowId, 7);
@@ -130,6 +130,23 @@ test('fast to follow-up transition is persisted immediately without changing the
   assert.equal(value.scanCount, 1);
   assert.equal(value.updatedAtUtc, new Date(clock).toISOString());
   await store.close();
+});
+
+test('death trigger survives both fast and follow-up diagnostics without adding private fields', async t => {
+  const folder = await directory(t);
+  let clock = TIME;
+  const store = new OcrScheduleDiagnostics({dataDirectory:folder,now:() => clock});
+  await store.publish(entry({trigger:'death',windowId:8,gameId:'PRIVATE-GAME',offerCycle:9}));
+  const fast = await read(folder);
+  assert.equal(fast.trigger,'death'); assert.equal(fast.mode,'window'); assert.equal(fast.intervalMs,500);
+  clock += 60000;
+  await store.publish(entry({trigger:'death',windowId:8,mode:'follow-up',windowRemainingMs:0,intervalMs:5000}));
+  await store.close();
+  const slow = await read(folder), text = await readFile(path.join(folder,FILE),'utf8');
+  assert.equal(slow.trigger,'death'); assert.equal(slow.windowId,fast.windowId);
+  assert.equal(slow.mode,'follow-up'); assert.equal(slow.intervalMs,5000);
+  assert.deepEqual(Object.keys(slow).sort(),Object.keys(fast).sort());
+  assert.ok(Buffer.byteLength(text) < 2048); assert.doesNotMatch(text,/PRIVATE|offerCycle/);
 });
 
 test('the timer flushes the latest throttled state without another publication', async t => {

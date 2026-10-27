@@ -1,4 +1,4 @@
-// Heavy title OCR begins after an opening or verified respawn event. It scans
+// Heavy title OCR begins after an opening, verified death or respawn event. It scans
 // quickly for the first minute, then follows up more slowly until a choice is
 // confirmed. The lightweight click/FX observer keeps its independent cadence.
 export const OCR_SCHEDULE_MODES = Object.freeze([
@@ -68,7 +68,7 @@ export class OcrScanSchedule {
     this.clock = 0;
     this.epoch = null;
     // Capture/evidence ownership is narrower than a game and independent of
-    // the fast/follow-up pacing window. Death revokes it before respawn exists.
+    // the fast/follow-up pacing window and logical unanswered choice round.
     this.lifecycle = 0;
     this.lifecycleStartedAt = 0;
     this.captureRevision = 0;
@@ -92,6 +92,9 @@ export class OcrScanSchedule {
     this.enteredLive = false;
     this.highestGameTime = null;
     this.lastLife = null;
+    this.awaitingAliveAfterDeath = false;
+    this.offerCycle = 0;
+    this.confirmedOfferCycle = null;
     this.otherModeObserved = false;
     this.windowUntil = 0;
     this.awaitingConfirmation = false;
@@ -127,13 +130,14 @@ export class OcrScanSchedule {
       && now - observed <= this.policy.snapshotFreshnessMs ? {isDead:life.isDead, observedAt:observed} : null;
   }
 
-  beginWindow(trigger, until) {
+  beginWindow(trigger, until, {newOfferCycle = true} = {}) {
     this.advanceLifecycle();
+    if (newOfferCycle) this.offerCycle = this.offerCycle < Number.MAX_SAFE_INTEGER ? this.offerCycle + 1 : 1;
     this.windowSequence = this.windowSequence < Number.MAX_SAFE_INTEGER ? this.windowSequence + 1 : 1;
     this.windowId = this.windowSequence;
     this.trigger = trigger;
-    this.windowUntil = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(until)));
-    this.awaitingConfirmation = true;
+    this.awaitingConfirmation = this.confirmedOfferCycle !== this.offerCycle;
+    this.windowUntil = this.awaitingConfirmation ? Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(until))) : 0;
     this.resetPacing();
   }
 
@@ -169,6 +173,7 @@ export class OcrScanSchedule {
         this.windowUntil = 0;
         this.awaitingConfirmation = false;
         this.lastLife = null;
+        this.awaitingAliveAfterDeath = false;
         this.resetPacing();
       }
       this.otherModeObserved = true;
@@ -188,6 +193,7 @@ export class OcrScanSchedule {
     if (gameTime !== null && this.highestGameTime !== null && gameTime < this.highestGameTime) return;
     this.lastObservedAt = observed;
     if (gameTime !== null) this.highestGameTime = Math.max(this.highestGameTime ?? 0, gameTime);
+    const life = this.lifeEvidence(live, observed, now);
     if (!this.enteredLive && newSnapshot && (this.loadingObserved || gameTime !== null)) {
       // A partial first live response may have no clock yet. Do not consume
       // the opening edge until loading or a usable clock identifies it. A
@@ -196,22 +202,34 @@ export class OcrScanSchedule {
       const opening = this.loadingObserved || gameTime * 1000 < this.policy.windowMs;
       // Give a witnessed opening its full minute from the usable live sample,
       // rather than spending that minute while the client/API was loading.
-      if (opening) this.beginWindow('game-start', Math.min(now, observed) + this.policy.windowMs);
+      if (opening && life?.isDead !== true) this.beginWindow('game-start', Math.min(now, observed) + this.policy.windowMs);
     }
-    const life = this.lifeEvidence(live, observed, now);
     if (life === null || this.lastLife && life.observedAt <= this.lastLife.observedAt) return;
     const previous = this.lastLife;
     this.lastLife = life;
     if (life.isDead) {
-      // Death ends the prior choice window. The following verified alive edge
-      // receives a fresh ID/deadline, so late pre-death OCR cannot be applied.
-      this.windowUntil = 0;
-      this.awaitingConfirmation = false;
-      if (previous?.isDead !== true) this.advanceLifecycle();
+      // A death can expose a new choice before respawn. Its logical opportunity
+      // outlives temporary loss of life proof, without renewing its scan clock.
+      if (!this.awaitingAliveAfterDeath) {
+        this.awaitingAliveAfterDeath = true;
+        this.enteredLive = true;
+        this.beginWindow('death', Math.min(now, life.observedAt) + this.policy.windowMs);
+      }
       return;
     }
-    if (previous?.isDead === true && life.observedAt - previous.observedAt <= this.policy.snapshotFreshnessMs) {
-      this.beginWindow('respawn', Math.min(now, life.observedAt) + this.policy.windowMs);
+    if (this.awaitingAliveAfterDeath) {
+      this.awaitingAliveAfterDeath = false;
+      if (previous?.isDead === true && life.observedAt - previous.observedAt <= this.policy.snapshotFreshnessMs) {
+        // The same choice can be rerolled across respawn. Only its capture
+        // ownership and pacing window change, never its logical round identity.
+        this.beginWindow('respawn', Math.min(now, life.observedAt) + this.policy.windowMs, {newOfferCycle:false});
+      } else {
+        // Alive after stale or explicitly lost death continuity is a capture
+        // boundary, but cannot invent a verified respawn or continue dead OCR.
+        this.advanceLifecycle();
+        this.windowUntil = 0;
+        this.awaitingConfirmation = false;
+      }
     }
   }
 
@@ -229,7 +247,12 @@ export class OcrScanSchedule {
     const observed = this.snapshotTime(live, now);
     if (validEpoch(gameEpoch) && gameEpoch !== this.epoch || live?.connection?.status !== 'connected'
       || observed === null || this.lastObservedAt !== observed) return result('unknown');
-    if (this.lastLife?.isDead === true) return result('dead');
+    if (this.awaitingAliveAfterDeath) {
+      const life = this.lifeEvidence(live, observed, now);
+      if (life?.isDead !== true || this.lastLife?.isDead !== true
+        || life.observedAt !== this.lastLife.observedAt) return result('unknown');
+      if (!this.awaitingConfirmation) return result('dead');
+    }
     if (!this.awaitingConfirmation) return result('idle');
     const fast = windowRemainingMs > 0;
     let mode = fast ? 'window' : 'follow-up';
@@ -287,13 +310,16 @@ export class OcrScanSchedule {
   }
 
   confirmed() {
+    this.confirmedOfferCycle = this.offerCycle;
     this.windowUntil = 0;
     this.awaitingConfirmation = false;
   }
 
   forgetLife() {
     // Loss of a screen proof breaks continuity; it is not an alive event and
-    // cannot open/renew a window or rewrite pacing.
+    // cannot open/renew a window or rewrite pacing. Revoke any in-flight frame
+    // once, while retaining the death opportunity until fresh alive evidence.
+    if (this.lastLife) this.advanceLifecycle();
     this.lastLife = null;
   }
 }

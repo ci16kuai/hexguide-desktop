@@ -27,7 +27,7 @@ function harness(t) {
   return h;
 }
 
-test('screen dead and alive proofs between the same collector tick open a single respawn window', async t => {
+test('screen dead and alive proofs between the same collector tick open separate capture windows for one choice opportunity', async t => {
   const h = harness(t);
   const rawBefore = h.raw();
   assert.equal(h.sidebar.getModel().ocr.schedule.mode,'idle');
@@ -35,9 +35,10 @@ test('screen dead and alive proofs between the same collector tick open a single
   const dead = h.sidebar.observeScreenLife(h.proof('dead'));
   assert.equal(dead.life.source,'screen');
   assert.equal(dead.life.isDead,true);
-  assert.equal(dead.ocr.schedule.mode,'dead');
+  assert.equal(dead.ocr.schedule.mode,'window'); assert.equal(dead.ocr.schedule.trigger,'death');
+  const offerCycle = h.sidebar.scanSchedule.offerCycle;
   await h.sidebar.pollOnce();
-  assert.equal(h.scans(),0,'death never starts title OCR');
+  assert.equal(h.scans(),1,'verified death starts candidate OCR before respawn');
   h.advance(1000);
   const respawn = h.sidebar.observeScreenLife(h.proof('alive'));
   assert.deepEqual(respawn.life,{status:'detected',isDead:false,source:'screen',observedAt:h.time()});
@@ -45,10 +46,12 @@ test('screen dead and alive proofs between the same collector tick open a single
   assert.equal(respawn.ocr.schedule.windowRemainingMs,60000);
   assert.equal(respawn.ocr.schedule.intervalMs,500);
   assert.equal(respawn.ocr.schedule.due,true);
+  assert.notEqual(respawn.ocr.schedule.windowId,dead.ocr.schedule.windowId);
+  assert.equal(h.sidebar.scanSchedule.offerCycle,offerCycle);
   assert.equal(respawn.updatedAt,rawBefore.observedAt,'screen proof never rewrites raw game freshness');
   assert.deepEqual(h.raw(),rawBefore,'collector data and recommendation inputs stay unchanged');
   await h.sidebar.pollOnce();
-  assert.equal(h.scans(),1);
+  assert.equal(h.scans(),2);
   h.advance(500);
   const repeated = h.sidebar.observeScreenLife(h.proof('alive'));
   assert.equal(repeated.ocr.schedule.windowId,respawn.ocr.schedule.windowId);
@@ -60,12 +63,12 @@ test('fresh API life takes priority and a screen proof cannot override API dead 
   h.update({life:{status:'detected',isDead:true}});
   let model = h.sidebar.getModel();
   assert.equal(model.life.source,'live-client');
-  assert.equal(model.ocr.schedule.mode,'dead');
+  assert.equal(model.ocr.schedule.mode,'window'); assert.equal(model.ocr.schedule.trigger,'death');
   h.advance(500);
   assert.throws(() => h.sidebar.observeScreenLife(h.proof('alive')),SessionConflictError);
   assert.equal(h.sidebar.getModel().life.isDead,true);
   await h.sidebar.pollOnce();
-  assert.equal(h.scans(),0);
+  assert.equal(h.scans(),1);
   h.update({life:{status:'detected',isDead:false}});
   h.refresh();
   model = h.sidebar.getModel();
@@ -85,9 +88,9 @@ test('missing LCU game IDs neither discard primary death nor miss a witnessed pr
   const dead = h.sidebar.getModel();
   assert.equal(dead.life.source,'live-client');
   assert.equal(dead.life.isDead,true);
-  assert.equal(dead.ocr.schedule.mode,'dead');
+  assert.equal(dead.ocr.schedule.mode,'window'); assert.equal(dead.ocr.schedule.trigger,'death');
   await h.sidebar.pollOnce();
-  assert.equal(h.scans(),0,'a known dead player cannot start opening title OCR just because LCU lost its ID');
+  assert.equal(h.scans(),1,'primary death starts candidate OCR even when LCU has no game ID');
   h.advance(500);
   h.update({gameTime:6,life:{status:'detected',isDead:false}});
   h.refresh();
@@ -97,7 +100,7 @@ test('missing LCU game IDs neither discard primary death nor miss a witnessed pr
   assert.equal(respawn.ocr.schedule.windowRemainingMs,60000);
   assert.equal(respawn.ocr.schedule.intervalMs,500);
   await h.sidebar.pollOnce();
-  assert.equal(h.scans(),1);
+  assert.equal(h.scans(),2);
   assert.throws(() => h.sidebar.observeScreenLife(h.proof('dead',{gameId:'screen-life-fixture'})),SessionConflictError,'screen proof still requires a real matching game ID');
 });
 
@@ -116,7 +119,8 @@ test('explicit screen unknown breaks the scheduler chain and cannot turn scope r
   const returnedApi = h.sidebar.getModel();
   assert.equal(returnedApi.life.source,'live-client');
   assert.equal(returnedApi.ocr.schedule.mode,'idle');
-  assert.equal(returnedApi.ocr.schedule.trigger,null,'a new alive baseline is not a respawn event');
+  assert.equal(returnedApi.ocr.schedule.trigger,'death','a new alive baseline closes the old death window without inventing a respawn event');
+  assert.equal(returnedApi.ocr.schedule.windowRemainingMs,0);
 });
 
 test('missing API life never assumes alive or starts title OCR from level and candidate hints', async t => {

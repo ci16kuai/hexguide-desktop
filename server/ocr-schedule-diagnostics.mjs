@@ -29,14 +29,14 @@ export class OcrScheduleDiagnostics {
     const mode = MODES.has(value.mode) ? value.mode : 'inactive';
     const snapshot = {
       schemaVersion:2,
-      appVersion:'1.13.0',
+      appVersion:'1.17.5',
       updatedAtUtc:new Date(timestamp(this.now())).toISOString(),
       mode,
       due:value.due === true,
       intervalMs:boundedInteger(value.intervalMs, 30000),
       nextInMs:boundedInteger(value.nextInMs, 30000),
       windowRemainingMs:boundedInteger(value.windowRemainingMs, 120000),
-      trigger:value.trigger === 'game-start' || value.trigger === 'respawn' ? value.trigger : null,
+      trigger:['game-start','death','respawn'].includes(value.trigger) ? value.trigger : null,
       windowId:Number.isSafeInteger(value.windowId) && value.windowId > 0 ? value.windowId : null,
       scanCount:boundedInteger(value.scanCount, 1000000),
       failureCount:boundedInteger(value.failureCount, 1000000),

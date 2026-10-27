@@ -1,13 +1,14 @@
 {
   "name": "hexguide-desktop",
-  "version": "1.13.0",
+  "version": "1.17.5",
   "private": true,
   "type": "module",
   "description": "海克斯指南 Windows 本地实战助手",
   "scripts": {
     "start": "node server/main.mjs",
     "test": "node --test tests/*.test.mjs scripts/test-engine.mjs scripts/test-version.mjs scripts/test-data-version.mjs",
-    "build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -Package"
+    "build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -Package",
+    "verify:windows": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/verify-desktop.ps1"
   },
   "engines": {
     "node": ">=20"

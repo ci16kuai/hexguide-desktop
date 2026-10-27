@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.13.0.0")]
-[assembly: AssemblyFileVersion("1.13.0.0")]
-[assembly: AssemblyInformationalVersion("1.13.0")]
+[assembly: AssemblyVersion("1.17.5.0")]
+[assembly: AssemblyFileVersion("1.17.5.0")]
+[assembly: AssemblyInformationalVersion("1.17.5")]
 
 namespace HexGuide.Desktop
 {
@@ -31,9 +31,10 @@ namespace HexGuide.Desktop
         [STAThread]
         private static void Main(string[] args)
         {
-            // Both modes are isolated diagnostics handled before any app UI,
+            // These modes are isolated diagnostics handled before any app UI,
             // backend, hotkey, game sampling or installed settings are opened.
-            if (args.Length == 2 && (args[0] == "--instance-self-test" || args[0] == "--instance-lock-probe"))
+            if (args.Length == 2 && (args[0] == "--instance-self-test" || args[0] == "--instance-lock-probe")
+                || args.Length == 4 && args[0] == "--instance-lock-race-probe")
             {
                 Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
                 try
@@ -42,6 +43,7 @@ namespace HexGuide.Desktop
                         Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
                             { "checks", ApplicationInstance.ValidateFixtures(args[1]) }, { "mode", "offline-instance-no-ui" }, { "liveGameVerified", false }
                         }));
+                    else if (args[0] == "--instance-lock-race-probe") ApplicationInstance.RunRaceProbe(args[1], args[2], args[3]);
                     else using (var lease = ApplicationInstance.TryAcquire(args[1])) Console.WriteLine(lease == null ? "already-running" : "acquired");
                 }
                 catch (Exception error) { Console.Error.WriteLine(error.Message); Environment.ExitCode = 1; }
@@ -68,7 +70,7 @@ namespace HexGuide.Desktop
                         + ScreenLifeObserver.ValidateFixtures() + ScreenLifeController.ValidateFixtures() + OwnedPanelWatcher.ValidateFixtures()
                         + RemoteIconCache.ValidateFixtures();
                     Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                        { "version", "1.13.0" }, { "checks", checks },
+                        { "version", "1.17.5" }, { "checks", checks },
                         { "titleProbeVersion", 1 },
                         { "nativeDiagnosticMaxBytes", ScreenSelectionWatcher.LargestDiagnosticFixtureBytes },
                         { "mode", "offline-no-ui" }, { "liveGameVerified", false }
@@ -201,6 +203,112 @@ namespace HexGuide.Desktop
         }
     }
 
+    // Brief loss of exposure should not flicker an already visible sidebar.
+    // This gate preserves only display state; the visibility policy owns intent.
+    internal sealed class SidebarVisibilityDelay
+    {
+        private const ulong HideDelayMilliseconds = 600;
+        private bool visible, hidePending, hasTimestamp;
+        private long hideStartedMilliseconds, lastMilliseconds;
+
+        internal static bool IsTransition(long changedAtMilliseconds, long nowMilliseconds)
+        {
+            return changedAtMilliseconds >= 0 && nowMilliseconds >= changedAtMilliseconds
+                && (ulong)(nowMilliseconds - changedAtMilliseconds) < HideDelayMilliseconds;
+        }
+
+        internal bool Resolve(bool requestedVisible, bool allowDelay, long nowMilliseconds)
+        {
+            bool clockReset = hasTimestamp && nowMilliseconds < lastMilliseconds;
+            hasTimestamp = true;
+            lastMilliseconds = nowMilliseconds;
+            if (requestedVisible)
+            {
+                visible = true; hidePending = false;
+                return true;
+            }
+            if (!allowDelay || !visible || clockReset)
+            {
+                visible = false; hidePending = false;
+                return false;
+            }
+            if (!hidePending)
+            {
+                hidePending = true; hideStartedMilliseconds = nowMilliseconds;
+                return true;
+            }
+            // After rollback was rejected above, unsigned subtraction represents
+            // elapsed time even when a large forward jump crosses long's range.
+            ulong elapsed = unchecked((ulong)nowMilliseconds - (ulong)hideStartedMilliseconds);
+            if (elapsed >= HideDelayMilliseconds) { visible = false; hidePending = false; }
+            return visible;
+        }
+
+        internal static int ValidateFixtures()
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool condition, string message)
+            { if (!condition) throw new InvalidOperationException(message); checks++; };
+            var delay = new SidebarVisibilityDelay();
+            check(!delay.Resolve(false, true, 0), "An initially hidden sidebar appeared without a visibility request.");
+            check(delay.Resolve(true, true, 10), "A visibility request was delayed.");
+            check(delay.Resolve(false, true, 1000), "The hide delay started before the first false request.");
+            check(delay.Resolve(false, true, 1599), "The sidebar hid before the 600 ms deadline.");
+            check(!delay.Resolve(false, true, 1600), "Repeated false requests extended the 600 ms deadline.");
+            check(!delay.Resolve(false, true, 1700), "A hidden sidebar resurrected without a true request.");
+
+            var returned = new SidebarVisibilityDelay();
+            check(returned.Resolve(true, true, 2000) && returned.Resolve(false, true, 2100), "A visible sidebar did not enter its first hide delay.");
+            check(returned.Resolve(true, true, 2600), "Reappearance before the deadline did not cancel hiding.");
+            check(returned.Resolve(false, true, 2650), "A second loss of exposure did not start a fresh delay.");
+            check(returned.Resolve(false, true, 2700), "The cancelled first deadline hid the sidebar.");
+            check(returned.Resolve(false, true, 3249), "A fresh delay did not last its full 599 ms.");
+            check(!returned.Resolve(false, true, 3250), "A fresh delay did not end at exactly 600 ms.");
+
+            var immediate = new SidebarVisibilityDelay();
+            check(immediate.Resolve(true, false, 0), "Disallowing hide delay suppressed a true visibility request.");
+            check(!immediate.Resolve(false, false, 1), "An explicit close or game exit was delayed.");
+            check(!immediate.Resolve(false, true, 2), "Reallowing delay revived an explicitly hidden sidebar.");
+            check(immediate.Resolve(true, true, 3) && immediate.Resolve(false, true, 4), "The sidebar did not begin a delay after reopening.");
+            check(!immediate.Resolve(false, false, 5), "An explicit close did not cancel a pending delay immediately.");
+            check(!immediate.Resolve(false, true, 604), "A cancelled pending delay restored sidebar visibility.");
+
+            var reset = new SidebarVisibilityDelay();
+            check(reset.Resolve(true, true, 10000) && reset.Resolve(false, true, 10100), "The clock-reset fixture did not start a delay.");
+            check(!reset.Resolve(false, true, 100), "A backwards clock retained a stale hide deadline.");
+            check(!reset.Resolve(false, true, 699), "A clock reset resurrected a hidden sidebar.");
+            check(reset.Resolve(true, true, 50), "A backwards timestamp suppressed an explicit visibility request.");
+            check(reset.Resolve(false, true, 100), "Reopening after a clock reset did not start a fresh delay.");
+            check(reset.Resolve(false, true, 699), "The fresh delay after a clock reset ended early.");
+            check(!reset.Resolve(false, true, 700), "The fresh delay after a clock reset did not expire.");
+
+            var wideClock = new SidebarVisibilityDelay();
+            check(wideClock.Resolve(true, true, long.MinValue) && wideClock.Resolve(false, true, long.MinValue + 1), "The delay rejected a valid low-range monotonic timestamp.");
+            check(!wideClock.Resolve(false, true, long.MaxValue), "A large forward timestamp jump overflowed and prolonged hiding.");
+            var highClock = new SidebarVisibilityDelay();
+            check(highClock.Resolve(true, true, long.MaxValue - 1000) && highClock.Resolve(false, true, long.MaxValue - 600), "The delay could not start near the timestamp limit.");
+            check(highClock.Resolve(false, true, long.MaxValue - 1), "A near-limit hide deadline ended before 599 ms.");
+            check(!highClock.Resolve(false, true, long.MaxValue), "A near-limit hide deadline overflowed at 600 ms.");
+            check(!IsTransition(-1, 0) && IsTransition(100, 100), "A missing transition or its initial instant was classified incorrectly.");
+            check(IsTransition(100, 699) && !IsTransition(100, 700), "The foreground-switch window exceeded 600 ms.");
+            check(!IsTransition(100, 99) && !IsTransition(0, long.MaxValue), "A backwards or overflow-range clock prolonged a transition.");
+
+            var policy = new SidebarVisibilityState(false);
+            var transition = new SidebarVisibilityDelay();
+            check(transition.Resolve(policy.ShouldShow(true, false, false), true, 0), "The combined visibility policy did not open for a foreground game.");
+            check(transition.Resolve(policy.ShouldShow(false, false, false), policy.Enabled && IsTransition(40, 40), 40), "A switch animation immediately hid the visible sidebar.");
+            check(transition.Resolve(policy.ShouldShow(false, false, true), policy.Enabled && IsTransition(40, 100), 100), "A background game exposure did not cancel transition hiding.");
+            check(!transition.Resolve(policy.ShouldShow(false, false, false), policy.Enabled && IsTransition(40, 2000), 2000), "Stable full coverage outside a foreground switch acquired an extra hide delay.");
+            check(transition.Resolve(policy.ShouldShow(false, false, true), true, 2100), "A newly exposed game did not restore the sidebar.");
+            policy.Close();
+            check(!transition.Resolve(policy.ShouldShow(false, false, true), policy.Enabled && IsTransition(2100, 2110), 2110), "Manual close was delayed during a foreground switch.");
+            var repeated = new SidebarVisibilityDelay();
+            repeated.Resolve(true, true, 0); repeated.Resolve(false, true, 100);
+            check(!repeated.Resolve(false, IsTransition(650, 700), 700), "Repeated foreground changes extended an already pending hide.");
+            return checks;
+        }
+    }
+
     internal sealed class MainWindow : Form
     {
         private readonly string dataDirectory;
@@ -217,9 +325,15 @@ namespace HexGuide.Desktop
         private readonly ToolStripLabel shortcutStatus;
         private readonly SidebarWindow sidebar;
         private readonly Timer refreshTimer;
+        private readonly Timer recognitionTimer;
         private readonly bool startHidden;
         private readonly SidebarVisibilityState sidebarVisibility;
+        private readonly SidebarVisibilityDelay sidebarVisibilityDelay = new SidebarVisibilityDelay();
+        private readonly Stopwatch sidebarVisibilityClock = Stopwatch.StartNew();
+        private IntPtr previousVisibilityForeground;
+        private long visibilityTransitionAt = -1;
         private readonly SidebarShortcut shortcut;
+        private readonly RecognitionTrace recognitionTrace = new RecognitionTrace();
         private readonly ScreenSelectionWatcher selectionWatcher;
         private readonly OwnedPanelWatcher panelWatcher;
         private readonly ScreenLifeController lifeController;
@@ -229,6 +343,10 @@ namespace HexGuide.Desktop
         private bool explicitActivation, trayHintShown;
         private bool fetching, scanChanging, confirmChanging, appearanceRequested, appearanceOpening, layoutRequested, layoutOpening;
         private long sidebarRequestGeneration;
+        private bool recognitionFetching, automaticSelectionPosting;
+        private long lastRecognitionAt;
+        private Dictionary<string, object> recognitionModel;
+        private readonly Queue<KeyValuePair<bool, Dictionary<string, object>>> automaticSelections = new Queue<KeyValuePair<bool, Dictionary<string, object>>>();
         private string sessionToken;
         private IntPtr lastGame;
         private DateTime nextFetch = DateTime.MinValue;
@@ -239,9 +357,10 @@ namespace HexGuide.Desktop
         internal MainWindow(string dataDirectory, bool background, bool preview)
         {
             this.dataDirectory = dataDirectory;
+            OverlayVisibilityCompatibility.Prewarm();
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.13.0 · 我的这一局";
+            Text = "海克斯指南 1.17.5 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -305,17 +424,18 @@ namespace HexGuide.Desktop
             sidebar.DetailsRequested += delegate { ShowMain(); };
             sidebar.GameRequested += delegate { ReturnToGame(); };
             sidebar.OfferConfirmed += async delegate(string id) { await ConfirmOfferAsync(id); };
-            selectionWatcher = new ScreenSelectionWatcher();
+            sidebar.PendingOfferConfirmed += async delegate(string id, string pendingId) { await ConfirmOfferAsync(id, pendingId); };
+            selectionWatcher = new ScreenSelectionWatcher(recognitionTrace);
             selectionWatcher.StatusChanged += delegate(string message)
             {
-                if (!closing && !confirmChanging && ModelValue.Object(sidebar.Model, "panelSelection") == null) { sidebar.Notice = message; sidebar.Invalidate(); }
+                if (!closing && !confirmChanging) { sidebar.Notice = message; sidebar.Invalidate(); }
             };
-            selectionWatcher.SelectionObserved += async delegate(Dictionary<string, object> evidence) { await ConfirmScreenSelectionAsync(evidence); };
+            selectionWatcher.SelectionObserved += async delegate(Dictionary<string, object> evidence) { await QueueAutomaticSelectionAsync(evidence, false); };
             panelWatcher = new OwnedPanelWatcher();
-            panelWatcher.EvidenceReady += async delegate(Dictionary<string, object> evidence) { await ConfirmPanelSelectionAsync(evidence); };
+            panelWatcher.EvidenceReady += async delegate(Dictionary<string, object> evidence) { await QueueAutomaticSelectionAsync(evidence, true); };
             panelWatcher.StatusChanged += delegate(string message)
             {
-                if (!closing && !confirmChanging) { sidebar.Notice = message; sidebar.Invalidate(); }
+                if (!closing && !confirmChanging && !ClickObservationHasPriority(selectionWatcher.StatusCode)) { sidebar.Notice = message; sidebar.Invalidate(); }
             };
             lifeController = new ScreenLifeController(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "native"), dataDirectory);
             lifeController.ProofReady += delegate(Dictionary<string, object> evidence)
@@ -358,6 +478,9 @@ namespace HexGuide.Desktop
                 if (layoutRequested) await OpenRequestedLayoutAsync();
             };
             refreshTimer.Start();
+            recognitionTimer = new Timer { Interval = 150 };
+            recognitionTimer.Tick += async delegate { await FetchRecognitionAsync(); };
+            recognitionTimer.Start();
             Shown += async delegate { if (startHidden) Hide(); await StartAsync(); };
             Resize += delegate { if (!closing && WindowState == FormWindowState.Minimized) HideMain(); };
             KeyDown += delegate(object sender, KeyEventArgs e)
@@ -370,6 +493,7 @@ namespace HexGuide.Desktop
                 if (!closing && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; HideMain(); return; }
                 closing = true;
                 refreshTimer.Stop(); refreshTimer.Dispose();
+                recognitionTimer.Stop(); recognitionTimer.Dispose();
                 selectionWatcher.Dispose();
                 panelWatcher.Dispose();
                 lifeController.Dispose();
@@ -462,6 +586,12 @@ namespace HexGuide.Desktop
         {
             if (closing || sidebar.IsDisposed) return;
             IntPtr foreground = GameWindow.CurrentForeground();
+            long visibilityNow = sidebarVisibilityClock.ElapsedMilliseconds;
+            if (foreground != previousVisibilityForeground)
+            {
+                previousVisibilityForeground = foreground;
+                visibilityTransitionAt = visibilityNow;
+            }
             bool gameForeground = GameWindow.IsVerifiedGame(foreground);
             bool mainForeground = foreground != IntPtr.Zero && IsHandleCreated && foreground == Handle;
             if (gameForeground) lastGame = foreground;
@@ -475,11 +605,15 @@ namespace HexGuide.Desktop
                 }
                 if (lastGame != IntPtr.Zero) backgroundGameExposed = GameWindow.HasExposedGameArea(lastGame, sidebar.IsHandleCreated ? sidebar.Handle : IntPtr.Zero);
             }
-            desiredSidebarVisible = sidebarVisibility.ShouldShow(gameForeground, mainForeground, backgroundGameExposed);
+            bool requestedSidebarVisible = sidebarVisibility.ShouldShow(gameForeground, mainForeground, backgroundGameExposed);
+            desiredSidebarVisible = sidebarVisibilityDelay.Resolve(requestedSidebarVisible,
+                sidebarVisibility.Enabled && GameWindow.IsVerifiedGame(lastGame)
+                    && SidebarVisibilityDelay.IsTransition(visibilityTransitionAt, visibilityNow), visibilityNow);
             if (!desiredSidebarVisible) { if (sidebar.Visible) sidebar.Hide(); UpdateSidebarHint(false); return; }
             IntPtr target = gameForeground ? foreground : lastGame;
-            Rectangle area = GameWindow.PlacementArea(target);
-            sidebar.Place(area);
+            // A switch animation can briefly minimize/reposition the game.
+            // Retain the last sidebar position during the short hide delay.
+            if (requestedSidebarVisible) sidebar.Place(GameWindow.PlacementArea(target));
             if (!sidebar.Visible) sidebar.ShowPassive();
             UpdateSidebarHint(sidebar.Visible);
         }
@@ -623,31 +757,82 @@ namespace HexGuide.Desktop
                 var model = await RequestModelAsync("api/sidebar", null);
                 if (closing || IsDisposed || generation != sidebarRequestGeneration || confirmChanging || scanChanging) return;
                 sidebar.Model = model;
-                UpdateSelectionWatchers(model);
-                lifeController.UpdateModel(model);
+                if (UpdateSelectionWatchers(model)) lifeController.UpdateModel(model);
                 scanMenu.Checked = ModelValue.Boolean(ModelValue.Object(model, "ocr"), "enabled");
                 scanMenu.Enabled = !scanChanging;
                 sidebar.Invalidate();
             }
-            catch { if (!closing && generation == sidebarRequestGeneration && !confirmChanging && !scanChanging) { selectionWatcher.CancelForLocalAction(); panelWatcher.CancelForLocalAction(); lifeController.UpdateModel(null); sidebar.Model = ModelValue.Failure("正在等待本地连接…"); sidebar.Invalidate(); } }
+            catch
+            {
+                if (!closing && generation == sidebarRequestGeneration && !confirmChanging && !scanChanging)
+                {
+                    // A slow recommendation view must not revoke newer, healthy
+                    // recognition delivery or its in-flight click witnesses.
+                    if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - lastRecognitionAt > 1000)
+                    {
+                        selectionWatcher.UpdateObservationScope(null);
+                        panelWatcher.CancelForLocalAction();
+                        lifeController.UpdateModel(null);
+                    }
+                    sidebar.Model = ModelValue.Failure("正在等待本地连接…"); sidebar.Invalidate();
+                }
+            }
             finally { fetching = false; }
         }
 
-        private void UpdateSelectionWatchers(Dictionary<string, object> model)
+        private bool UpdateSelectionWatchers(Dictionary<string, object> model)
         {
-            // A backend that advertises player-opened panel confirmation uses
-            // one automatic source. Keep the historical animation observer
-            // available for older backends and its isolated regression tests.
-            if (ModelValue.Object(model, "panelSelection") != null)
+            long stamp;
+            if (ModelValue.Integer(model, "recognitionAt", out stamp))
             {
-                selectionWatcher.CancelForLocalAction();
-                panelWatcher.UpdateModel(model);
+                if (stamp < lastRecognitionAt) return false;
+                long age = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - stamp;
+                if (age < -1000 || age > 1000)
+                {
+                    selectionWatcher.UpdateObservationScope(null);
+                    panelWatcher.CancelForLocalAction();
+                    return false;
+                }
+                lastRecognitionAt = stamp;
             }
-            else
+            // Direct click/feedback and player-opened result panels are two
+            // independent sources using the same authoritative commit boundary.
+            selectionWatcher.UpdateModel(model);
+            panelWatcher.UpdateModel(model);
+            recognitionModel = model;
+            return true;
+        }
+
+        private static bool ClickObservationHasPriority(string status)
+        {
+            return status == "baseline" || status == "ready" || status == "pending"
+                || status == "feedback" || status == "observed";
+        }
+
+        private async Task FetchRecognitionAsync()
+        {
+            if (closing || localOrigin == null || recognitionFetching || confirmChanging || scanChanging) return;
+            recognitionFetching = true;
+            long generation = sidebarRequestGeneration;
+            try
             {
-                panelWatcher.CancelForLocalAction();
-                selectionWatcher.UpdateModel(model);
+                var model = await RequestModelAsync("api/recognition", null);
+                if (closing || IsDisposed || generation != sidebarRequestGeneration || confirmChanging || scanChanging) return;
+                if (UpdateSelectionWatchers(model))
+                {
+                    lifeController.UpdateModel(model);
+                    recognitionTimer.Interval = ModelValue.Boolean(ModelValue.Object(model, "screenObservationScope"), "eligible") ? 150 : 400;
+                }
             }
+            catch
+            {
+                if (!closing && generation == sidebarRequestGeneration)
+                {
+                    selectionWatcher.UpdateObservationScope(null);
+                    panelWatcher.CancelForLocalAction();
+                }
+            }
+            finally { recognitionFetching = false; }
         }
 
         private void PulseSelectionDiagnostics()
@@ -658,12 +843,12 @@ namespace HexGuide.Desktop
             string json, panelJson;
             try
             {
-                json = SelectionDiagnosticsJson(selectionWatcher, sidebar.Model, now);
+                json = SelectionDiagnosticsJson(selectionWatcher, recognitionModel ?? sidebar.Model, now, recognitionTrace);
                 var panelSnapshot = panelWatcher.Diagnostics();
-                panelSnapshot["schemaVersion"] = 1;
-                panelSnapshot["appVersion"] = "1.13.0";
+                panelSnapshot["schemaVersion"] = 2;
+                panelSnapshot["appVersion"] = "1.17.5";
                 panelSnapshot["updatedAtUtc"] = now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);
-                panelSnapshot["backendReason"] = PanelReason(sidebar.Model);
+                panelSnapshot["backendReason"] = PanelReason(recognitionModel ?? sidebar.Model);
                 panelJson = new JavaScriptSerializer().Serialize(panelSnapshot);
                 if (Encoding.UTF8.GetByteCount(panelJson) > 2048) throw new InvalidOperationException("Panel diagnostic snapshot exceeds its fixed bound.");
             }
@@ -695,12 +880,14 @@ namespace HexGuide.Desktop
             });
         }
 
-        internal static string SelectionDiagnosticsJson(ScreenSelectionWatcher watcher, Dictionary<string, object> model, DateTime now)
+        internal static string SelectionDiagnosticsJson(ScreenSelectionWatcher watcher, Dictionary<string, object> model, DateTime now, RecognitionTrace trace = null)
         {
+            var native = watcher.Diagnostics();
+            if (trace != null) native["trace"] = trace.Snapshot();
             var snapshot = new Dictionary<string, object> {
-                { "version", "1.13.0" }, { "schemaVersion", 2 },
+                { "version", "1.17.5" }, { "schemaVersion", 2 },
                 { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
-                { "native", watcher.Diagnostics() },
+                { "native", native },
                 { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
             };
             string json = new JavaScriptSerializer().Serialize(snapshot);
@@ -713,8 +900,9 @@ namespace HexGuide.Desktop
             string reason = ModelValue.Text(ModelValue.Object(model, "panelSelection"), "reason");
             switch (reason)
             {
-                case "waiting-offer": case "waiting-panel": case "panel-statistics-unavailable":
-                case "panel-statistics-tied": case "panel-collision-unverified": case "panel-no-new-match":
+                case "waiting-offer": case "waiting-panel": case "panel-recommendation-unavailable":
+                case "panel-disabled": case "panel-context-unavailable": case "panel-anchor-unavailable":
+                case "panel-recommendation-tied": case "panel-collision-unverified": case "panel-no-new-match":
                 case "panel-multiple-new-groups": case "panel-unstable": return reason;
                 default: return "unavailable";
             }
@@ -733,10 +921,12 @@ namespace HexGuide.Desktop
                         { "capture", new Dictionary<string, object> { { "windowHandle", "PRIVATE-MARKER" } } }
                     } }, { "name", "PRIVATE-MARKER" }
                 };
-                string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+                var trace = new RecognitionTrace();
+                for (int i = 0; i < 100; i++) trace.Record("submit-failed", "PRIVATE-MARKER", long.MaxValue, int.MaxValue, int.MaxValue, int.MaxValue, 599, int.MaxValue);
+                string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), trace);
                 var snapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
                 if (snapshot.Count != 5 || Encoding.UTF8.GetByteCount(json) > 4096
-                    || ModelValue.Text(snapshot, "version") != "1.13.0" || ModelValue.Text(snapshot, "schemaVersion") != "2")
+                    || ModelValue.Text(snapshot, "version") != "1.17.5" || ModelValue.Text(snapshot, "schemaVersion") != "2")
                     throw new InvalidOperationException("The persisted selection diagnostic snapshot exceeded its schema or byte bound.");
                 if (json.Contains("PRIVATE-MARKER") || json.Contains("\"ids\"") || json.Contains("windowHandle")
                     || json.Contains("\"signature\"") || json.Contains("\"signatures\"") || json.Contains("\"delta\""))
@@ -765,7 +955,7 @@ namespace HexGuide.Desktop
             finally { scanChanging = false; if (!closing) scanMenu.Enabled = true; }
         }
 
-        private async Task ConfirmOfferAsync(string id)
+        private async Task ConfirmOfferAsync(string id, string pendingId = null)
         {
             if (closing || localOrigin == null || confirmChanging || string.IsNullOrEmpty(id)) return;
             selectionWatcher.CancelForLocalAction();
@@ -778,7 +968,7 @@ namespace HexGuide.Desktop
                 var current = await RequestModelAsync("api/sidebar", null);
                 if (closing) return;
                 bool offered = false;
-                foreach (object entry in ModelValue.Array(current, "offers"))
+                foreach (object entry in ModelValue.OffersForConfirmation(current, pendingId))
                     if (ModelValue.Text(entry as Dictionary<string, object>, "id") == id) offered = true;
                 long revision;
                 object currentGameId;
@@ -790,9 +980,11 @@ namespace HexGuide.Desktop
                 }
                 // The server checks the game, revision and current offer in one operation.
                 // Never fall back to replacing an entire session from an older GET.
-                string body = new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
+                var payload = new Dictionary<string, object> {
                     { "id", id }, { "gameId", currentGameId }, { "revision", revision }
-                });
+                };
+                if (!string.IsNullOrEmpty(pendingId)) payload["pendingId"] = pendingId;
+                string body = new JavaScriptSerializer().Serialize(payload);
                 var confirmed = await RequestModelAsync("api/session/confirm", body);
                 if (closing) return;
                 if (!ModelValue.ConfirmsOffer(confirmed, id, currentGameId))
@@ -819,17 +1011,84 @@ namespace HexGuide.Desktop
             finally { confirmChanging = false; if (!closing) sidebar.Invalidate(); }
         }
 
+        private async Task QueueAutomaticSelectionAsync(Dictionary<string, object> evidence, bool panel)
+        {
+            if (closing || localOrigin == null || evidence == null || automaticSelections.Count >= 2)
+            {
+                recognitionTrace.Record("submit-rejected", closing ? "closing" : evidence == null ? "invalid-proof" : "busy", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                if (panel) panelWatcher.SubmissionCompleted(false); return;
+            }
+            automaticSelections.Enqueue(new KeyValuePair<bool, Dictionary<string, object>>(panel, evidence));
+            RecordAutomaticTrace("queue", panel ? "panel" : "screen", evidence, panel);
+            if (automaticSelectionPosting) return;
+            automaticSelectionPosting = true;
+            try
+            {
+                while (!closing && automaticSelections.Count > 0)
+                {
+                    var pending = automaticSelections.Peek();
+                    while (!closing && (confirmChanging || scanChanging)
+                        && AutomaticEvidenceFresh(pending.Value, pending.Key, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())) await Task.Delay(50);
+                    var next = automaticSelections.Dequeue();
+                    if (closing || confirmChanging || scanChanging
+                        || !AutomaticEvidenceFresh(next.Value, next.Key, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
+                    { RecordAutomaticTrace("submit-expired", closing ? "closing" : "stale-context", next.Value, next.Key); if (next.Key) panelWatcher.SubmissionCompleted(false); continue; }
+                    if (next.Key) await ConfirmPanelSelectionAsync(next.Value);
+                    else await ConfirmScreenSelectionAsync(next.Value);
+                }
+            }
+            finally
+            {
+                while (automaticSelections.Count > 0)
+                    if (automaticSelections.Dequeue().Key) panelWatcher.SubmissionCompleted(false);
+                automaticSelectionPosting = false;
+            }
+        }
+
+        private static bool AutomaticEvidenceFresh(Dictionary<string, object> evidence, bool panel, long now)
+        {
+            long observed;
+            if (panel)
+            {
+                var frames = ModelValue.Array(evidence, "frames");
+                if (frames.Count == 0 || !ModelValue.Integer(frames[frames.Count - 1] as Dictionary<string, object>, "capturedAt", out observed)) return false;
+            }
+            else if (!ModelValue.Integer(evidence, "observedAt", out observed)) return false;
+            // Leave transport time within the server's existing five-second
+            // receipt allowance; another provider's slow request must not drop
+            // a still-current direct proof after an arbitrary two seconds.
+            return observed - now <= 1000 && now - observed < 4500;
+        }
+
+        private void RecordAutomaticTrace(string eventCode, string reason, Dictionary<string, object> evidence, bool panel, int httpStatus = 0)
+        {
+            long stamp = 0, now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (panel)
+            {
+                var frames = ModelValue.Array(evidence, "frames");
+                if (frames.Count > 0) ModelValue.Integer(frames[frames.Count - 1] as Dictionary<string, object>, "capturedAt", out stamp);
+            }
+            else ModelValue.Integer(evidence, "clickedAt", out stamp);
+            int duration = stamp > 0 ? (int)Math.Max(0, Math.Min(60000, now - stamp)) : 0;
+            recognitionTrace.Record(eventCode, reason, now, httpStatus:httpStatus, durationMs:duration);
+        }
+
         private async Task ConfirmScreenSelectionAsync(Dictionary<string, object> evidence)
         {
-            if (closing || localOrigin == null || confirmChanging || scanChanging) return;
+            if (closing || localOrigin == null || confirmChanging || scanChanging)
+            { RecordAutomaticTrace("submit-rejected", closing ? "closing" : "busy", evidence, false); return; }
             long selectedIndex;
             var ids = ModelValue.Array(evidence, "ids");
-            if (!ModelValue.Integer(evidence, "selectedIndex", out selectedIndex) || selectedIndex > 2 || ids.Count != 3) return;
+            if (!ModelValue.Integer(evidence, "selectedIndex", out selectedIndex) || selectedIndex > 2 || ids.Count != 3)
+            { RecordAutomaticTrace("submit-rejected", "invalid-proof", evidence, false); return; }
             string selectedId = ids[(int)selectedIndex] as string;
             object requestedGameId;
-            if (string.IsNullOrEmpty(selectedId) || !ModelValue.GameId(evidence, out requestedGameId)) return;
+            if (string.IsNullOrEmpty(selectedId) || !ModelValue.GameId(evidence, out requestedGameId))
+            { RecordAutomaticTrace("submit-rejected", "invalid-proof", evidence, false); return; }
             sidebarRequestGeneration++;
             confirmChanging = true;
+            bool accepted = false;
+            RecordAutomaticTrace("submit-start", "screen", evidence, false);
             try
             {
                 // The authoritative server checks the exact offer token, ordered
@@ -839,10 +1098,13 @@ namespace HexGuide.Desktop
                 if (closing) return;
                 if (!ModelValue.ConfirmsOffer(confirmed, selectedId, requestedGameId))
                 {
+                    RecordAutomaticTrace("submit-rejected", "stale-context", evidence, false, 200);
                     sidebar.Notice = "屏幕自动确认（实验）：状态已变化，请手动核对";
                     nextFetch = DateTime.MinValue;
                     return;
                 }
+                accepted = true;
+                RecordAutomaticTrace("submit-accepted", "screen", evidence, false, 200);
                 sidebar.Model = confirmed;
                 UpdateSelectionWatchers(confirmed);
                 sidebar.ExpandBuild();
@@ -852,23 +1114,30 @@ namespace HexGuide.Desktop
             catch (WebException error)
             {
                 var response = error.Response as HttpWebResponse;
+                int statusCode = response == null ? 0 : (int)response.StatusCode;
+                if (accepted) RecordAutomaticTrace("client-update-failed", "client-state-error", evidence, false);
+                else RecordAutomaticTrace(statusCode == 400 || statusCode == 409 ? "submit-rejected" : "submit-failed",
+                    statusCode == 409 ? "stale-context" : statusCode == 400 ? "invalid-proof" : statusCode == 0 ? "transport-error" : "http-error", evidence, false, statusCode);
                 if (response != null) response.Close();
                 if (!closing) sidebar.Notice = "屏幕自动确认（实验）：未记录本次选择，可手动确认";
                 nextFetch = DateTime.MinValue;
             }
-            catch { if (!closing) sidebar.Notice = "屏幕自动确认（实验）：记录未完成，可手动确认"; }
+            catch { RecordAutomaticTrace(accepted ? "client-update-failed" : "submit-failed", accepted ? "client-state-error" : "transport-error", evidence, false); if (!closing) sidebar.Notice = "屏幕自动确认（实验）：记录未完成，可手动确认"; }
             finally { confirmChanging = false; if (!closing) sidebar.Invalidate(); }
         }
 
         private async Task ConfirmPanelSelectionAsync(Dictionary<string, object> evidence)
         {
-            if (closing || localOrigin == null || confirmChanging || scanChanging || evidence == null) return;
+            if (closing || localOrigin == null || confirmChanging || scanChanging || evidence == null)
+            { RecordAutomaticTrace("submit-rejected", closing ? "closing" : evidence == null ? "invalid-proof" : "busy", evidence, true); panelWatcher.SubmissionCompleted(false); return; }
             long epoch, revision;
             var before = sidebar.Model;
-            if (!ModelValue.Integer(evidence, "gameEpoch", out epoch) || !ModelValue.Integer(evidence, "revision", out revision)) return;
+            if (!ModelValue.Integer(evidence, "gameEpoch", out epoch) || !ModelValue.Integer(evidence, "revision", out revision))
+            { RecordAutomaticTrace("submit-rejected", "invalid-proof", evidence, true); panelWatcher.SubmissionCompleted(false); return; }
             sidebarRequestGeneration++;
             confirmChanging = true;
             bool accepted = false;
+            RecordAutomaticTrace("submit-start", "panel", evidence, true);
             try
             {
                 string body = new JavaScriptSerializer().Serialize(evidence);
@@ -877,27 +1146,35 @@ namespace HexGuide.Desktop
                 long afterEpoch, afterRevision;
                 if (!ModelValue.Integer(confirmed, "gameEpoch", out afterEpoch) || afterEpoch != epoch
                     || !ModelValue.Integer(confirmed, "sessionRevision", out afterRevision) || afterRevision < revision)
-                { nextFetch = DateTime.MinValue; return; }
+                { RecordAutomaticTrace("submit-rejected", "stale-context", evidence, true, 200); nextFetch = DateTime.MinValue; return; }
+                accepted = afterRevision > revision;
+                RecordAutomaticTrace(accepted ? "submit-accepted" : "submit-rejected", accepted ? "panel" : "invalid-proof", evidence, true, 200);
                 sidebar.Model = confirmed;
                 UpdateSelectionWatchers(confirmed);
-                accepted = afterRevision > revision;
                 if (afterRevision > revision && ModelValue.Array(confirmed, "owned").Count > ModelValue.Array(before, "owned").Count)
                 {
                     sidebar.ExpandBuild();
                     bool inferred = false;
                     foreach (object entry in ModelValue.Array(confirmed, "owned"))
                         if (ModelValue.Boolean(entry as Dictionary<string, object>, "inferred")) inferred = true;
-                    sidebar.Notice = inferred ? "推定已选：同图标按统计区分；可打开详细纠正" : "面板图标已匹配，出装与后续海克斯已更新";
+                    sidebar.Notice = inferred ? "推定已选：同图标存在歧义；可打开详细纠正" : "面板图标已匹配，出装与后续海克斯已更新";
                 }
-                else if (PanelReason(confirmed) == "panel-statistics-unavailable" || PanelReason(confirmed) == "panel-statistics-tied")
-                    sidebar.Notice = "同图标统计不足或并列，请在侧栏手动确认";
+                else if (PanelReason(confirmed) == "panel-recommendation-unavailable" || PanelReason(confirmed) == "panel-recommendation-tied")
+                    sidebar.Notice = "同图标暂无可用推荐顺序，请在侧栏手动确认";
                 nextFetch = DateTime.MinValue;
             }
-            catch
+            catch (WebException error)
             {
+                var response = error.Response as HttpWebResponse;
+                int statusCode = response == null ? 0 : (int)response.StatusCode;
+                if (accepted) RecordAutomaticTrace("client-update-failed", "client-state-error", evidence, true);
+                else RecordAutomaticTrace(statusCode == 400 || statusCode == 409 ? "submit-rejected" : "submit-failed",
+                    statusCode == 409 ? "stale-context" : statusCode == 400 ? "invalid-proof" : statusCode == 0 ? "transport-error" : "http-error", evidence, true, statusCode);
+                if (response != null) response.Close();
                 if (!closing) sidebar.Notice = "面板核对未记录，可继续打开面板或手动确认";
                 nextFetch = DateTime.MinValue;
             }
+            catch { RecordAutomaticTrace(accepted ? "client-update-failed" : "submit-failed", accepted ? "client-state-error" : "transport-error", evidence, true); if (!closing) sidebar.Notice = "面板核对未记录，可继续打开面板或手动确认"; nextFetch = DateTime.MinValue; }
             finally { panelWatcher.SubmissionCompleted(accepted); confirmChanging = false; if (!closing) sidebar.Invalidate(); }
         }
 
@@ -1099,10 +1376,21 @@ namespace HexGuide.Desktop
         private Rectangle hideButton, detailsButton, gameButton, viewport, scrollTrack, scrollThumb;
         private int scrollOffset, contentHeight;
         private readonly List<string> paintedSections = new List<string>();
+        private string paintedNextItemId = "";
+        private readonly List<Rectangle> nextItemTextAreas = new List<Rectangle>();
         private readonly Dictionary<Rectangle, string> offerButtons = new Dictionary<Rectangle, string>();
+        private readonly Dictionary<Rectangle, string> offerPendingIds = new Dictionary<Rectangle, string>();
+        private readonly Dictionary<Rectangle, KeyValuePair<string, string>> pendingOfferButtons = new Dictionary<Rectangle, KeyValuePair<string, string>>();
+        private string pressedOfferId, pressedPendingId;
         private readonly Dictionary<Rectangle, Dictionary<string, object>> augmentTargets = new Dictionary<Rectangle, Dictionary<string, object>>();
-        private readonly ToolTip augmentHint = new ToolTip { ShowAlways = true, InitialDelay = 450, ReshowDelay = 100, AutoPopDelay = 5000 };
+        private readonly Dictionary<Rectangle, string> helpTargets = new Dictionary<Rectangle, string>();
+        private readonly ToolTip augmentHint = new ToolTip { ShowAlways = true, InitialDelay = 450, ReshowDelay = 100, AutoPopDelay = 15000 };
         private string activeAugmentHint = "";
+        private bool activeHintIsHelp;
+        private const string SidebarHelp = "Ctrl + 左键：拖动侧栏\nAlt+Shift+H：收起或展开\n滚轮：查看侧栏中的其余内容\n打开详细：查看完整构筑和调整记录\n返回游戏：切回游戏窗口\n只读游戏，不替你点击或操作。";
+        private const string NextItemHelp = "根据本局英雄、已确认海克斯、\n敌方阵容与可读战绩推荐下一件装备。\n确认推荐装备已完整买出后，再推荐下一件。\n只买到组件不会推进；数据不足时会等待。\n任务装备仅在确认相关任务海克斯后显示，\n并列出需要完成的合成路线。";
+        private const string OffersHelp = "先在游戏内选择；未自动记录时，\n再点击对应候选卡片确认。\n金框为优先推荐，角标为推荐顺序。\n出现三选一卡片后会自动检查。\n未确认的旧轮会保留，可继续核对或补录。";
+        private const string OwnedHelp = "这里显示本局已经记录的海克斯。\n自动识别未确认时，可点击候选卡片确认。\n标注为推定的记录仍有同图标歧义；\n可在“打开详细”中移除并改选。";
         private readonly RemoteIconCache buildIcons = new RemoteIconCache();
         private readonly Dictionary<string, Image> augmentIcons = new Dictionary<string, Image>();
         private Rectangle buildToggle;
@@ -1110,6 +1398,7 @@ namespace HexGuide.Desktop
         private bool initialPlanHandled;
         private string initialPlanGame = "";
         private long sessionRevision = -1;
+        private long pendingRevision = -1, pendingRevisionEpoch = -1;
         private Rectangle placementArea;
         private Point dragStartPointer, dragStartLocation;
         private bool dragging, consumeDragClick, customPosition, appearanceLoaded;
@@ -1119,12 +1408,27 @@ namespace HexGuide.Desktop
             get { return model; }
             set
             {
+                long nextPendingRevision = -1, nextPendingEpoch = -1;
+                bool hasPendingRevision = ModelValue.Integer(value, "pendingRevision", out nextPendingRevision)
+                    && ModelValue.Integer(value, "gameEpoch", out nextPendingEpoch);
+                if (hasPendingRevision && (nextPendingEpoch < pendingRevisionEpoch
+                    || nextPendingEpoch == pendingRevisionEpoch && nextPendingRevision < pendingRevision)) return;
+                // A transport failure is not a session update. Preserve unresolved
+                // choices for display; confirmation still requires session context.
+                if (value != null && !value.ContainsKey("offers") && !value.ContainsKey("gameId")
+                    && ModelValue.Array(model, "pendingOffers").Count > 0)
+                {
+                    value = new Dictionary<string, object>(value);
+                    value["offers"] = ModelValue.Array(model, "offers");
+                    value["pendingOffers"] = ModelValue.Array(model, "pendingOffers");
+                }
                 long revision;
                 if (ModelValue.Integer(value, "sessionRevision", out revision))
                 {
                     if (revision < sessionRevision) return;
                     sessionRevision = revision;
                 }
+                if (hasPendingRevision) { pendingRevision = nextPendingRevision; pendingRevisionEpoch = nextPendingEpoch; }
                 int previousOwned = ModelValue.Array(model, "owned").Count;
                 bool previousModel = ModelValue.Object(model, "champion") != null;
                 string previousPhase = ModelValue.Text(model, "phase");
@@ -1146,7 +1450,8 @@ namespace HexGuide.Desktop
                 double observedTime;
                 if (currentOwned > 0 || ModelValue.Text(value, "championSource") == "live-client" && TryGameTime(value, out observedTime) && observedTime > 30) initialPlanHandled = true;
                 offerButtons.Clear();
-                ClearAugmentHint();
+                offerPendingIds.Clear(); pendingOfferButtons.Clear();
+                ClearAugmentHint(true);
                 // A transient connection error must not reset the user's last saved layout.
                 if (ModelValue.Object(value, "appearance") != null) ApplyAppearance(SidebarAppearance.FromModel(value));
                 else Invalidate();
@@ -1176,6 +1481,7 @@ namespace HexGuide.Desktop
         }
         internal event EventHandler HideRequested, DetailsRequested, GameRequested;
         internal event Action<string> OfferConfirmed;
+        internal event Action<string, string> PendingOfferConfirmed;
 
         internal void ExpandBuild()
         {
@@ -1185,11 +1491,153 @@ namespace HexGuide.Desktop
         }
         private List<string> DisplaySections()
         {
-            var result = new List<string>(appearance.Sections);
-            // Keep the saved order intact: loading temporarily presents equipment only.
-            if (IsLoadingStage) { result.Remove("owned"); result.Remove("offers"); }
-            if (buildExpanded) { result.Remove("plan"); result.Insert(0, "plan"); }
+            // Presentation is deliberately separate from the persisted four-section
+            // schema, which is also edited by the unchanged full application.
+            var result = new List<string> { "nextItem" };
+            if (!IsLoadingStage) result.Add("offers");
+            foreach (string section in appearance.Sections)
+                if (section == "hero" || section == "owned" && !IsLoadingStage) result.Add(section);
             return result;
+        }
+
+        private static bool FreshRecommendationTime(Dictionary<string, object> value, string key, DateTimeOffset now, bool allowExpired = false)
+        {
+            DateTimeOffset timestamp;
+            if (!DateTimeOffset.TryParse(ModelValue.Text(value, key), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out timestamp)) return false;
+            double age = (now - timestamp).TotalMilliseconds;
+            return age >= -5000 && (allowExpired || age <= 30000);
+        }
+        private static bool RecommendationInteger(Dictionary<string, object> value, string key, out long number)
+        {
+            object raw; number = -1;
+            return value != null && value.TryGetValue(key, out raw) && (raw is int || raw is long)
+                && ModelValue.Integer(value, key, out number) && number <= 9007199254740991L;
+        }
+        private static bool RecommendationFlag(Dictionary<string, object> value, string key)
+        {
+            object raw;
+            return value != null && value.TryGetValue(key, out raw) && raw is bool && (bool)raw;
+        }
+        private static bool SameOwnedSelection(Dictionary<string, object> value, Dictionary<string, object> recommendation)
+        {
+            object rawOwned, rawIds;
+            if (value == null || recommendation == null || !value.TryGetValue("owned", out rawOwned) || !recommendation.TryGetValue("ownedIds", out rawIds)
+                || !(rawOwned is ArrayList || rawOwned is object[]) || !(rawIds is ArrayList || rawIds is object[])) return false;
+            var owned = ModelValue.Array(value, "owned"); var ids = ModelValue.Array(recommendation, "ownedIds");
+            if (owned.Count != ids.Count) return false;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            for (int index = 0; index < owned.Count; index++)
+            {
+                string id = ModelValue.Text(owned[index] as Dictionary<string, object>, "id");
+                if (id.Length == 0 || !seen.Add(id) || !(ids[index] is string) || id != (string)ids[index]) return false;
+            }
+            return true;
+        }
+        private static bool SameRecommendationRoute(Dictionary<string, object> value, Dictionary<string, object> recommendation)
+        {
+            object rawRoute, rawRecommendationRoute;
+            if (value == null || recommendation == null || !value.TryGetValue("route", out rawRoute) || !recommendation.TryGetValue("route", out rawRecommendationRoute)
+                || !(rawRoute is string) || !(rawRecommendationRoute is string)) return false;
+            string route = (string)rawRoute;
+            return route == (string)rawRecommendationRoute
+                && (route == "auto" || route == "attack" || route == "spell" || route == "tank" || route == "support" || route == "crit");
+        }
+        private Dictionary<string, object> CurrentNextItem()
+        {
+            var recommendation = ModelValue.Object(Model, "nextItem");
+            var mode = ModelValue.Object(Model, "mode");
+            string game = ModelValue.Text(Model, "gameId"), champion = ModelValue.Text(ModelValue.Object(Model, "champion"), "id");
+            string stage = ModelValue.Text(Model, "stage"), status = ModelValue.Text(recommendation, "status");
+            string recommendationStage = ModelValue.Text(recommendation, "stage");
+            // A current waiting/stale explanation can describe unusable raw data.
+            // It shares the full identity guard, but can never enter the item branch.
+            bool waitingStage = (status == "waiting" || status == "stale") && recommendationStage == "waiting";
+            long epoch, recommendationEpoch, revision, recommendationRevision;
+            object gameId, recommendationGameId;
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            if (recommendation == null || ModelValue.Text(ModelValue.Object(Model, "connection"), "status") != "connected"
+                || !RecommendationFlag(mode, "known") || !RecommendationFlag(mode, "isMayhem")
+                || !ModelValue.GameId(Model, out gameId) || gameId == null || !ModelValue.GameId(recommendation, out recommendationGameId) || recommendationGameId == null
+                || game.Length == 0 || game != ModelValue.Text(recommendation, "gameId")
+                || champion.Length == 0 || champion != ModelValue.Text(recommendation, "championId")
+                || !RecommendationInteger(Model, "gameEpoch", out epoch) || !RecommendationInteger(recommendation, "gameEpoch", out recommendationEpoch) || epoch != recommendationEpoch
+                || !RecommendationInteger(Model, "sessionRevision", out revision) || !RecommendationInteger(recommendation, "sessionRevision", out recommendationRevision) || revision != recommendationRevision
+                || !(stage == "loading" && (recommendationStage == "loading-preview" || waitingStage)
+                    || stage == "live" && ModelValue.Text(Model, "phase") == "InProgress"
+                        && (waitingStage || ModelValue.Text(Model, "championSource") == "live-client" && recommendationStage == "live"))
+                || !SameOwnedSelection(Model, recommendation) || !SameRecommendationRoute(Model, recommendation)
+                || !FreshRecommendationTime(Model, "updatedAt", now, status == "stale") || !FreshRecommendationTime(recommendation, "generatedAt", now)
+                || !(status == "ready" || status == "waiting" || status == "stale" || status == "complete" || status == "inventory-full")) return null;
+            var item = ModelValue.Object(recommendation, "item");
+            if (status == "ready" && (ModelValue.Text(item, "id").Length == 0 || ModelValue.Text(item, "name").Length == 0)) return null;
+            return recommendation;
+        }
+        private string NextItemMessage(Dictionary<string, object> recommendation)
+        {
+            string status = ModelValue.Text(recommendation, "status");
+            string message = ModelValue.Text(recommendation, "message").Trim();
+            if (message.Length > 0) return message;
+            if (status == "complete") return "当前可用资料暂无后续装备建议，等待本局更新。";
+            if (status == "inventory-full") return "装备栏已满，请在完整窗口查看构筑与替换方向。";
+            if (status == "stale" || ModelValue.Object(Model, "nextItem") != null
+                && (!FreshRecommendationTime(Model, "updatedAt", DateTimeOffset.UtcNow) || !FreshRecommendationTime(ModelValue.Object(Model, "nextItem"), "generatedAt", DateTimeOffset.UtcNow)))
+                return "对局数据已过期，等待读取最新状态。";
+            return "等待本局装备数据";
+        }
+        private string NextItemReasons(Dictionary<string, object> recommendation)
+        {
+            var reasons = new List<string>();
+            foreach (object entry in ModelValue.Array(recommendation, "reasons"))
+            {
+                string reason = entry as string;
+                if (!string.IsNullOrWhiteSpace(reason)) reasons.Add(reason.Trim());
+                if (reasons.Count == 2) break;
+            }
+            if (reasons.Count == 0 && ModelValue.Text(recommendation, "reason").Length > 0) reasons.Add(ModelValue.Text(recommendation, "reason"));
+            return string.Join("\n", reasons.ToArray());
+        }
+        private int NextItemTextHeight(string text, Font font, int width)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return 0;
+            return TextRenderer.MeasureText(text, font, new Size(Math.Max(1, width), int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height + S(2);
+        }
+        private int NextItemHeight(int width)
+        {
+            var recommendation = CurrentNextItem();
+            if (ModelValue.Text(recommendation, "status") != "ready") return S(33) + NextItemTextHeight(NextItemMessage(recommendation), smallFont, width) + S(18);
+            var item = ModelValue.Object(recommendation, "item");
+            int heading = Math.Max(S(44), NextItemTextHeight(ModelValue.Text(item, "name"), normalFont, width - S(52)));
+            string effect = ModelValue.Text(item, "effect"), reasons = NextItemReasons(recommendation), evidence = ModelValue.Text(recommendation, "evidenceLabel");
+            return S(33) + heading + S(8) + NextItemTextHeight(effect, smallFont, width)
+                + (reasons.Length > 0 ? S(7) + NextItemTextHeight(reasons, smallFont, width) : 0)
+                + (evidence.Length > 0 ? S(7) + NextItemTextHeight(evidence, smallFont, width) : 0) + S(18);
+        }
+        private void DrawNextItemText(Graphics g, string text, Font font, Color color, int x, ref int y, int width)
+        {
+            int height = NextItemTextHeight(text, font, width);
+            if (height == 0) return;
+            var area = new Rectangle(x, y, Math.Max(1, width), height);
+            nextItemTextAreas.Add(area); Write(g, text, font, color, area); y += height;
+        }
+        private void DrawNextItem(Graphics g, int x, int y, int width)
+        {
+            DrawHelpHeading(g, IsLoadingStage ? "开局下一件装备" : "下一件装备", normalFont, accent,
+                new Rectangle(x, y, width, S(23)), NextItemHelp, viewport); y += S(33);
+            var recommendation = CurrentNextItem();
+            if (ModelValue.Text(recommendation, "status") != "ready")
+            {
+                DrawNextItemText(g, NextItemMessage(recommendation), smallFont, muted, x, ref y, width);
+                return;
+            }
+            var item = ModelValue.Object(recommendation, "item");
+            paintedNextItemId = ModelValue.Text(item, "id");
+            DrawBuildIcon(g, ModelValue.Text(item, "icon"), new Rectangle(x, y, S(42), S(42)));
+            int heading = Math.Max(S(44), NextItemTextHeight(ModelValue.Text(item, "name"), normalFont, width - S(52))), nameY = y;
+            DrawNextItemText(g, ModelValue.Text(item, "name"), normalFont, ForeColor, x + S(52), ref nameY, width - S(52)); y += heading + S(8);
+            DrawNextItemText(g, ModelValue.Text(item, "effect"), smallFont, muted, x, ref y, width);
+            string reasons = NextItemReasons(recommendation), evidence = ModelValue.Text(recommendation, "evidenceLabel");
+            if (reasons.Length > 0) { y += S(7); DrawNextItemText(g, reasons, smallFont, accent, x, ref y, width); }
+            if (evidence.Length > 0) { y += S(7); DrawNextItemText(g, evidence, smallFont, muted, x, ref y, width); }
         }
 
         internal SidebarWindow()
@@ -1232,6 +1680,7 @@ namespace HexGuide.Desktop
         private void BeginManualMove(Point pointer)
         {
             if (placementArea.Width < 1 || placementArea.Height < 1) return;
+            ClearAugmentHint();
             dragging = true; consumeDragClick = true;
             dragStartPointer = pointer; dragStartLocation = Location;
         }
@@ -1260,6 +1709,7 @@ namespace HexGuide.Desktop
             bool fontsChanged = appearance.FontFamily != next.FontFamily || appearance.Scale != next.Scale;
             bool sectionsChanged = string.Join(",", appearance.Sections) != string.Join(",", next.Sections);
             bool sideChanged = appearanceLoaded && appearance.Side != next.Side;
+            if (fontsChanged || sectionsChanged || sideChanged || appearance.Width != next.Width) ClearAugmentHint();
             appearance = next;
             appearanceLoaded = true;
             if (sideChanged)
@@ -1292,19 +1742,30 @@ namespace HexGuide.Desktop
             if (!Visible) Show();
             SetWindowPos(Handle, new IntPtr(-1), Left, Top, Width, Height, PassiveShowFlags);
         }
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            if (!Visible && augmentHint != null) ClearAugmentHint();
+            base.OnVisibleChanged(e);
+        }
+        protected override void OnResize(EventArgs e)
+        {
+            if (augmentHint != null) ClearAugmentHint();
+            base.OnResize(e);
+        }
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
             Graphics g = e.Graphics;
             using (var border = new Pen(Color.FromArgb(55, 77, 97))) g.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
             int x = 17, width = Math.Max(1, Width - 34), y = 16;
-            Write(g, "海克斯指南", headingFont, ForeColor, new Rectangle(x, y, width, S(29))); y += S(34);
-            Write(g, "Ctrl + 左键拖动 · Alt+Shift+H 收放", smallFont, muted, new Rectangle(x, y, width, S(20))); y += S(28);
+            helpTargets.Clear();
+            DrawHelpHeading(g, "海克斯指南", headingFont, ForeColor, new Rectangle(x, y, width, S(29)), SidebarHelp, ClientRectangle); y += S(40);
             viewport = new Rectangle(x, y, width, Math.Max(1, Height - S(82) - y));
             contentHeight = 0;
             foreach (string section in DisplaySections()) contentHeight += SectionHeight(section);
             scrollOffset = Math.Max(0, Math.Min(scrollOffset, Math.Max(0, contentHeight - viewport.Height)));
-            offerButtons.Clear(); augmentTargets.Clear(); paintedSections.Clear();
+            offerButtons.Clear(); offerPendingIds.Clear(); pendingOfferButtons.Clear(); augmentTargets.Clear(); paintedSections.Clear();
+            paintedNextItemId = ""; nextItemTextAreas.Clear();
             var previousClip = g.Save();
             g.SetClip(viewport);
             y -= scrollOffset;
@@ -1331,22 +1792,28 @@ namespace HexGuide.Desktop
             detailsButton = new Rectangle(x + buttonWidth + gap, buttonY, buttonWidth, S(31));
             gameButton = new Rectangle(x + (buttonWidth + gap) * 2, buttonY, buttonWidth, S(31));
             PaintButton(g, hideButton, "收起"); PaintButton(g, detailsButton, "打开详细"); PaintButton(g, gameButton, "返回游戏");
-            string footer = !IsLoadingStage && Notice.Length > 0 ? Notice : contentHeight > viewport.Height ? "滚轮或右侧滚动条可查看全部内容" : "只读游戏 · 不替你点击或操作";
+            string footer = !IsLoadingStage ? Notice : "";
             Write(g, footer, smallFont, muted, new Rectangle(x, Height - S(28), width, S(18)));
+            // Polling can repaint while the pointer is still over a help icon.
+            // Reconcile with the new geometry without restarting an unchanged hint.
+            if (Visible && !dragging) UpdateHoverHint(PointToClient(Cursor.Position));
         }
         private int SectionHeight(string section)
         {
-            if (section == "hero") return S(29) + S(39) + S(28);
+            if (section == "nextItem") return NextItemHeight(Math.Max(1, Width - 34));
+            if (section == "hero") return S(29) + NextItemTextHeight(HeroStatus(), smallFont, Math.Max(1, Width - 34)) + S(18);
             if (section == "owned")
             {
                 int count = Math.Min(12, ModelValue.Array(Model, "owned").Count);
                 int columns = OwnedIconColumns(Math.Max(1, Width - 34));
-                return S(25) + (count == 0 ? S(38) : ((count + columns - 1) / columns) * (S(39) + S(7)) + S(5)) + (HasInferredOwned() ? S(35) : 0);
+                return S(25) + (count == 0 ? S(18) : ((count + columns - 1) / columns) * (S(39) + S(7)) + S(5)) + (HasInferredOwned() ? S(35) : 0);
             }
             if (section == "offers")
             {
                 int count = Math.Min(3, ModelValue.Array(Model, "offers").Count);
-                return S(27) + S(34) + (count == 0 ? S(59) : S(123) + count * S(35) + S(8));
+                int height = S(27) + (count == 0 ? EmptyOffersHeight(Math.Max(1, Width - 34)) : S(123) + S(8));
+                foreach (var pending in OlderPendingOffers()) height += S(29) + Math.Min(3, ModelValue.Array(pending, "offers").Count) * S(37) + S(8);
+                return height;
             }
             if (!buildExpanded) return S(126);
             var plan = ModelValue.Object(Model, "plan");
@@ -1357,6 +1824,7 @@ namespace HexGuide.Desktop
         }
         private void DrawSection(Graphics g, string section, int x, int y, int width)
         {
+            if (section == "nextItem") { DrawNextItem(g, x, y, width); return; }
             if (section == "hero") { DrawHero(g, x, y, width); return; }
             if (section == "owned") { DrawOwned(g, x, y, width); return; }
             if (section == "offers") { DrawOffers(g, x, y, width); return; }
@@ -1578,11 +2046,35 @@ namespace HexGuide.Desktop
                 TextRenderer.DrawText(g, name, font, area, ForeColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
             }
         }
-        private void ClearAugmentHint()
+        private void DrawHelpHeading(Graphics g, string title, Font font, Color color, Rectangle area, string help, Rectangle clip)
         {
-            augmentTargets.Clear();
+            int size = S(20), gap = S(5);
+            var flags = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+            int titleWidth = Math.Min(Math.Max(1, area.Width - size - gap), TextRenderer.MeasureText(g, title, font, Size.Empty, flags).Width);
+            var titleArea = new Rectangle(area.Left, area.Top, titleWidth, area.Height);
+            TextRenderer.DrawText(g, title, font, titleArea, color, flags | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.PreserveGraphicsClipping);
+            var target = new Rectangle(titleArea.Right + gap, area.Top + (area.Height - size) / 2, size, size);
+            // Partially clipped icons must not leave invisible hover targets.
+            if (!clip.Contains(target) || !ClientRectangle.Contains(target)) return;
+            var circle = Rectangle.Inflate(target, -S(2), -S(2));
+            using (var pen = new Pen(muted)) g.DrawEllipse(pen, circle);
+            TextRenderer.DrawText(g, "?", smallFont, target, muted,
+                flags | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.PreserveGraphicsClipping);
+            helpTargets[target] = help;
+        }
+        private void HideHoverHint()
+        {
+            activeHintIsHelp = false;
             if (activeAugmentHint.Length == 0) return;
             activeAugmentHint = ""; augmentHint.Hide(this); augmentHint.SetToolTip(this, "");
+        }
+        private void ClearAugmentHint(bool preserveHeaderHint = false)
+        {
+            augmentTargets.Clear();
+            helpTargets.Clear();
+            // A routine model refresh must not interrupt reading unchanged help.
+            // OnPaint checks the rebuilt targets, including removed/moved sections.
+            if (!preserveHeaderHint || !activeHintIsHelp) HideHoverHint();
         }
         private void DrawBuildIcon(Graphics g, string url, Rectangle rectangle)
         {
@@ -1633,17 +2125,44 @@ namespace HexGuide.Desktop
             string hero = ModelValue.Text(champion, "name");
             string level = ModelValue.Text(Model, "level");
             if (hero.Length == 0) hero = "等待英雄同步";
-            Write(g, hero + (level.Length > 0 && level != "0" ? "  ·  " + level + " 级" : ""), headingFont, accent, new Rectangle(x, y, width, S(27))); y += S(29);
+            string help = "自动同步本局英雄、等级、装备和属性。\n后台识别可在托盘中开启或暂停；\n识别结果需要核对。\n加载期间显示开局推荐，入场后自动更新。";
             string connection = ModelValue.Text(ModelValue.Object(Model, "connection"), "message");
-            Write(g, connection.Length > 0 ? connection : "只读本机数据 · 不操作游戏", smallFont, muted, new Rectangle(x, y, width, S(34))); y += S(39);
-            string ocrText = IsLoadingStage ? "开局出装推荐 · 入场后自动更新" : ModelValue.Boolean(ModelValue.Object(Model, "ocr"), "enabled") ? "后台识别已开启 · 结果需核对" : "后台识别未开启 · 可在托盘开启";
-            Write(g, ocrText, smallFont, muted, new Rectangle(x, y, width, S(20)));
+            if (connection.Length > 0) help += "\n\n当前状态：\n" + WrapHintText(connection);
+            DrawHelpHeading(g, hero + (level.Length > 0 && level != "0" ? "  ·  " + level + " 级" : ""), headingFont, accent,
+                new Rectangle(x, y, width, S(27)), help, viewport); y += S(29);
+            string status = HeroStatus();
+            Write(g, status, smallFont, muted, new Rectangle(x, y, width, NextItemTextHeight(status, smallFont, width)));
+        }
+        private string HeroStatus()
+        {
+            var connection = ModelValue.Object(Model, "connection");
+            if (ModelValue.Text(connection, "status") == "error") return ModelValue.Text(connection, "message");
+            if (IsLoadingStage) return "等待进入对局";
+            var ocr = ModelValue.Object(Model, "ocr");
+            // Local startup/transport failures contain only a connection object
+            // (including status=waiting). Keep their actionable message visible.
+            if (ocr == null)
+            {
+                string message = ModelValue.Text(connection, "message");
+                return message.Length > 0 ? message : "等待连接状态更新";
+            }
+            string recognition = ModelValue.Boolean(ocr, "enabled") ? "后台识别已开启" : "后台识别已暂停";
+            return ModelValue.Text(Model, "stage") == "waiting" && ModelValue.Object(Model, "champion") != null
+                ? "等待对局数据恢复 · " + recognition : recognition;
+        }
+        private static string WrapHintText(string text)
+        {
+            // Bound tooltip width even when the connection explanation has no spaces.
+            var lines = new List<string>();
+            foreach (string line in text.Replace("\r", "").Split('\n'))
+                for (int start = 0; start < line.Length; start += 22) lines.Add(line.Substring(start, Math.Min(22, line.Length - start)));
+            return string.Join("\n", lines.ToArray());
         }
         private void DrawOwned(Graphics g, int x, int y, int width)
         {
             ArrayList owned = ModelValue.Array(Model, "owned");
-            Write(g, "本局已选  " + owned.Count, normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(25);
-            if (owned.Count == 0) { Write(g, "尚未记录；自动未确认时可点击图标确认", smallFont, muted, new Rectangle(x, y, width, S(38))); return; }
+            DrawHelpHeading(g, "本局已选  " + owned.Count, normalFont, accent, new Rectangle(x, y, width, S(22)), OwnedHelp, viewport); y += S(25);
+            if (owned.Count == 0) return;
             int columns = OwnedIconColumns(width), index = 0, cell = S(39) + S(7);
             foreach (object item in owned)
             {
@@ -1652,7 +2171,7 @@ namespace HexGuide.Desktop
                 index++;
             }
             if (HasInferredOwned())
-                Write(g, "含推定已选：同图标按统计区分\n打开详细可移除并改选", smallFont, muted,
+                Write(g, "含推定已选：同图标存在歧义", smallFont, muted,
                     new Rectangle(x, y + ((index + columns - 1) / columns) * cell, width, S(35)));
         }
         private bool HasInferredOwned()
@@ -1664,12 +2183,24 @@ namespace HexGuide.Desktop
         private void DrawOffers(Graphics g, int x, int y, int width)
         {
             ArrayList offers = ModelValue.Array(Model, "offers");
-            Write(g, "三选一参考", normalFont, accent, new Rectangle(x, y, width, S(22))); y += S(27);
-            Write(g, "先在游戏内选择，未记录时再确认\n金框为优先推荐，角标为推荐顺序", smallFont, muted, new Rectangle(x, y, width, S(32))); y += S(34);
+            object confirmationGame; long confirmationRevision;
+            bool canConfirm = ModelValue.GameId(Model, out confirmationGame)
+                && ModelValue.Integer(Model, "sessionRevision", out confirmationRevision) && confirmationRevision >= 0;
+            string activePendingId = "";
+            foreach (object item in ModelValue.Array(Model, "pendingOffers"))
+            {
+                var pending = item as Dictionary<string, object>;
+                if (ModelValue.Boolean(pending, "active")) activePendingId = ModelValue.Text(pending, "pendingId");
+            }
+            DrawHelpHeading(g, "三选一海克斯", normalFont, accent, new Rectangle(x, y, width, S(22)), OffersHelp, viewport); y += S(27);
             if (offers.Count == 0)
             {
-                Write(g, RecognitionSummary(ModelValue.Object(Model, "ocr")), normalFont, muted, new Rectangle(x, y, width, S(30)));
-                Write(g, RecognitionTime(ModelValue.Object(Model, "ocr")), smallFont, muted, new Rectangle(x, y + S(33), width, S(19)));
+                var ocr = ModelValue.Object(Model, "ocr");
+                int summaryHeight = NextItemTextHeight(RecognitionSummary(ocr), normalFont, width);
+                Write(g, RecognitionSummary(ocr), normalFont, muted, new Rectangle(x, y, width, summaryHeight));
+                string time = RecognitionTime(ocr);
+                if (time.Length > 0) Write(g, time, smallFont, muted, new Rectangle(x, y + summaryHeight + S(3), width, S(19)));
+                y += EmptyOffersHeight(width);
             }
             else
             {
@@ -1685,26 +2216,58 @@ namespace HexGuide.Desktop
                     DrawOfferFrame(g, card, rank);
                     int iconSize = Math.Min(S(44), Math.Max(1, cellWidth - S(12)));
                     Rectangle icon = new Rectangle(cardX + (cellWidth - iconSize) / 2, y + S(6), iconSize, iconSize);
-                    DrawAugmentIcon(g, offer, icon);
+                    // Candidate statistics are not a sidebar column or tooltip.
+                    // The full application retains the complete ranking evidence.
+                    var displayOffer = new Dictionary<string, object>(offer);
+                    displayOffer.Remove("reason"); displayOffer.Remove("rankingEvidence"); displayOffer.Remove("summary");
+                    DrawAugmentIcon(g, displayOffer, icon);
                     Write(g, rank, smallFont, accent, new Rectangle(cardX + S(5), y + S(3), S(15), S(18)));
                     DrawOfferName(g, ModelValue.Text(offer, "name"), new Rectangle(cardX + S(3), y + S(54), Math.Max(1, cellWidth - S(6)), S(33)));
                     PaintButton(g, new Rectangle(cardX + S(3), y + S(91), Math.Max(1, cellWidth - S(6)), S(21)), "确认");
                     string offerId = ModelValue.Text(offer, "id");
                     Rectangle visibleCard = Rectangle.Intersect(viewport, card);
-                    if (visibleCard.Width > 0 && visibleCard.Height > 0 && offerId.Length > 0) offerButtons[visibleCard] = offerId;
+                    if (canConfirm && visibleCard.Width > 0 && visibleCard.Height > 0 && offerId.Length > 0)
+                    {
+                        offerButtons[visibleCard] = offerId;
+                        if (activePendingId.Length > 0) offerPendingIds[visibleCard] = activePendingId;
+                    }
                     index++;
                 }
-                y += S(123); index = 0;
-                string[] slots = { "左", "中", "右" };
-                foreach (object item in offers)
-                {
-                    if (index >= 3) break;
-                    string reason = ModelValue.Text(item as Dictionary<string, object>, "reason");
-                    Write(g, slots[index], smallFont, accent, new Rectangle(x, y, S(22), S(30)));
-                    Write(g, reason.Length > 0 ? reason : "核对游戏内图标后确认", smallFont, muted, new Rectangle(x + S(23), y, Math.Max(1, width - S(23)), S(31)));
-                    y += S(35); index++;
-                }
+                y += S(123) + S(8);
             }
+            foreach (var pending in OlderPendingOffers())
+            {
+                string pendingId = ModelValue.Text(pending, "pendingId"), sequence = ModelValue.Text(pending, "sequence");
+                Write(g, "待确认 · 第 " + sequence + " 轮", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(29);
+                int index = 0;
+                foreach (object item in ModelValue.Array(pending, "offers"))
+                {
+                    if (index++ >= 3) break;
+                    var offer = item as Dictionary<string, object>;
+                    Rectangle row = new Rectangle(x, y, width, S(31));
+                    DrawAugmentIcon(g, offer, new Rectangle(x, y + S(2), S(27), S(27)));
+                    Write(g, ModelValue.Text(offer, "name"), smallFont, ForeColor, new Rectangle(x + S(33), y + S(4), Math.Max(1, width - S(85)), S(26)));
+                    PaintButton(g, new Rectangle(x + width - S(47), y, S(47), S(31)), "确认");
+                    Rectangle visible = Rectangle.Intersect(viewport, row);
+                    string id = ModelValue.Text(offer, "id");
+                    if (canConfirm && visible.Width > 0 && visible.Height > 0 && pendingId.Length > 0 && id.Length > 0)
+                        pendingOfferButtons[visible] = new KeyValuePair<string, string>(id, pendingId);
+                    y += S(37);
+                }
+                y += S(8);
+            }
+        }
+        private List<Dictionary<string, object>> OlderPendingOffers()
+        {
+            var result = new List<Dictionary<string, object>>();
+            foreach (object item in ModelValue.Array(Model, "pendingOffers"))
+            {
+                var pending = item as Dictionary<string, object>;
+                if (pending != null && !ModelValue.Boolean(pending, "active") && ModelValue.Text(pending, "pendingId").Length > 0)
+                    result.Add(pending);
+                if (result.Count == 5) break;
+            }
+            return result;
         }
         private static string RecognitionSummary(Dictionary<string, object> ocr)
         {
@@ -1721,14 +2284,20 @@ namespace HexGuide.Desktop
             if (status == "recognized") return "本轮候选已处理，等待下一轮卡片";
             if (status == "unavailable")
                 return message.StartsWith("未确认到同一排", StringComparison.Ordinal) ? "未识别到完整的三张卡片，将自动重试" : "本次识别未完成，将自动重试";
-            return "等待游戏中的三选一卡片出现";
+            return "等待三选一卡片";
+        }
+        private int EmptyOffersHeight(int width)
+        {
+            var ocr = ModelValue.Object(Model, "ocr");
+            return NextItemTextHeight(RecognitionSummary(ocr), normalFont, width)
+                + (RecognitionTime(ocr).Length > 0 ? S(22) : 0) + S(16);
         }
         private static string RecognitionTime(Dictionary<string, object> ocr)
         {
             DateTimeOffset observed;
             return DateTimeOffset.TryParse(ModelValue.Text(ocr, "observedAt"), CultureInfo.InvariantCulture, DateTimeStyles.None, out observed)
                 ? "最近检查 · " + observed.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)
-                : "出现卡片后会自动检查";
+                : "";
         }
         private static void Write(Graphics graphics, string text, Font font, Color color, Rectangle rectangle)
         {
@@ -1741,6 +2310,7 @@ namespace HexGuide.Desktop
         }
         protected override void OnMouseDown(MouseEventArgs e)
         {
+            if (e.Button == MouseButtons.Left) { pressedOfferId = null; pressedPendingId = null; }
             if (e.Button == MouseButtons.Left && (GetAsyncKeyState(0x11) & 0x8000) != 0)
             {
                 BeginManualMove(Cursor.Position);
@@ -1749,6 +2319,18 @@ namespace HexGuide.Desktop
             }
             consumeDragClick = false;
             base.OnMouseDown(e);
+            if (e.Button == MouseButtons.Left) OfferAt(e.Location, out pressedOfferId, out pressedPendingId);
+        }
+        private bool OfferAt(Point location, out string id, out string pendingId)
+        {
+            foreach (var entry in offerButtons)
+                if (entry.Key.Contains(location))
+                {
+                    id = entry.Value; offerPendingIds.TryGetValue(entry.Key, out pendingId); return true;
+                }
+            foreach (var entry in pendingOfferButtons)
+                if (entry.Key.Contains(location)) { id = entry.Value.Key; pendingId = entry.Value.Value; return true; }
+            id = null; pendingId = null; return false;
         }
         protected override void OnMouseMove(MouseEventArgs e)
         {
@@ -1758,10 +2340,20 @@ namespace HexGuide.Desktop
                 else MoveManually(Cursor.Position);
                 return;
             }
+            UpdateHoverHint(e.Location);
+            Cursor = (GetAsyncKeyState(0x11) & 0x8000) != 0 ? Cursors.SizeAll : Cursors.Default;
+            base.OnMouseMove(e);
+        }
+        private void UpdateHoverHint(Point location)
+        {
             string hint = "";
+            bool isHelp = false;
+            foreach (var target in helpTargets)
+                if (target.Key.Contains(location)) { hint = target.Value; isHelp = true; break; }
             foreach (var target in augmentTargets)
             {
-                if (!target.Key.Contains(e.Location)) continue;
+                if (isHelp) break;
+                if (!target.Key.Contains(location)) continue;
                 string name = ModelValue.Text(target.Value, "name"), reason = ModelValue.Text(target.Value, "reason");
                 if (reason.Length == 0) reason = ModelValue.Text(target.Value, "summary");
                 string rarity = ModelValue.Text(target.Value, "rarity");
@@ -1769,13 +2361,16 @@ namespace HexGuide.Desktop
                 hint = name + " · " + quality + (reason.Length > 0 ? "\n" + reason : "");
                 break;
             }
-            if (hint != activeAugmentHint) { activeAugmentHint = hint; augmentHint.SetToolTip(this, hint); }
-            Cursor = (GetAsyncKeyState(0x11) & 0x8000) != 0 ? Cursors.SizeAll : Cursors.Default;
-            base.OnMouseMove(e);
+            if (hint != activeAugmentHint)
+            {
+                augmentHint.Hide(this);
+                activeAugmentHint = hint; augmentHint.SetToolTip(this, hint);
+            }
+            activeHintIsHelp = isHelp;
         }
         protected override void OnMouseLeave(EventArgs e)
         {
-            activeAugmentHint = ""; augmentHint.Hide(this); augmentHint.SetToolTip(this, "");
+            HideHoverHint();
             base.OnMouseLeave(e);
         }
         protected override void OnMouseCaptureChanged(EventArgs e)
@@ -1785,6 +2380,8 @@ namespace HexGuide.Desktop
         }
         protected override void OnMouseUp(MouseEventArgs e)
         {
+            string pressedId = pressedOfferId, pressedScope = pressedPendingId;
+            if (e.Button == MouseButtons.Left) { pressedOfferId = null; pressedPendingId = null; }
             if (e.Button == MouseButtons.Left && (dragging || consumeDragClick))
             {
                 EndManualMove(); consumeDragClick = false; Cursor = Cursors.Default;
@@ -1798,8 +2395,16 @@ namespace HexGuide.Desktop
                 if (!scrollThumb.Contains(e.Location)) ScrollTo(scrollOffset + (e.Y < scrollThumb.Top ? -1 : 1) * Math.Max(S(40), viewport.Height / 2));
                 return;
             }
-            foreach (var entry in offerButtons)
-                if (entry.Key.Contains(e.Location)) { if (OfferConfirmed != null) OfferConfirmed(entry.Value); return; }
+            string releasedId, releasedScope;
+            if (OfferAt(e.Location, out releasedId, out releasedScope))
+            {
+                // A polling repaint/reroll while held must never retarget the
+                // release to another pending round, including a shared ID.
+                if (releasedId != pressedId || releasedScope != pressedScope) return;
+                if (!string.IsNullOrEmpty(releasedScope) && PendingOfferConfirmed != null) PendingOfferConfirmed(releasedId, releasedScope);
+                else if (OfferConfirmed != null) OfferConfirmed(releasedId);
+                return;
+            }
             if (hideButton.Contains(e.Location) && HideRequested != null) HideRequested(this, EventArgs.Empty);
             else if (detailsButton.Contains(e.Location) && DetailsRequested != null) DetailsRequested(this, EventArgs.Empty);
             else if (gameButton.Contains(e.Location) && GameRequested != null) GameRequested(this, EventArgs.Empty);
@@ -1814,6 +2419,8 @@ namespace HexGuide.Desktop
         {
             scrollOffset = Math.Max(0, Math.Min(value, Math.Max(0, contentHeight - viewport.Height)));
             offerButtons.Clear();
+            offerPendingIds.Clear(); pendingOfferButtons.Clear();
+            pressedOfferId = null; pressedPendingId = null;
             ClearAugmentHint();
             Invalidate();
         }
@@ -1821,6 +2428,284 @@ namespace HexGuide.Desktop
         {
             if (disposing) { buildIcons.Dispose(); augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); foreach (Image image in augmentIcons.Values) image.Dispose(); augmentIcons.Clear(); }
             base.Dispose(disposing);
+        }
+        private static Dictionary<string, object> CreateNextItemFixture()
+        {
+            string now = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+            var selected = new object[] { new Dictionary<string, object> { { "id", "fixture-owned" }, { "name", "示例已选海克斯" }, { "rarity", "gold" } } };
+            return new Dictionary<string, object> {
+                { "connection", new Dictionary<string, object> { { "status", "connected" }, { "message", "离屏布局示例 · 未连接真实对局" } } },
+                { "mode", new Dictionary<string, object> { { "known", true }, { "isMayhem", true } } },
+                { "phase", "InProgress" }, { "stage", "live" }, { "championSource", "live-client" },
+                { "gameId", "next-item-fixture" }, { "gameEpoch", 2 }, { "sessionRevision", 4 }, { "route", "auto" }, { "updatedAt", now },
+                { "champion", new Dictionary<string, object> { { "id", "Ahri" }, { "name", "离屏示例英雄" } } },
+                { "level", 13 }, { "owned", selected }, { "ocr", new Dictionary<string, object> { { "enabled", true } } },
+                { "offers", new object[] {
+                    new Dictionary<string, object> { { "id", "candidate-left" }, { "name", "大腕" }, { "rank", 2 }, { "rarity", "prismatic" }, { "reason", "该英雄持有胜率 99.9%；不能显示的统计说明" } },
+                    new Dictionary<string, object> { { "id", "candidate-middle" }, { "name", "升级：贪欲九头蛇" }, { "rank", 1 }, { "rarity", "gold" } },
+                    new Dictionary<string, object> { { "id", "candidate-right" }, { "name", "鼓声暴起 低音轰鸣" }, { "rank", 3 }, { "rarity", "gold" } }
+                } },
+                { "plan", new Dictionary<string, object> {
+                    { "title", "不应显示的完整构筑" }, { "summary", "该区域仅保留在完整窗口" }, { "stage", "live" },
+                    { "buildItems", new object[] { new Dictionary<string, object> { { "id", "wrong-fallback" }, { "name", "不能作为下一件的第一项" } } } },
+                    { "nextAugments", new object[] { new Dictionary<string, object> { { "id", "hidden-future" }, { "name", "不应显示的后续海克斯" } } } }
+                } },
+                { "nextItem", new Dictionary<string, object> {
+                    { "status", "ready" }, { "stage", "live" }, { "gameId", "next-item-fixture" }, { "gameEpoch", 2 }, { "sessionRevision", 4 },
+                    { "championId", "Ahri" }, { "ownedIds", new object[] { "fixture-owned" } }, { "route", "auto" }, { "generatedAt", now },
+                    { "item", new Dictionary<string, object> { { "id", "3135" }, { "name", "虚空之杖（离屏示例）" }, { "icon", "" }, { "effect", "提供法术强度与百分比法术穿透。" }, { "totalGold", 3000 } } },
+                    { "reasons", new object[] { "敌方已有魔抗装备，百分比穿透更适合当前对局。", "延续已确认海克斯的法术伤害方向。" } },
+                    { "reason", "" }, { "evidenceLabel", "" }, { "message", "" }
+                } }
+            };
+        }
+        private static int ValidateNextItemFixtures(string directory)
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool valid, string reason) { Require(valid, reason); checks++; };
+            using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false;
+                var fixture = CreateNextItemFixture(); window.Model = fixture;
+                using (var before = RenderFixture(window))
+                {
+                    check(window.paintedNextItemId == "3135" && window.paintedSections[0] == "nextItem", "Ready equipment was not visible by default.");
+                    check(window.offerButtons.Count == 3 && window.pendingOfferButtons.Count == 0 && Rectangle.Empty.Equals(window.buildToggle), "Candidates were hidden or the full build regained a toggle.");
+                    ModelValue.Object(fixture, "plan")["buildItems"] = new object[0];
+                    foreach (object value in ModelValue.Array(fixture, "offers")) ((Dictionary<string, object>)value)["reason"] = "该英雄持有胜率 0.1%；不同的胜率参考";
+                    window.Model = fixture;
+                    using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Full-build items or candidate win-rate rows changed the sidebar.");
+                    foreach (var target in window.augmentTargets)
+                        check(!ModelValue.Text(target.Value, "reason").Contains("胜率"), "Candidate win rates leaked into icon tooltips.");
+                    string selected = ""; window.OfferConfirmed += delegate(string id) { selected = id; };
+                    foreach (var target in window.offerButtons)
+                    {
+                        Point center = new Point(target.Key.Left + target.Key.Width / 2, target.Key.Top + target.Key.Height / 2);
+                        window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                        window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                        check(selected == target.Value, "A candidate card confirmed the wrong augment.");
+                    }
+                }
+                var missing = CreateNextItemFixture(); missing.Remove("nextItem"); window.Model = missing;
+                using (var bitmap = RenderFixture(window)) check(window.paintedNextItemId.Length == 0, "A legacy model fell back to buildItems[0].");
+                var mutations = new Action<Dictionary<string, object>>[] {
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["ownedIds"] = new object[] { "other-owned" }; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["gameEpoch"] = 1; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["gameEpoch"] = "2"; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["gameEpoch"] = 2.0; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["sessionRevision"] = 3; },
+                    delegate(Dictionary<string, object> value) { value["sessionRevision"] = "4"; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["gameId"] = "previous-game"; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["championId"] = "Garen"; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["route"] = "spell"; },
+                    delegate(Dictionary<string, object> value) { value.Remove("route"); },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem").Remove("route"); },
+                    delegate(Dictionary<string, object> value) { value["route"] = 1; ModelValue.Object(value, "nextItem")["route"] = 1; },
+                    delegate(Dictionary<string, object> value) { value["route"] = ""; ModelValue.Object(value, "nextItem")["route"] = ""; },
+                    delegate(Dictionary<string, object> value) { value["route"] = "unknown"; ModelValue.Object(value, "nextItem")["route"] = "unknown"; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["generatedAt"] = DateTimeOffset.UtcNow.AddSeconds(-31).ToString("o"); },
+                    delegate(Dictionary<string, object> value) { value["updatedAt"] = DateTimeOffset.UtcNow.AddSeconds(-31).ToString("o"); },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["generatedAt"] = DateTimeOffset.UtcNow.AddSeconds(10).ToString("o"); },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["generatedAt"] = "invalid-time"; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["item"] = null; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["status"] = "unexpected"; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["stage"] = "loading-preview"; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem")["stage"] = "waiting"; },
+                    delegate(Dictionary<string, object> value) { value["championSource"] = "champ-select"; },
+                    delegate(Dictionary<string, object> value) { value["phase"] = "EndOfGame"; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "mode")["known"] = false; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "mode")["known"] = "true"; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "mode")["isMayhem"] = false; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "connection")["status"] = "waiting"; },
+                    delegate(Dictionary<string, object> value) { value.Remove("owned"); },
+                    delegate(Dictionary<string, object> value) { value["owned"] = "not-an-array"; },
+                    delegate(Dictionary<string, object> value) { ModelValue.Object(value, "nextItem").Remove("ownedIds"); },
+                    delegate(Dictionary<string, object> value) { value["owned"] = new object[] { new Dictionary<string, object> { { "id", "fixture-owned" } }, new Dictionary<string, object> { { "id", "fixture-owned" } } }; ModelValue.Object(value, "nextItem")["ownedIds"] = new object[] { "fixture-owned", "fixture-owned" }; }
+                };
+                for (int index = 0; index < mutations.Length; index++)
+                {
+                    var invalid = CreateNextItemFixture(); mutations[index](invalid); window.Model = invalid;
+                    using (var bitmap = RenderFixture(window)) check(window.CurrentNextItem() == null && window.paintedNextItemId.Length == 0, "Invalid recommendation context was rendered: " + index);
+                }
+                var serializer = new JavaScriptSerializer();
+                window.Model = serializer.Deserialize<Dictionary<string, object>>(serializer.Serialize(CreateNextItemFixture()));
+                using (var bitmap = RenderFixture(window)) check(window.paintedNextItemId == "3135", "HTTP JSON representation did not preserve the valid recommendation contract.");
+                foreach (string route in new string[] { "auto", "attack", "spell", "tank", "support", "crit" })
+                {
+                    var value = CreateNextItemFixture(); value["route"] = route; ModelValue.Object(value, "nextItem")["route"] = route;
+                    window.Model = value;
+                    check(window.CurrentNextItem() != null, "A supported matching route was rejected: " + route);
+                }
+                foreach (string status in new string[] { "waiting", "stale", "complete", "inventory-full" })
+                {
+                    var value = CreateNextItemFixture(); ModelValue.Object(value, "nextItem")["status"] = status; window.Model = value;
+                    using (var bitmap = RenderFixture(window)) check(window.paintedNextItemId.Length == 0 && window.nextItemTextAreas.Count == 1, "A non-ready recommendation displayed a supplied item: " + status);
+                }
+                foreach (string status in new string[] { "waiting", "stale" })
+                {
+                    var value = CreateNextItemFixture();
+                    var recommendation = ModelValue.Object(value, "nextItem");
+                    recommendation["status"] = status; recommendation["stage"] = "waiting";
+                    recommendation["message"] = status == "stale" ? "实时数据已过期，等待本局重新读取。" : "等待当前阶段的有效对局资料。";
+                    if (status == "stale") value["updatedAt"] = DateTimeOffset.UtcNow.AddSeconds(-15).ToString("o");
+                    window.Model = value;
+                    using (var bitmap = RenderFixture(window))
+                        check(window.CurrentNextItem() != null && window.NextItemMessage(window.CurrentNextItem()) == ModelValue.Text(recommendation, "message") && window.paintedNextItemId.Length == 0,
+                            "The real waiting-stage contract lost its message or displayed equipment: " + status);
+                    foreach (string key in new string[] { "gameId", "gameEpoch", "sessionRevision", "championId", "ownedIds", "route" })
+                    {
+                        var mismatched = new Dictionary<string, object>(recommendation);
+                        mismatched[key] = key == "gameEpoch" || key == "sessionRevision" ? (object)0 : key == "ownedIds" ? (object)new object[0] : "other-context";
+                        value["nextItem"] = mismatched; window.Model = value;
+                        using (var bitmap = RenderFixture(window))
+                            check(window.CurrentNextItem() == null && window.NextItemMessage(window.CurrentNextItem()) != ModelValue.Text(recommendation, "message") && window.paintedNextItemId.Length == 0,
+                                "A waiting message crossed its identity boundary: " + status + "/" + key);
+                    }
+                    value["nextItem"] = recommendation;
+                    recommendation["generatedAt"] = DateTimeOffset.UtcNow.AddSeconds(-31).ToString("o"); window.Model = value;
+                    check(window.CurrentNextItem() == null, "An old generated waiting result was accepted: " + status);
+                }
+                foreach (string stage in new string[] { "live", "loading" })
+                {
+                    var value = CreateNextItemFixture(); value["stage"] = stage;
+                    var recommendation = ModelValue.Object(value, "nextItem");
+                    recommendation["status"] = "waiting"; recommendation["stage"] = stage == "loading" ? "loading-preview" : "live";
+                    recommendation["message"] = "等待可核验的普通 ARAM／召唤师峡谷核心装备顺序，再给出下一件成装。";
+                    window.Model = value;
+                    using (var bitmap = RenderFixture(window))
+                        check(window.NextItemMessage(window.CurrentNextItem()) == ModelValue.Text(recommendation, "message") && window.paintedNextItemId.Length == 0,
+                            "Order-data waiting lost its current stage explanation: " + stage);
+                }
+                var expired = CreateNextItemFixture();
+                var expiredRecommendation = ModelValue.Object(expired, "nextItem");
+                expiredRecommendation["status"] = "stale"; expiredRecommendation["stage"] = "waiting"; expiredRecommendation["message"] = "实时数据已过期，等待本局重新读取。";
+                expired["updatedAt"] = DateTimeOffset.UtcNow.AddSeconds(-60).ToString("o"); window.Model = expired;
+                check(window.NextItemMessage(window.CurrentNextItem()) == ModelValue.Text(expiredRecommendation, "message"), "A current stale result lost its explanation because its input was expired.");
+                expired["updatedAt"] = "invalid-time"; window.Model = expired;
+                check(window.CurrentNextItem() == null, "A stale status bypassed malformed input time validation.");
+                foreach (string status in new string[] { "complete", "inventory-full" })
+                {
+                    var value = CreateNextItemFixture(); var recommendation = ModelValue.Object(value, "nextItem"); recommendation["status"] = status;
+                    recommendation["message"] = status == "complete" ? "已持有所发布样本中的可继续装备，等待新的已选或装备资料。" : "装备槽已满；当前没有可用已有组件直接推进的成装。";
+                    window.Model = value;
+                    check(window.NextItemMessage(window.CurrentNextItem()) == ModelValue.Text(recommendation, "message"), "A qualified result explanation was replaced: " + status);
+                    if (status == "complete")
+                    {
+                        recommendation["message"] = ""; window.Model = value;
+                        check(!window.NextItemMessage(window.CurrentNextItem()).Contains("构筑已完成"), "The complete fallback claimed a full build without evidence.");
+                    }
+                }
+                window.Model = CreateNextItemFixture(); window.Model = ModelValue.Failure("隔离示例连接中断");
+                using (var bitmap = RenderFixture(window)) check(window.paintedNextItemId.Length == 0, "Transport failure retained a live recommendation.");
+            }
+            foreach (int width in new int[] { 280, 324, 460 }) foreach (int scale in new int[] { 85, 100, 130 })
+            using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false; window.ApplyAppearance(new SidebarAppearance { Width = width, Scale = scale, Sections = new string[] { "offers", "owned", "plan", "hero" } });
+                window.Place(new Rectangle(0, 0, 1200, 900)); window.Model = CreateNextItemFixture();
+                using (var bitmap = RenderFixture(window))
+                {
+                    bitmap.Save(Path.Combine(directory, "sidebar-next-item-" + width + "-" + scale + ".png"), System.Drawing.Imaging.ImageFormat.Png);
+                    check(window.paintedNextItemId == "3135" && string.Join(",", window.paintedSections.ToArray()) == "nextItem,offers,owned,hero", "Next item and candidates did not share the supported layout.");
+                    foreach (Rectangle area in window.nextItemTextAreas) check(FixtureContains(window.viewport, area), "Next-item text was clipped at width " + width + " / scale " + scale);
+                    check(Rectangle.Empty.Equals(window.buildToggle) && window.offerButtons.Count == 3 && window.pendingOfferButtons.Count == 0, "Candidate confirmations disappeared at a supported size.");
+                    check(!window.Visible && window.ShowWithoutActivation, "A next-item fixture activated a window.");
+                }
+                var questRecommendation = ModelValue.Object(window.Model, "nextItem");
+                questRecommendation["reasons"] = new object[] {
+                    "先完成已选任务缺少的前置成装。",
+                    "贪欲九头蛇（已有） + 亵渎九头蛇 + 巨型九头蛇 → 终极九头蛇。逐件完成缺少的前置成装。"
+                };
+                using (var bitmap = RenderFixture(window))
+                {
+                    bitmap.Save(Path.Combine(directory, "sidebar-quest-route-" + width + "-" + scale + ".png"), System.Drawing.Imaging.ImageFormat.Png);
+                    foreach (Rectangle area in window.nextItemTextAreas) check(FixtureContains(window.viewport, area), "Quest route text was clipped at width " + width + " / scale " + scale);
+                    check(window.paintedNextItemId == "3135" && window.offerButtons.Count == 3, "Quest guidance changed the item or candidate controls.");
+                }
+            }
+            return checks;
+        }
+        private static int ValidateHelpFixtures(string directory)
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool condition, string message) { Require(condition, message); checks++; };
+            foreach (int width in new int[] { 280, 324, 460 })
+            foreach (int scale in new int[] { 85, 100, 130 })
+            using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false;
+                window.ApplyAppearance(new SidebarAppearance { Width = width, Scale = scale });
+                window.Place(new Rectangle(0, 0, 1200, 900));
+                var waiting = ModelValue.Failure("等待英雄联盟客户端或对局；本机尚未读取到游戏数据。");
+                waiting["ocr"] = new Dictionary<string, object> { { "enabled", true }, { "status", "waiting" } };
+                window.Model = waiting;
+                using (var bitmap = RenderFixture(window)) bitmap.Save(Path.Combine(directory, "sidebar-help-waiting-" + width + "-" + scale + ".png"), System.Drawing.Imaging.ImageFormat.Png);
+                check(window.helpTargets.Count == 5, "A waiting section lost its help icon at " + width + "/" + scale);
+                check(window.contentHeight <= window.viewport.Height, "Compact empty sections require unnecessary scrolling.");
+                int actions = 0;
+                window.OfferConfirmed += delegate { actions++; };
+                window.PendingOfferConfirmed += delegate { actions++; };
+                window.HideRequested += delegate { actions++; };
+                window.DetailsRequested += delegate { actions++; };
+                window.GameRequested += delegate { actions++; };
+                foreach (var target in window.helpTargets)
+                {
+                    check(window.ClientRectangle.Contains(target.Key) && (target.Value == SidebarHelp || window.viewport.Contains(target.Key)), "Help escaped the visible heading.");
+                    var pointer = new Point(target.Key.Left + target.Key.Width / 2, target.Key.Top + target.Key.Height / 2);
+                    window.OnMouseMove(new MouseEventArgs(MouseButtons.None, 0, pointer.X, pointer.Y, 0));
+                    check(window.activeAugmentHint == target.Value && window.augmentHint.GetToolTip(window) == target.Value, "Hover did not bind the heading explanation.");
+                    window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, pointer.X, pointer.Y, 0));
+                    check(actions == 0, "Help triggered a sidebar command or selection.");
+                }
+                window.OnMouseLeave(EventArgs.Empty);
+                check(window.activeAugmentHint.Length == 0 && window.augmentHint.GetToolTip(window).Length == 0, "Help remained after the pointer left.");
+                Rectangle nextHelp = Rectangle.Empty;
+                foreach (var target in window.helpTargets) if (target.Value == NextItemHelp) nextHelp = target.Key;
+                var nextPointer = new Point(nextHelp.Left + 2, nextHelp.Top + 2);
+                window.UpdateHoverHint(nextPointer);
+                window.Model = new Dictionary<string, object>(waiting);
+                check(window.activeAugmentHint == NextItemHelp && window.helpTargets.Count == 0, "Polling interrupted unchanged help or retained old hit regions.");
+                using (var bitmap = RenderFixture(window)) { }
+                window.UpdateHoverHint(nextPointer);
+                check(window.activeAugmentHint == NextItemHelp, "Stationary hover was lost after repaint.");
+                window.ScrollTo(0);
+                check(window.activeAugmentHint.Length == 0 && window.helpTargets.Count == 0, "Scroll retained a stale help region.");
+                using (var bitmap = RenderFixture(window)) { }
+                window.UpdateHoverHint(nextPointer);
+                window.BeginManualMove(new Point(100, 100));
+                check(window.activeAugmentHint.Length == 0 && window.helpTargets.Count == 0, "Dragging retained help.");
+                window.EndManualMove();
+                window.Model = CreateNextItemFixture();
+                using (var bitmap = RenderFixture(window)) { }
+                check(window.offerButtons.Count == 3 && window.paintedNextItemId == "3135", "Help layout displaced recommendation or candidate confirmation.");
+                foreach (var target in window.helpTargets)
+                    foreach (var offer in window.offerButtons) check(!target.Key.IntersectsWith(offer.Key), "A help icon overlaps a candidate action.");
+                foreach (var target in window.augmentTargets)
+                {
+                    window.UpdateHoverHint(new Point(target.Key.Left + 2, target.Key.Top + 2));
+                    check(window.activeAugmentHint.Contains(ModelValue.Text(target.Value, "name")) && !window.activeHintIsHelp, "Existing augment hover was replaced by heading help.");
+                    break;
+                }
+                window.Model = waiting;
+                using (var bitmap = RenderFixture(window)) { }
+                window.UpdateHoverHint(nextPointer);
+                window.Height -= 20;
+                check(window.activeAugmentHint.Length == 0 && window.helpTargets.Count == 0, "Resize retained help with stale geometry.");
+                using (var bitmap = RenderFixture(window)) { }
+                window.UpdateHoverHint(nextPointer);
+                window.OnVisibleChanged(EventArgs.Empty);
+                check(window.activeAugmentHint.Length == 0 && window.helpTargets.Count == 0, "Hidden sidebar retained its tooltip.");
+                var loading = new Dictionary<string, object>(waiting); loading["stage"] = "loading";
+                window.Model = loading;
+                using (var bitmap = RenderFixture(window)) { }
+                check(window.helpTargets.Count == 3 && !window.helpTargets.ContainsValue(OffersHelp) && !window.helpTargets.ContainsValue(OwnedHelp), "Loading retained absent-section help.");
+                window.Model = new Dictionary<string, object> { { "connection", new Dictionary<string, object> { { "status", "error" }, { "message", "无法确认当前玩家" } } } };
+                check(window.HeroStatus() == "无法确认当前玩家", "An actionable connection error was hidden in help.");
+                window.Model = ModelValue.Failure("本地连接已停止。请关闭窗口后重新打开软件。");
+                check(window.HeroStatus() == "本地连接已停止。请关闭窗口后重新打开软件。", "A local startup failure was reduced to generic waiting copy.");
+                check(!window.Visible && window.ShowWithoutActivation && !window.TopMost, "Hover validation activated a sidebar window.");
+            }
+            return checks;
         }
         internal static string RunSelfTest(string previewPath)
         {
@@ -1833,47 +2718,31 @@ namespace HexGuide.Desktop
                 bool safe = window.ShowWithoutActivation && (flags & PassiveWindowStyles) == PassiveWindowStyles
                     && !window.ShowInTaskbar && !window.TopMost && window.FormBorderStyle == FormBorderStyle.None && !window.Visible;
                 if (!safe) throw new InvalidOperationException("Sidebar nonactivation self-test failed.");
-                window.Model = new Dictionary<string, object> {
-                    { "connection", new Dictionary<string, object> { { "status", "waiting" }, { "message", "离屏布局预览 · 下方均为示例数据" } } },
-                    { "champion", new Dictionary<string, object> { { "id", "XinZhao" }, { "name", "示例英雄" } } },
-                    { "level", 13 }, { "ocr", new Dictionary<string, object> { { "enabled", true } } },
-                    { "owned", new object[] { new Dictionary<string, object> { { "id", "demo-owned" }, { "name", "示例已选海克斯" } } } },
-                    { "offers", new object[] {
-                        new Dictionary<string, object> { { "id", "demo-a" }, { "name", "示例选项 A" }, { "rank", 1 }, { "reason", "说明会随英雄和本局已选海克斯调整。" } },
-                        new Dictionary<string, object> { { "id", "demo-b" }, { "name", "示例选项 B" }, { "rank", 2 }, { "reason", "先在游戏完成选择，再在这里记录。" } },
-                        new Dictionary<string, object> { { "id", "demo-c" }, { "name", "示例选项 C" }, { "rank", 3 }, { "reason", "完整解释可在「打开详细」中查看。" } }
-                    } },
-                    { "plan", new Dictionary<string, object> {
-                        { "title", "本局玩法参考" }, { "summary", "建议会根据等级、装备和已确认的海克斯持续更新。" },
-                        { "enemyContext", new Dictionary<string, object> { { "summary", "示例阵容：已读取英雄与装备；此预览未连接真实对局。" } } },
-                        { "buildItems", new object[] {
-                            new Dictionary<string, object> { { "id", "demo-item-a" }, { "name", "示例装备 A" }, { "effect", "简短介绍装备属性与效果。" }, { "reason", "示例：针对已读取的敌方防御装备提供选项。" } },
-                            new Dictionary<string, object> { { "id", "demo-item-b" }, { "name", "示例装备 B" }, { "effect", "装备图标、名字与效果一起显示。" }, { "reason", "示例：延续已确认海克斯的触发方式。" } }
-                        } },
-                        { "nextAugments", new object[] {
-                            new Dictionary<string, object> { { "name", "示例后续海克斯 A" }, { "reason", "结合英雄机制、已有选择与可见阵容解释。" } },
-                            new Dictionary<string, object> { { "name", "示例后续海克斯 B" }, { "reason", "这是关注方向，并非预测下一轮必定出现。" } }
-                        } }
-                    } }
-                };
+                window.Model = CreateNextItemFixture();
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png); }
                 if (window.Visible) throw new InvalidOperationException("Off-screen test unexpectedly displayed a window.");
                 int passiveActivationChecks = ValidatePassiveActivationFixtures(window);
+                int nextItemChecks = ValidateNextItemFixtures(Path.GetDirectoryName(previewPath));
+                int helpChecks = ValidateHelpFixtures(Path.GetDirectoryName(previewPath));
                 window.ExpandBuild();
                 string buildPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-build.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(buildPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
                 Rectangle buildViewport = window.viewport;
-                Require(window.paintedSections[0] == "plan" && window.contentHeight > buildViewport.Height, "Selected build must expand first and remain scrollable.");
+                Require(window.paintedSections[0] == "nextItem" && window.paintedNextItemId == "3135" && Rectangle.Empty.Equals(window.buildToggle), "Next equipment must be visible without a build toggle.");
                 Require(!window.Visible && window.ShowWithoutActivation, "Expanded build unexpectedly activated a window.");
                 window.buildExpanded = false; window.scrollOffset = 0;
                 string statusPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-recognition-status.png");
                 int liveStateChecks = ValidateLiveStateFixtures(window, statusPreviewPath);
+                string pendingPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-pending.png");
+                int pendingOfferChecks = ValidatePendingOfferFixtures(pendingPreviewPath);
                 string loadingPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-loading.png");
                 int loadingPreviewChecks = ValidateLoadingPreviewFixtures(window, loadingPreviewPath);
                 int buildStatisticsChecks = ValidateBuildStatisticsFixtures(window);
                 string earlyLivePreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-early-live.png");
                 int initialPlanChecks = ValidateInitialPlanFixtures(window, earlyLivePreviewPath);
                 int visibilityChecks = SidebarVisibilityState.ValidateFixtures();
+                visibilityChecks += SidebarVisibilityDelay.ValidateFixtures();
+                visibilityChecks += OverlayVisibilityCompatibility.ValidateFixtures();
                 int shortcutChecks = SidebarShortcut.ValidateFixtures();
                 int selectionChecks = ScreenSelectionWatcher.ValidateFixtures();
                 selectionChecks += MainWindow.ValidateSelectionDiagnosticFixtures();
@@ -1885,8 +2754,79 @@ namespace HexGuide.Desktop
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + loadingPreviewChecks + buildStatisticsChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks + selectionChecks }, { "selectionChecks", selectionChecks }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "buildStatisticsChecks", buildStatisticsChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + nextItemChecks + helpChecks + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + pendingOfferChecks + loadingPreviewChecks + buildStatisticsChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks + selectionChecks }, { "selectionChecks", selectionChecks }, { "helpChecks", helpChecks }, { "nextItemChecks", nextItemChecks }, { "pendingOfferChecks", pendingOfferChecks }, { "pendingPreviewPath", pendingPreviewPath }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "buildStatisticsChecks", buildStatisticsChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
             }
+        }
+        private static int ValidatePendingOfferFixtures(string previewPath)
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool condition, string message) { Require(condition, message); checks++; };
+            using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false; window.Height = 750;
+                window.ApplyAppearance(new SidebarAppearance { Sections = new string[] { "offers", "owned", "plan", "hero" } });
+                var latest = new object[] {
+                    new Dictionary<string, object> { { "id", "shared" }, { "name", "最新一轮 A" }, { "rank", 1 } },
+                    new Dictionary<string, object> { { "id", "new-b" }, { "name", "最新一轮 B" }, { "rank", 2 } },
+                    new Dictionary<string, object> { { "id", "new-c" }, { "name", "最新一轮 C" }, { "rank", 3 } }
+                };
+                var older = new object[] {
+                    new Dictionary<string, object> { { "id", "shared" }, { "name", "上一轮 A" } },
+                    new Dictionary<string, object> { { "id", "old-b" }, { "name", "上一轮 B" } },
+                    new Dictionary<string, object> { { "id", "old-c" }, { "name", "上一轮 C" } }
+                };
+                var fixture = new Dictionary<string, object> {
+                    { "phase", "InProgress" }, { "gameId", "pending-fixture" }, { "sessionRevision", 4 }, { "gameEpoch", 5 }, { "pendingRevision", 1 },
+                    { "isDead", true }, { "offers", latest }, { "owned", new object[0] },
+                    { "pendingOffers", new object[] {
+                        new Dictionary<string, object> { { "pendingId", "old-round" }, { "sequence", 1 }, { "active", false }, { "offers", older } },
+                        new Dictionary<string, object> { { "pendingId", "new-round" }, { "sequence", 2 }, { "active", true }, { "offers", latest } }
+                    } }
+                };
+                window.Model = fixture;
+                using (var bitmap = RenderFixture(window)) bitmap.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png);
+                check(window.offerButtons.Count == 3 && window.pendingOfferButtons.Count == 3 && window.paintedSections.Contains("offers"), "Death or the compact layout hid unresolved choices.");
+                check(ModelValue.OffersForConfirmation(fixture, "old-round").Count == 3 && ModelValue.Text(ModelValue.OffersForConfirmation(fixture, "old-round")[1] as Dictionary<string, object>, "id") == "old-b", "Manual lookup selected the latest round instead of the requested older round.");
+                check(ModelValue.OffersForConfirmation(fixture, "rerolled-away").Count == 0, "An expired pending ID fell back to the latest candidates.");
+                Rectangle pendingViewport = window.viewport;
+                string selected = "", selectedPending = "";
+                window.PendingOfferConfirmed += delegate(string id, string pendingId) { selected = id; selectedPending = pendingId; };
+                foreach (var target in window.pendingOfferButtons)
+                {
+                    Point center = new Point(target.Key.Left + target.Key.Width / 2, target.Key.Top + target.Key.Height / 2);
+                    window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                    window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                    check(selected == target.Value.Key && selectedPending == "old-round", "Older manual confirmation targeted the current round.");
+                }
+                selected = ""; selectedPending = "";
+                Rectangle latestCard = new Rectangle();
+                foreach (var target in window.offerButtons) if (target.Value == "shared") latestCard = target.Key;
+                Point cardPoint = new Point(latestCard.Left + latestCard.Width / 2, latestCard.Top + latestCard.Height / 2);
+                window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, cardPoint.X, cardPoint.Y, 0));
+                var active = ModelValue.Array(fixture, "pendingOffers")[1] as Dictionary<string, object>;
+                active["pendingId"] = "new-reroll"; fixture["pendingRevision"] = 2;
+                window.Model = fixture;
+                using (var bitmap = RenderFixture(window)) { }
+                window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, cardPoint.X, cardPoint.Y, 0));
+                check(selected.Length == 0, "A held click retargeted a new pending round.");
+                var lateModel = new Dictionary<string, object>(fixture);
+                lateModel["pendingRevision"] = 1; lateModel["offers"] = older;
+                window.Model = lateModel;
+                check(ModelValue.Text(ModelValue.Array(window.Model, "offers")[1] as Dictionary<string, object>, "id") == "new-b", "A late same-session model restored superseded pending offers.");
+                window.Model = ModelValue.Failure("隔离示例连接中断");
+                using (var bitmap = RenderFixture(window)) { }
+                check(window.offerButtons.Count == 0 && window.pendingOfferButtons.Count == 0 && ModelValue.Array(window.Model, "pendingOffers").Count == 2, "Transport failure discarded pending state or exposed hidden choices.");
+                window.Model = lateModel;
+                check(ModelValue.Text(ModelValue.Array(window.Model, "offers")[1] as Dictionary<string, object>, "id") == "new-b", "A transport failure lost the pending revision watermark.");
+                window.ScrollTo(100);
+                check(window.offerButtons.Count == 0 && window.pendingOfferButtons.Count == 0, "Scrolling kept stale pending hit targets.");
+                fixture["pendingOffers"] = new object[0]; fixture["offers"] = new object[0]; fixture["sessionRevision"] = 5; fixture["pendingRevision"] = 3;
+                window.Model = fixture;
+                using (var bitmap = RenderFixture(window)) { }
+                check(window.offerButtons.Count == 0 && window.pendingOfferButtons.Count == 0 && window.OlderPendingOffers().Count == 0, "An authoritative clear retained old pending choices.");
+                check(!window.Visible, "Pending fixtures displayed a real window.");
+            }
+            return checks;
         }
         private static int ValidatePassiveActivationFixtures(SidebarWindow window)
         {
@@ -1937,6 +2877,7 @@ namespace HexGuide.Desktop
                     else next.Add(augment);
                 }
                 var fixture = new Dictionary<string, object> {
+                    { "gameId", "icon-fixture" }, { "sessionRevision", 1 },
                     { "champion", new Dictionary<string, object> { { "id", "Ahri" }, { "name", "隔离示例英雄" } } },
                     { "owned", owned }, { "offers", offers }, { "plan", new Dictionary<string, object> {
                         { "title", "隔离图标布局示例" }, { "summary", "以下为示例图标，没有连接真实对局。" },
@@ -1950,99 +2891,29 @@ namespace HexGuide.Desktop
                 {
                     before.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png);
                     check(window.Width == 280 && window.appearance.Scale == 130, "Icon fixture did not exercise narrow width with enlarged text.");
-                    check(window.offerButtons.Count == 3, "Three icon cards did not expose three confirmation targets.");
-                    var targets = new List<KeyValuePair<Rectangle, string>>(window.offerButtons);
-                    targets.Sort(delegate(KeyValuePair<Rectangle, string> first, KeyValuePair<Rectangle, string> second) { return first.Key.Left.CompareTo(second.Key.Left); });
-                    var frameColors = new List<int[]>();
-                    for (int index = 0; index < targets.Count; index++)
-                    {
-                        Rectangle card = targets[index].Key;
-                        int[] samples = OfferFramePixels(before, card); frameColors.Add(samples);
-                        Color expectedFrame = index == 1 ? Color.FromArgb(216, 181, 101) : Color.FromArgb(55, 77, 97);
-                        check(samples[0] == expectedFrame.ToArgb() && samples[1] == expectedFrame.ToArgb(), "Candidate recommendation borders followed rarity rather than rank.");
-                        Rectangle nameArea = new Rectangle(card.Left + window.S(3), card.Top + window.S(54), Math.Max(1, card.Width - window.S(6)), window.S(33));
-                        string name = ModelValue.Text(offers[index] as Dictionary<string, object>, "name");
-                        using (var graphics = Graphics.FromImage(before)) using (var font = window.FitOfferNameFont(graphics, name, nameArea))
-                            check(OfferNameFits(graphics, name, font, nameArea), "A common Chinese augment name could not fit two lines at narrow width and 130% scale.");
-                    }
-                    string selected = "";
-                    Action<string> confirm = delegate(string id) { selected = id; };
-                    window.OfferConfirmed += confirm;
-                    try
-                    {
-                        for (int index = 0; index < targets.Count; index++)
-                        {
-                            check(targets[index].Value == "icon-fixture-" + (12 + index), "Recommendation rank reordered the game's icon positions.");
-                            Rectangle target = targets[index].Key;
-                            window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, target.Left + target.Width / 2, target.Top + target.Height / 2, 0));
-                            check(selected == targets[index].Value, "An icon confirmation selected a different augment ID.");
-                        }
-                    }
-                    finally { window.OfferConfirmed -= confirm; }
+                    check(window.offerButtons.Count == 3 && window.pendingOfferButtons.Count == 0 && Rectangle.Empty.Equals(window.buildToggle), "Candidate controls disappeared or full build controls returned.");
+                    check(window.augmentTargets.Count > 0, "Augment icons disappeared.");
                     Rectangle fixtureViewport = window.viewport;
                     foreach (var target in window.augmentTargets)
                     {
                         Rectangle area = target.Key;
-                        check(area.Left >= fixtureViewport.Left && area.Right <= fixtureViewport.Right, "An augment icon overflowed the narrow viewport.");
+                        check(fixtureViewport.Contains(area), "An owned augment icon overflowed the narrow viewport.");
                         if (area.Width == area.Height)
                         {
                             var expected = (Bitmap)window.GetAugmentIcon(ModelValue.Text(target.Value, "icon"), ModelValue.Text(target.Value, "rarity"));
                             Color actual = before.GetPixel(area.Left + area.Width / 2, area.Top + area.Height / 2), pixel = expected.GetPixel(expected.Width / 2, expected.Height / 2);
-                            check(Math.Abs(actual.R - pixel.R) <= 3 && Math.Abs(actual.G - pixel.G) <= 3 && Math.Abs(actual.B - pixel.B) <= 3, "Augment icon art or color did not match its identity.");
+                            check(Math.Abs(actual.R - pixel.R) <= 3 && Math.Abs(actual.G - pixel.G) <= 3 && Math.Abs(actual.B - pixel.B) <= 3, "Owned augment art or color did not match its identity.");
                         }
                     }
-                    (offers[0] as Dictionary<string, object>)["rank"] = 1;
-                    (offers[1] as Dictionary<string, object>)["rank"] = 2;
-                    window.Model = fixture;
-                    using (var ranked = RenderFixture(window))
-                    {
-                        for (int index = 0; index < targets.Count; index++)
-                        {
-                            Rectangle card = targets[index].Key;
-                            int[] afterRank = OfferFramePixels(ranked, card);
-                            Color expectedFrame = index == 0 ? Color.FromArgb(216, 181, 101) : Color.FromArgb(55, 77, 97);
-                            check(afterRank[0] == expectedFrame.ToArgb() && afterRank[1] == expectedFrame.ToArgb(), "Changing recommendation rank did not move the gold recommendation border.");
-                            Point iconCenter = new Point(card.Left + card.Width / 2, card.Top + window.S(28));
-                            check(ranked.GetPixel(iconCenter.X, iconCenter.Y) == before.GetPixel(iconCenter.X, iconCenter.Y), "Changing recommendation rank recolored the augment icon.");
-                        }
-                    }
-                    (offers[0] as Dictionary<string, object>)["rank"] = 2;
-                    (offers[1] as Dictionary<string, object>)["rank"] = 1;
-                    (offers[0] as Dictionary<string, object>)["rarity"] = "silver";
-                    window.Model = fixture;
-                    using (var recolored = RenderFixture(window))
-                    {
-                        Rectangle card = targets[0].Key;
-                        int[] samples = OfferFramePixels(recolored, card);
-                        check(samples[0] == frameColors[0][0] && samples[1] == frameColors[0][1], "Changing rarity changed the recommendation border.");
-                        Point center = new Point(card.Left + card.Width / 2, card.Top + window.S(28));
-                        check(recolored.GetPixel(center.X, center.Y) != before.GetPixel(center.X, center.Y), "Changing rarity did not recolor the augment's own art.");
-                    }
-                    (offers[0] as Dictionary<string, object>)["rarity"] = "prismatic";
-                    RenameFixtureAugments(owned, next);
-                    window.Model = fixture;
-                    using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Owned or future augment names were still drawn by default.");
-                    foreach (object offer in offers) (offer as Dictionary<string, object>)["name"] = "候选名称已改变";
-                    window.Model = fixture;
-                    using (var renamed = RenderFixture(window)) check(!EqualFixturePixels(before, renamed), "Candidate augment names were not visible beneath their icons.");
-                }
-                window.ExpandBuild();
-                using (var before = RenderFixture(window))
-                {
-                    string expanded = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-expanded.png");
-                    before.Save(expanded, System.Drawing.Imaging.ImageFormat.Png);
                     RenameFixtureAugments(owned, next); window.Model = fixture;
-                    using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Recently selected or future augment names were still drawn by default.");
+                    using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Hidden future or owned labels changed the sidebar.");
+                    window.ExpandBuild();
+                    using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Legacy expand calls changed the compact sidebar presentation.");
                 }
                 window.ScrollTo(window.contentHeight);
                 check(window.offerButtons.Count == 0 && window.augmentTargets.Count == 0, "Scrolling kept stale icon hit targets before repaint.");
-                using (var before = RenderFixture(window))
-                {
-                    RenameFixtureAugments(owned, next); window.Model = fixture;
-                    using (var after = RenderFixture(window)) check(EqualFixturePixels(before, after), "Scrolled augment labels became visible.");
-                    Rectangle scrolledViewport = window.viewport;
-                    foreach (var target in window.offerButtons) check(scrolledViewport.Contains(target.Key), "Scrolled confirmation targets escaped the visible viewport.");
-                }
+                using (var after = RenderFixture(window))
+                    foreach (var target in window.augmentTargets) check(FixtureContains(window.viewport, target.Key), "Scrolled owned icons escaped the viewport.");
                 check(!window.Visible && window.ShowWithoutActivation && window.activeAugmentHint.Length == 0, "Icon fixtures displayed or activated a real window or tooltip.");
                 // One source URL may legitimately serve different qualities. Test
                 // opaque detail, partial alpha, and a transparent hole in its art.
@@ -2098,6 +2969,7 @@ namespace HexGuide.Desktop
             window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
             return bitmap;
         }
+        private static bool FixtureContains(Rectangle outer, Rectangle inner) { return outer.Contains(inner); }
         private static bool EqualFixturePixels(Bitmap first, Bitmap second)
         {
             using (var left = new MemoryStream()) using (var right = new MemoryStream())
@@ -2117,188 +2989,68 @@ namespace HexGuide.Desktop
                 augment["name"] = ModelValue.Text(augment, "name") + " 名称变更不应改变默认图像";
             }
         }
-        private static int ValidateInitialPlanFixtures(SidebarWindow window, string earlyLivePreviewPath)
+        private static int ValidateInitialPlanFixtures(SidebarWindow unused, string earlyLivePreviewPath)
         {
-            var original = window.Model;
-            var enemy = new Dictionary<string, object> { { "status", "detected" }, { "source", "live-client" }, { "champions", new object[] { new Dictionary<string, object> { { "id", "Soraka" }, { "name", "索拉卡" } } } } };
-            var plan = new Dictionary<string, object>(ModelValue.Object(original, "plan"));
-            plan["stage"] = "live"; plan["enemyContext"] = enemy;
-            var early = new Dictionary<string, object>(original);
-            early["connection"] = new Dictionary<string, object> { { "status", "connected" } };
-            early["mode"] = new Dictionary<string, object> { { "known", true }, { "isMayhem", true }, { "queueId", 2400 } };
-            early["phase"] = "InProgress"; early["stage"] = "live"; early["championSource"] = "live-client";
-            early["gameId"] = "early-fixture-one"; early["gameTime"] = 0; early["owned"] = new object[0]; early["offers"] = new object[0]; early["plan"] = plan;
-            window.initialPlanHandled = false; window.initialPlanGame = ""; window.buildExpanded = false;
-            window.Model = early;
-            Require(window.buildExpanded && !window.IsLoadingPreview, "A missed loading sample did not open the first valid live plan with its live identity.");
-            window.Notice = "离屏早期实战示例 · 未连接真实对局";
-            using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(earlyLivePreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-            window.Notice = "";
-            window.buildExpanded = false;
-            var repeated = new Dictionary<string, object>(early); repeated["gameTime"] = 3;
-            window.Model = repeated;
-            Require(!window.buildExpanded, "An early live refresh overrode a user's collapsed recommendation.");
-            var transient = ModelValue.Failure("隔离测试中的临时连接中断");
-            window.Model = transient; window.Model = repeated;
-            Require(!window.buildExpanded, "An early live reconnect reopened an already handled initial plan.");
-            var next = new Dictionary<string, object>(early); next["gameId"] = "early-fixture-two";
-            window.Model = next;
-            Require(window.buildExpanded, "A new game did not receive its own early recommendation opportunity.");
-            var loadingPlan = new Dictionary<string, object>(plan); loadingPlan["stage"] = "loading-preview";
-            var loading = new Dictionary<string, object>(early); loading["gameId"] = "early-fixture-three"; loading["plan"] = loadingPlan; loading["stage"] = "loading";
-            window.Model = loading;
-            Require(window.buildExpanded && window.IsLoadingPreview, "A true loading preview did not open.");
-            window.buildExpanded = false;
-            var afterLoading = new Dictionary<string, object>(early); afterLoading["gameId"] = "early-fixture-three"; afterLoading["gameTime"] = 2;
-            window.Model = afterLoading;
-            Require(!window.buildExpanded && !window.IsLoadingPreview, "Loading and live did not share one initial expansion opportunity.");
-            var late = new Dictionary<string, object>(early); late["gameId"] = "late-fixture"; late["gameTime"] = 120;
-            window.Model = late;
-            Require(!window.buildExpanded, "A mid-game launch or reconnect automatically expanded recommendations.");
-            var zero = new Dictionary<string, object>(late); zero["gameTime"] = 0;
-            window.Model = zero;
-            Require(!window.buildExpanded, "A zero clock retransmission reopened a mid-game plan.");
-            var invalidEnemy = new Dictionary<string, object>(enemy); invalidEnemy["status"] = "stale";
-            var invalidPlan = new Dictionary<string, object>(plan); invalidPlan["enemyContext"] = invalidEnemy;
-            var invalid = new Dictionary<string, object>(early); invalid["gameId"] = "invalid-fixture"; invalid["plan"] = invalidPlan;
-            window.Model = invalid;
-            Require(!window.buildExpanded, "A stale opponent plan opened early recommendations.");
-            var valid = new Dictionary<string, object>(invalid); valid["plan"] = plan;
-            window.Model = valid;
-            Require(window.buildExpanded, "A valid plan arriving later in the opening window did not expand.");
-            var selected = new Dictionary<string, object>(early); selected["gameId"] = "selected-fixture"; selected["owned"] = ModelValue.Array(original, "owned");
-            Require(!HasEarlyLivePlan(selected), "A selected augment was accepted as an empty opening plan.");
-            var incomplete = new Dictionary<string, object>(plan); incomplete["nextAugments"] = new object[0];
-            var noDirections = new Dictionary<string, object>(early); noDirections["plan"] = incomplete;
-            Require(HasEarlyLivePlan(noDirections), "Opening equipment recommendations incorrectly required future augment directions.");
-            var untrusted = new Dictionary<string, object>(early); untrusted["championSource"] = "champ-select";
-            Require(!HasEarlyLivePlan(untrusted), "A non-live champion source qualified for live fallback.");
-            var unknownMode = new Dictionary<string, object>(early); unknownMode["mode"] = new Dictionary<string, object> { { "known", false }, { "isMayhem", false } };
-            Require(!HasEarlyLivePlan(unknownMode), "An unverified game mode qualified for early live fallback.");
-            var ordinaryMode = new Dictionary<string, object>(early); ordinaryMode["mode"] = new Dictionary<string, object> { { "known", true }, { "isMayhem", false }, { "queueId", 450 } };
-            Require(!HasEarlyLivePlan(ordinaryMode), "An ordinary game mode qualified for early live fallback.");
-            Require(!window.Visible && window.ShowWithoutActivation, "Initial-plan fixtures displayed or activated a real window.");
-            window.Model = original; window.buildExpanded = false; window.scrollOffset = 0;
-            window.initialPlanHandled = false; window.initialPlanGame = "";
-            return 16;
-        }
-        private static int ValidateLoadingPreviewFixtures(SidebarWindow window, string previewPath)
-        {
-            var original = window.Model;
-            var roster = new ArrayList();
-            string[] names = { "索拉卡", "盖伦", "墨菲特", "金克丝", "拉克丝" };
-            for (int index = 0; index < names.Length; index++)
+            using (var window = new SidebarWindow())
             {
-                string icon = "fixture-loading-hero-" + index;
-                var bitmap = new Bitmap(34, 34);
-                using (var graphics = Graphics.FromImage(bitmap)) graphics.Clear(Color.FromArgb(46 + index * 15, 92 + index * 10, 111 + index * 8));
-                window.buildIcons[icon] = bitmap;
-                roster.Add(new Dictionary<string, object> { { "name", names[index] }, { "icon", icon }, { "level", null }, { "items", new object[0] } });
-            }
-            var plan = new Dictionary<string, object>(ModelValue.Object(original, "plan"));
-            plan["stage"] = "loading-preview"; plan["label"] = "开局前预览";
-            plan["enemyContext"] = new Dictionary<string, object> { { "status", "detected" }, { "source", "loading-roster" }, { "champions", roster } };
-            plan["allyContext"] = new Dictionary<string, object> { { "status", "detected" }, { "source", "loading-roster" }, { "champions", roster } };
-            // Static catalogue names and concise effects; this is an isolated layout fixture,
-            // not a claim that these six items or augments were observed in a real match.
-            string[] equipmentNames = { "莫雷洛秘典", "兰德里的折磨", "瑞莱的冰晶节杖", "灭世者的死亡之帽", "中娅沙漏", "虚空之杖" };
-            string[] equipmentEffects = { "魔法伤害施加3秒40%重伤。", "技能灼烧敌人，按最大生命值造成魔法伤害。", "技能伤害使敌人减速30%，持续1秒。", "总法术强度提升30%。", "进入凝滞状态2.5秒。", "95法术强度，40%法术穿透。" };
-            string[] augmentNames = { "循环往复", "炼狱导管", "珠光护手", "歌利亚巨人", "火上浇油", "面包和黄油" };
-            var equipment = new ArrayList(); var augments = new ArrayList();
-            for (int index = 0; index < equipmentNames.Length; index++)
-            {
-                string icon = "fixture-loading-hero-" + (index % names.Length);
-                equipment.Add(new Dictionary<string, object> { { "name", equipmentNames[index] }, { "effect", equipmentEffects[index] }, { "icon", icon } });
-                augments.Add(new Dictionary<string, object> { { "name", augmentNames[index] }, { "reason", "示例机制方向；实际以出现的三个选项为准。" }, { "icon", icon } });
-            }
-            plan["buildItems"] = equipment; plan["nextAugments"] = augments;
-            var loading = new Dictionary<string, object>(original);
-            loading["phase"] = "GameStart"; loading["stage"] = "loading"; loading["gameId"] = "loading-fixture-one";
-            loading["level"] = null;
-            loading["gameTime"] = null;
-            loading["owned"] = new object[0]; loading["offers"] = new object[0]; loading["plan"] = plan;
-            var select = new Dictionary<string, object>(original); select["phase"] = "ChampSelect"; select["owned"] = new object[0];
-            window.Model = select;
-            window.buildExpanded = false; window.Model = loading;
-            Require(window.IsLoadingPreview && window.buildExpanded, "Loading preview did not expand before any augment selection.");
-            window.Notice = "离屏示例 · 未连接真实对局";
-            using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png); }
-            window.Notice = "";
-            Require(window.paintedSections[0] == "plan" && window.buildToggle != Rectangle.Empty, "Loading plan did not move to the first visible section.");
-            Require(!window.paintedSections.Contains("owned") && !window.paintedSections.Contains("offers") && window.augmentTargets.Count == 0, "Loading displayed augment sections or kept augment hit targets.");
-            int equipmentOnlyHeight = window.contentHeight;
-            using (var before = RenderFixture(window))
-            {
-                plan["nextAugments"] = new object[0];
-                window.Model = loading;
-                using (var after = RenderFixture(window)) Require(EqualFixturePixels(before, after), "Loading presentation changed when invisible future augment data was removed.");
-                Require(window.contentHeight == equipmentOnlyHeight, "Invisible loading augments reserved scrolling space.");
-                var unavailableAlly = new Dictionary<string, object> { { "status", "unavailable" }, { "champions", roster } };
-                plan["allyContext"] = unavailableAlly;
-                window.Model = loading;
-                using (var unavailable = RenderFixture(window)) Require(!EqualFixturePixels(before, unavailable), "An unavailable ally context still displayed the supplied roster.");
-                plan["allyContext"] = new Dictionary<string, object> { { "status", "detected" }, { "source", "loading-roster" }, { "champions", roster } };
-                window.Model = loading;
-                using (var restored = RenderFixture(window)) Require(EqualFixturePixels(before, restored), "Restoring a verified ally roster did not restore its loading presentation.");
-            }
-            Rectangle toggle = window.buildToggle;
-            window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, toggle.Left + 2, toggle.Top + 2, 0));
-            Require(!window.buildExpanded, "Loading preview could not be collapsed by the user.");
-            window.Model = loading;
-            Require(!window.buildExpanded, "Repeated loading poll overrode the user's collapse.");
-            var recovered = new Dictionary<string, object>(loading); recovered["gameId"] = "loading-fixture-two";
-            window.Model = recovered;
-            Require(window.buildExpanded, "A different loading game did not expand its own preview.");
-            var live = new Dictionary<string, object>(recovered);
-            live["phase"] = "InProgress"; live["stage"] = "live";
-            live["plan"] = new Dictionary<string, object> { { "stage", "live" }, { "summary", "入场后的本局推荐" } };
-            window.Model = live;
-            Require(!window.IsLoadingPreview && window.buildExpanded, "Entering live play did not preserve the expanded recommendation view.");
-            Require(window.DisplaySections().Contains("owned") && window.DisplaySections().Contains("offers"), "Live entry did not restore the saved augment section order.");
-            Require(!window.Visible && window.ShowWithoutActivation, "Loading fixtures displayed or activated a real window.");
-            var ended = new Dictionary<string, object>(live); ended["phase"] = "EndOfGame";
-            window.Model = ended;
-            Require(!window.buildExpanded, "The ended game kept its previous preview expanded.");
-            window.Model = original; window.buildExpanded = false; window.scrollOffset = 0;
-            window.initialPlanHandled = false; window.initialPlanGame = "";
-            return 14;
-        }
-        private static int ValidateBuildStatisticsFixtures(SidebarWindow window)
-        {
-            var original = window.Model;
-            SidebarAppearance originalAppearance = window.appearance;
-            int originalWidth = window.Width, checks = 0;
-            Action<bool, string> check = delegate(bool valid, string reason) { Require(valid, reason); checks++; };
-            window.ApplyAppearance(new SidebarAppearance { Scale = 130, Width = 280 });
-            window.Width = 280;
-            foreach (string stage in new string[] { "loading", "live" })
-            {
-                var plan = new Dictionary<string, object>(ModelValue.Object(original, "plan"));
-                plan["stage"] = stage == "loading" ? "loading-preview" : "live";
-                plan.Remove("statistics");
-                var fixture = new Dictionary<string, object>(original);
-                fixture["gameId"] = "statistics-layout-" + stage;
-                fixture["phase"] = stage == "loading" ? "GameStart" : "InProgress";
-                fixture["stage"] = stage; fixture["plan"] = plan;
-                window.Model = fixture; window.ExpandBuild();
+                window.remoteIcons = false; window.Model = CreateNextItemFixture();
                 using (var before = RenderFixture(window))
                 {
-                    int beforeHeight = window.SectionHeight("plan");
-                    check(window.BuildStatisticsHeight(plan, window.Width - 34) == 0, "A missing statistics source reserved blank sidebar space.");
-                    plan["statistics"] = new Dictionary<string, object> { { "summary", "海克斯大乱斗 80%＋普通 ARAM 20%（仅按实际可用来源；权重不表示混合胜率）" } };
-                    window.Model = fixture;
-                    int sourceHeight = window.BuildStatisticsHeight(plan, window.Width - 34);
-                    check(sourceHeight > window.S(23) && window.SectionHeight("plan") == beforeHeight + sourceHeight, "Wrapped source copy did not reserve its full scaled height before equipment.");
-                    using (var after = RenderFixture(window)) check(!EqualFixturePixels(before, after), "The actual build source was not painted in the sidebar.");
-                    plan.Remove("statistics"); window.Model = fixture;
-                    using (var restored = RenderFixture(window)) check(EqualFixturePixels(before, restored), "Removing source copy did not restore the original equipment layout.");
+                    before.Save(earlyLivePreviewPath, System.Drawing.Imaging.ImageFormat.Png);
+                    Require(window.paintedNextItemId == "3135" && window.paintedSections[0] == "nextItem", "Early live recommendation required expansion.");
+                    window.ExpandBuild();
+                    using (var after = RenderFixture(window)) Require(EqualFixturePixels(before, after), "A legacy expansion changed the compact sidebar.");
                 }
+                var ended = CreateNextItemFixture(); ended["phase"] = "EndOfGame";
+                window.Model = ended;
+                using (var bitmap = RenderFixture(window)) Require(window.paintedNextItemId.Length == 0, "An ended game displayed its previous next equipment.");
+                Require(!window.Visible && window.ShowWithoutActivation, "Initial recommendation fixture activated a window.");
             }
-            check(!window.Visible && window.ShowWithoutActivation, "Source layout fixtures displayed or activated a real window.");
-            window.ApplyAppearance(originalAppearance); window.Width = originalWidth;
-            window.Model = original; window.buildExpanded = false; window.scrollOffset = 0;
-            window.initialPlanHandled = false; window.initialPlanGame = "";
-            return checks;
+            return 4;
+        }
+        private static int ValidateLoadingPreviewFixtures(SidebarWindow unused, string previewPath)
+        {
+            using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false;
+                var loading = CreateNextItemFixture(); loading["stage"] = "loading"; loading["phase"] = "GameStart";
+                loading["championSource"] = "loading-roster";
+                ModelValue.Object(loading, "nextItem")["stage"] = "loading-preview";
+                window.Model = loading;
+                using (var before = RenderFixture(window))
+                {
+                    before.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png);
+                    Require(window.paintedNextItemId == "3135" && window.paintedSections[0] == "nextItem", "Loading recommendation was not visible by default.");
+                    Require(!window.paintedSections.Contains("owned") && window.augmentTargets.Count == 0 && Rectangle.Empty.Equals(window.buildToggle), "Loading exposed augment content or an expansion control.");
+                    ModelValue.Object(loading, "plan")["nextAugments"] = new object[0]; window.Model = loading;
+                    using (var after = RenderFixture(window)) Require(EqualFixturePixels(before, after), "Hidden full-plan data affected loading presentation.");
+                }
+                var live = CreateNextItemFixture(); window.Model = live;
+                using (var bitmap = RenderFixture(window)) Require(window.paintedSections.Contains("owned") && window.paintedSections.Contains("offers") && window.paintedNextItemId == "3135", "Live entry failed to restore candidates beside the compact recommendation.");
+                Require(!window.Visible && window.ShowWithoutActivation, "Loading fixture activated a window.");
+            }
+            return 5;
+        }
+        private static int ValidateBuildStatisticsFixtures(SidebarWindow unused)
+        {
+            using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false; window.ApplyAppearance(new SidebarAppearance { Scale = 130, Width = 280 }); window.Width = 280;
+                var fixture = CreateNextItemFixture(); window.Model = fixture;
+                using (var before = RenderFixture(window))
+                {
+                    int height = window.NextItemHeight(window.Width - 34);
+                    var recommendation = ModelValue.Object(fixture, "nextItem");
+                    recommendation["evidenceLabel"] = "海克斯大乱斗 80%＋普通 ARAM 20%（按实际可用来源；权重不表示混合胜率）";
+                    window.Model = fixture;
+                    Require(window.NextItemHeight(window.Width - 34) > height, "Wrapped evidence copy did not reserve its full height.");
+                    using (var after = RenderFixture(window)) Require(!EqualFixturePixels(before, after), "Next-item evidence was not visible.");
+                    recommendation["evidenceLabel"] = ""; window.Model = fixture;
+                    using (var after = RenderFixture(window)) Require(EqualFixturePixels(before, after), "Removing evidence copy did not restore the compact layout.");
+                }
+                Require(!window.Visible && window.ShowWithoutActivation, "Evidence fixture activated a window.");
+            }
+            return 4;
         }
         private static int ValidateLiveStateFixtures(SidebarWindow window, string statusPreviewPath)
         {
@@ -2318,7 +3070,7 @@ namespace HexGuide.Desktop
             recognition["enabled"] = false;
             Require(RecognitionSummary(recognition) == "自动识别已暂停，可从托盘恢复", "Paused recognition was not visible.");
             recognition["observedAt"] = "not-a-date";
-            Require(RecognitionTime(recognition) == "出现卡片后会自动检查", "Malformed scan timestamp reached the product UI.");
+            Require(RecognitionTime(recognition) == "", "Malformed scan timestamp reached the product UI.");
             object parsedGameId;
             var nullGame = new Dictionary<string, object> { { "gameId", null } };
             Require(ModelValue.GameId(nullGame, out parsedGameId) && parsedGameId == null && new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "gameId", parsedGameId } }) == "{\"gameId\":null}", "An explicit null game ID was rejected or serialized as an empty string.");
@@ -2335,47 +3087,28 @@ namespace HexGuide.Desktop
             Require(!ModelValue.ConfirmsOffer(confirmation, "demo-missing", "fixture-game"), "An absent selected augment was reported as confirmed.");
             confirmation.Remove("gameId");
             Require(!ModelValue.ConfirmsOffer(confirmation, "demo-confirm", null), "An incomplete confirmation response was accepted.");
-            var offered = new Dictionary<string, object>(original);
-            offered["sessionRevision"] = 20;
-            offered["owned"] = new object[0];
-            window.Model = offered;
-            using (var bitmap = new Bitmap(window.Width, window.Height)) window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
-            string selected = "";
-            Action<string> capture = delegate(string value) { selected = value; };
-            window.OfferConfirmed += capture;
-            try
+            using (var isolated = new SidebarWindow())
             {
-                Require(window.offerButtons.Count > 0, "Visible offer did not expose a confirmation target.");
-                foreach (var button in window.offerButtons)
-                {
-                    window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, button.Key.Left + 2, button.Key.Top + 2, 0));
-                    Require(selected == button.Value, "Confirmation target did not preserve the displayed offer ID.");
-                    break;
-                }
+                isolated.remoteIcons = false;
+                var offered = CreateNextItemFixture(); offered["sessionRevision"] = 20;
+                ModelValue.Object(offered, "nextItem")["sessionRevision"] = 20;
+                isolated.Model = offered;
+                using (var bitmap = RenderFixture(isolated)) Require(isolated.offerButtons.Count == 3 && isolated.pendingOfferButtons.Count == 0, "Current candidates lost confirmation targets.");
+                var confirmed = CreateNextItemFixture(); confirmed["sessionRevision"] = 21;
+                confirmed["offers"] = new object[0];
+                ModelValue.Object(confirmed, "nextItem")["sessionRevision"] = 21;
+                isolated.Model = confirmed;
+                using (var bitmap = RenderFixture(isolated)) Require(isolated.paintedNextItemId == "3135" && isolated.offerButtons.Count == 0 && Rectangle.Empty.Equals(isolated.buildToggle), "Confirmation did not clear candidates or required build expansion.");
+                isolated.Model = ModelValue.Failure("测试中的短暂本地连接中断");
+                using (var bitmap = RenderFixture(isolated)) Require(isolated.paintedNextItemId.Length == 0, "A disconnected sidebar retained a live equipment recommendation.");
+                isolated.Model = confirmed;
+                Require(isolated.CurrentNextItem() != null, "A current observation did not restore its equipment after reconnecting.");
+                isolated.Model = offered;
+                Require(ModelValue.Text(isolated.Model, "sessionRevision") == "21", "A late old model reverted the confirmed session.");
+                Require(!isolated.Visible && isolated.ShowWithoutActivation, "Confirmation fixtures displayed or activated a window.");
             }
-            finally { window.OfferConfirmed -= capture; }
-            var confirmed = new Dictionary<string, object>(original);
-            confirmed["sessionRevision"] = 21;
-            confirmed["offers"] = new object[0];
-            window.Model = confirmed;
-            Require(window.buildExpanded, "Confirmed selection did not expand its build.");
-            using (var bitmap = new Bitmap(window.Width, window.Height)) window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
-            Require(window.paintedSections[0] == "plan", "Confirmed build was not the first expanded section.");
-            window.Model = ModelValue.Failure("测试中的短暂本地连接中断");
-            Require(window.buildExpanded, "A temporary connection failure collapsed the selected build.");
-            var refreshed = new Dictionary<string, object>(confirmed);
-            refreshed["plan"] = new Dictionary<string, object> { { "summary", "示例敌方装备更新后的构筑" } };
-            window.Model = refreshed;
-            Require(window.buildExpanded && ModelValue.Text(ModelValue.Object(window.Model, "plan"), "summary") == "示例敌方装备更新后的构筑", "An equal-revision observation failed to refresh the build after reconnecting.");
-            window.Model = offered;
-            Require(ModelValue.Array(window.Model, "owned").Count == 1 && window.buildExpanded, "A late old model reverted the confirmed choice.");
-            var nextGame = new Dictionary<string, object>(offered);
-            nextGame["sessionRevision"] = 22;
-            window.Model = nextGame;
-            Require(!window.buildExpanded, "A real session reset left the previous build expanded.");
-            Require(!window.Visible && window.ShowWithoutActivation, "Confirmation fixtures displayed or activated a window.");
             window.Model = original; window.buildExpanded = false; window.scrollOffset = 0;
-            return 24;
+            return 20;
         }
         private static int ValidateAppearanceFixtures(SidebarWindow window)
         {
@@ -2403,7 +3136,9 @@ namespace HexGuide.Desktop
             Require(window.Width == 280 && window.Left == monitor.Left && window.Top == monitor.Top + (monitor.Height - window.Height) / 2 && monitor.Contains(window.Bounds), "Left/center multi-monitor placement failed.");
             Require(Math.Abs(window.Opacity - 0.75) < 0.001 && Math.Abs(window.headingFont.Size - 18.2F) < 0.01, "Sidebar font or opacity did not update.");
             using (var bitmap = new Bitmap(window.Width, window.Height)) window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
-            Require(string.Join(",", window.paintedSections.ToArray()) == "plan,offers,owned,hero", "Saved section order was not painted.");
+            Require(string.Join(",", window.paintedSections.ToArray()) == "nextItem,offers,owned,hero" && string.Join(",", window.appearance.Sections) == "plan,offers,owned,hero", "Compact projection changed the saved section order.");
+            window.Height = 400;
+            using (var bitmap = RenderFixture(window)) { }
             Rectangle testViewport = window.viewport, testScrollTrack = window.scrollTrack;
             Require(window.contentHeight > testViewport.Height && !testScrollTrack.IsEmpty, "Large-font layout did not provide scrolling.");
             window.ScrollTo(int.MaxValue);
@@ -2538,6 +3273,16 @@ namespace HexGuide.Desktop
                 if (Text(entry as Dictionary<string, object>, "id") == id) return true;
             return false;
         }
+        internal static ArrayList OffersForConfirmation(Dictionary<string, object> model, string pendingId)
+        {
+            if (string.IsNullOrEmpty(pendingId)) return Array(model, "offers");
+            foreach (object item in Array(model, "pendingOffers"))
+            {
+                var pending = item as Dictionary<string, object>;
+                if (Text(pending, "pendingId") == pendingId) return Array(pending, "offers");
+            }
+            return new ArrayList();
+        }
         internal static ArrayList Array(Dictionary<string, object> model, string key)
         {
             object value;
@@ -2571,7 +3316,8 @@ namespace HexGuide.Desktop
         private const long LayeredStyle = 0x00080000L, RightToLeftStyle = 0x00400000L;
 
         // Metadata geometry only: no capture, game-memory access, input, window
-        // activation or window movement. Unknown coverage is treated as hidden.
+        // activation or window movement. Unknown game/traversal metadata is hidden;
+        // unknown covering-window detail is bounded by that window's known extents.
         // Tiny border/corner remnants do not count as a usable view of the game.
         internal static bool HasExposedGameArea(IntPtr verifiedGame, IntPtr ignoredSidebar)
         {
@@ -2624,18 +3370,9 @@ namespace HexGuide.Desktop
                     above = GetWindow(current, 3);
                     if (!IsWindow(current)) return false;
                     if (current == ignoredSidebar || !IsWindowVisible(current) || IsIconic(current)) continue;
-                    if (!TryIsCloaked(current, out cloaked)) return false;
-                    if (cloaked || IsKnownTranslucent(current)) continue;
                     ClientRectangle bounds;
                     if (!GetWindowRect(current, out bounds)) return false;
-                    if (bounds.Right <= bounds.Left || bounds.Bottom <= bounds.Top || !RectInRegion(remaining, ref bounds)) continue;
-                    IntPtr coverage = WindowCoverageRegion(current, bounds);
-                    if (coverage == IntPtr.Zero) return false;
-                    int result;
-                    try { result = CombineRgn(remaining, remaining, coverage, RegionDifference); }
-                    finally { DeleteObject(coverage); }
-                    if (result <= EmptyRegion) return false;
-                    if (result == ComplexRegion && !RegionWithinBudget(remaining)) return false;
+                    if (!SubtractCoveringWindow(remaining, bounds, delegate { return ReadCoveringWindow(current, bounds); })) return false;
                 }
                 ClientRectangle finalBounds;
                 if (!IsWindow(verifiedGame) || !IsWindowVisible(verifiedGame) || IsIconic(verifiedGame)
@@ -2657,6 +3394,43 @@ namespace HexGuide.Desktop
             int value;
             bool success = DwmGetWindowAttribute(window, 14, out value, sizeof(int)) == 0; // DWMWA_CLOAKED
             cloaked = value != 0; return success;
+        }
+        private struct CoveringWindowMetadata
+        {
+            internal bool NonCovering;
+            internal IntPtr Region;
+        }
+        private static CoveringWindowMetadata ReadCoveringWindow(IntPtr window, ClientRectangle bounds)
+        {
+            bool cloaked;
+            if (!TryIsCloaked(window, out cloaked)) return new CoveringWindowMetadata();
+            if (cloaked || IsKnownTranslucent(window)) return new CoveringWindowMetadata { NonCovering = true };
+            // This versioned graphics-overlay adapter is a display policy, not
+            // a generic conclusion about zero-flag layered-window opacity.
+            if (OverlayVisibilityCompatibility.IsNonCoveringCompatibilityLayer(window))
+                return new CoveringWindowMetadata { NonCovering = true };
+            return new CoveringWindowMetadata { Region = WindowCoverageRegion(window, bounds) };
+        }
+        // The caller must have successfully read bounds. Missing detail can cover
+        // at most those bounds, so it must not discard proven exposure elsewhere.
+        // The lazy read also keeps unrelated windows' DWM/shape failures irrelevant.
+        // False means no exposure remains, or region arithmetic could not be trusted.
+        private static bool SubtractCoveringWindow(IntPtr remaining, ClientRectangle bounds, Func<CoveringWindowMetadata> readMetadata)
+        {
+            if (bounds.Right <= bounds.Left || bounds.Bottom <= bounds.Top || !RectInRegion(remaining, ref bounds)) return true;
+            CoveringWindowMetadata metadata = readMetadata();
+            IntPtr coverage = metadata.Region;
+            try
+            {
+                if (metadata.NonCovering) return true;
+                if (coverage != IntPtr.Zero && !RegionWithinBudget(coverage))
+                { DeleteObject(coverage); coverage = IntPtr.Zero; }
+                if (coverage == IntPtr.Zero) coverage = CreateRectRgn(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom);
+                if (coverage == IntPtr.Zero) return false;
+                int result = CombineRgn(remaining, remaining, coverage, RegionDifference);
+                return result > EmptyRegion && (result != ComplexRegion || RegionWithinBudget(remaining));
+            }
+            finally { if (coverage != IntPtr.Zero) DeleteObject(coverage); }
         }
         private static bool IsKnownTranslucent(IntPtr window)
         {
@@ -2730,9 +3504,36 @@ namespace HexGuide.Desktop
         {
             internal int Id;
             internal Rectangle[] Areas;
-            internal bool Visible = true, Minimized, Cloaked, Translucent;
+            internal Rectangle? Bounds;
+            internal bool Visible = true, Minimized, Cloaked, Translucent, UnknownCloak, RegionUnavailable;
+            internal int MetadataReads;
         }
-        // The fixture runner performs only region arithmetic on supplied data;
+        private static CoveringWindowMetadata ReadFixtureCoveringWindow(CoverageFixture window)
+        {
+            window.MetadataReads++;
+            if (window.UnknownCloak) return new CoveringWindowMetadata();
+            if (window.Cloaked || window.Translucent) return new CoveringWindowMetadata { NonCovering = true };
+            if (window.RegionUnavailable) return new CoveringWindowMetadata();
+            IntPtr region = CreateRectRgn(0, 0, 0, 0);
+            if (region == IntPtr.Zero) return new CoveringWindowMetadata();
+            try
+            {
+                foreach (Rectangle bounds in window.Areas)
+                {
+                    IntPtr part = CreateRectRgn(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom);
+                    try
+                    {
+                        if (part == IntPtr.Zero || CombineRgn(region, region, part, RegionOr) == RegionError)
+                        { DeleteObject(region); return new CoveringWindowMetadata(); }
+                    }
+                    finally { if (part != IntPtr.Zero) DeleteObject(part); }
+                }
+                return new CoveringWindowMetadata { Region = region };
+            }
+            catch { DeleteObject(region); throw; }
+        }
+        // The fixture runner uses the same bounded-metadata subtraction as live
+        // traversal, with only supplied metadata and region arithmetic;
         // it never enumerates, samples, captures or changes any real window.
         private static bool ExposureFixture(Rectangle game, Rectangle[] monitors, CoverageFixture[] covering, int ignored, bool visible, bool minimized, bool cloaked)
         {
@@ -2751,13 +3552,15 @@ namespace HexGuide.Desktop
                 if (CombineRgn(remaining, remaining, clipped, RegionAnd) <= EmptyRegion) return false;
                 foreach (CoverageFixture window in covering)
                 {
-                    if (window.Id == ignored || !window.Visible || window.Minimized || window.Cloaked || window.Translucent) continue;
-                    foreach (Rectangle bounds in window.Areas)
+                    if (window.Id == ignored || !window.Visible || window.Minimized) continue;
+                    Rectangle bounds = window.Bounds ?? Rectangle.Empty;
+                    if (!window.Bounds.HasValue)
                     {
-                        IntPtr part = CreateRectRgn(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom);
-                        try { if (part == IntPtr.Zero || CombineRgn(remaining, remaining, part, RegionDifference) <= EmptyRegion) return false; }
-                        finally { if (part != IntPtr.Zero) DeleteObject(part); }
+                        for (int index = 0; index < window.Areas.Length; index++)
+                            bounds = index == 0 ? window.Areas[index] : Rectangle.Union(bounds, window.Areas[index]);
                     }
+                    var nativeBounds = new ClientRectangle { Left = bounds.Left, Top = bounds.Top, Right = bounds.Right, Bottom = bounds.Bottom };
+                    if (!SubtractCoveringWindow(remaining, nativeBounds, delegate { return ReadFixtureCoveringWindow(window); })) return false;
                 }
                 return HasMeaningfulExposure(remaining);
             }
@@ -2801,6 +3604,29 @@ namespace HexGuide.Desktop
             } } }), "A complex covering region's substantial central opening was lost.");
             check(!ExposureFixture(new Rectangle(0, 0, 20, 20), screens, none, 99, true, false, false), "A total exposed area below the usefulness threshold was accepted.");
             check(ExposureFixture(new Rectangle(0, 0, 32, 32), screens, none, 99, true, false, false), "A meaningful 32-by-32 area failed the exposure threshold.");
+            var unrelatedUnknown = new CoverageFixture { Id = 1, Bounds = new Rectangle(400, 0, 200, 160), UnknownCloak = true };
+            check(exposed(new[] { unrelatedUnknown }) && unrelatedUnknown.MetadataReads == 0, "An unrelated window's unknown cloak metadata hid the game or was queried unnecessarily.");
+            var unrelatedShape = new CoverageFixture { Id = 1, Bounds = new Rectangle(400, 0, 200, 160), RegionUnavailable = true };
+            check(exposed(new[] { unrelatedShape }) && unrelatedShape.MetadataReads == 0, "An unrelated window's missing region metadata hid the game or was queried unnecessarily.");
+            var partialUnknown = new CoverageFixture { Id = 1, Bounds = new Rectangle(0, 0, 140, 160), UnknownCloak = true };
+            check(exposed(new[] { partialUnknown }) && partialUnknown.MetadataReads == 1, "Unknown cloak metadata discarded exposure outside known window bounds.");
+            check(!exposed(new[] { new CoverageFixture { Id = 1, Bounds = game, UnknownCloak = true } }), "Unknown cloak metadata ignored a potentially full-covering window.");
+            check(exposed(new[] { new CoverageFixture { Id = 1, Bounds = new Rectangle(0, 0, 140, 160), RegionUnavailable = true } }), "An unavailable detailed region discarded exposure outside known window bounds.");
+            check(!exposed(new[] { new CoverageFixture { Id = 1, Bounds = game, RegionUnavailable = true } }), "An unavailable detailed region ignored potentially complete coverage.");
+            check(!exposed(new[] {
+                new CoverageFixture { Id = 1, Bounds = new Rectangle(0, 0, 100, 160), UnknownCloak = true },
+                new CoverageFixture { Id = 2, Bounds = new Rectangle(100, 0, 100, 160), RegionUnavailable = true }
+            }), "Two windows with unavailable detail did not conservatively cover their combined known bounds.");
+            check(exposed(new[] { new CoverageFixture { Id = 1, Bounds = game, Areas = new Rectangle[0] } }), "A known empty region was replaced with opaque bounds.");
+            var stripes = new Rectangle[4097];
+            for (int index = 0; index < stripes.Length; index++) stripes[index] = new Rectangle(0, 200 + index * 2, 140, 1);
+            var oversized = new CoverageFixture { Id = 1, Bounds = new Rectangle(0, 0, 200, 8400), Areas = stripes };
+            CoveringWindowMetadata oversizedMetadata = ReadFixtureCoveringWindow(oversized);
+            try { check(oversizedMetadata.Region != IntPtr.Zero && !RegionWithinBudget(oversizedMetadata.Region), "The oversized-region fixture did not exceed the production metadata budget."); }
+            finally { if (oversizedMetadata.Region != IntPtr.Zero) DeleteObject(oversizedMetadata.Region); }
+            check(!exposed(new[] { oversized }), "An oversized detailed region did not fall back to its full-covering known bounds.");
+            oversized.Bounds = new Rectangle(0, 0, 140, 8400);
+            check(exposed(new[] { oversized }), "An oversized detailed region discarded exposure outside its partial-covering known bounds.");
             return checks;
         }
         internal static Rectangle PlacementArea(IntPtr window)

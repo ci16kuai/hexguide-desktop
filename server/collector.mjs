@@ -67,8 +67,23 @@ function championFromPlayer(player, index) {
 
 function publicItems(player) {
   return (Array.isArray(player?.items) ? player.items : [])
-    .filter(item => Number.isSafeInteger(item?.itemID) && item.itemID > 0)
-    .map(item => ({id:item.itemID, name:cleanText(item.displayName || item.rawDisplayName), count:numeric(item.count) ? Math.max(1, Math.min(99, Math.floor(item.count))) : 1}));
+    .filter(item => Number.isSafeInteger(item?.itemID) && item.itemID > 0
+      && (item.count == null || Number.isSafeInteger(item.count) && item.count > 0 && item.count <= 99))
+    .map(item => ({id:item.itemID, name:cleanText(item.displayName || item.rawDisplayName), count:item.count ?? 1}));
+}
+
+// Validation bounds, not game limits or an estimate of combat contribution.
+const PERFORMANCE_LIMITS = {kills:1000, deaths:1000, assists:1000, creepScore:10000};
+function publicPerformance(player) {
+  const scores = player?.scores;
+  if (!scores || typeof scores !== 'object' || Array.isArray(scores)) return null;
+  const performance = Object.fromEntries(Object.entries(PERFORMANCE_LIMITS).map(([key, maximum]) => {
+    const value = Object.hasOwn(scores, key) ? scores[key] : null;
+    return [key, Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : null];
+  }));
+  // Entirely unknown scores add no field. Partial observations explicitly keep
+  // unknown counters null; zero means an observed zero, never missing data.
+  return Object.values(performance).some(value => value !== null) ? performance : null;
 }
 
 function unavailableTeams(now) {
@@ -102,7 +117,9 @@ function teamsFromPlayers(players, own, index, now) {
   if (!players.some(player => player.team === enemyTeam)) return unavailable;
   const roster = team => players.filter(player => player.team === team).map(player => {
     const championId = championFromPlayer(player, index);
-    return {championId, championName:championId ? index.labels?.get(championId) || championId : '未知英雄', level:numeric(player.level) && player.level >= 1 && player.level <= 30 ? player.level : null, items:publicItems(player)};
+    const performance = publicPerformance(player);
+    return {championId, championName:championId ? index.labels?.get(championId) || championId : '未知英雄', level:numeric(player.level) && player.level >= 1 && player.level <= 30 ? player.level : null, items:publicItems(player),
+      ...(performance ? {performance} : {})};
   });
   return {status:'detected', ownTeam:own.team, allies:roster(own.team), enemies:roster(enemyTeam), observedAt:now.toISOString()};
 }

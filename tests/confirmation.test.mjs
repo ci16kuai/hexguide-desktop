@@ -54,7 +54,7 @@ test('atomic confirmation returns a recalculated build and next list, then react
   await sidebar.stop();
 });
 
-test('confirmation rejects expired, rerolled, foreign-game and stale concurrent choices', async () => {
+test('confirmation retains unanswered choices beyond a minute and rejects rerolled, foreign-game and stale concurrent choices', async () => {
   const {sidebar,update,advance} = setup();
   await sidebar.scan();
   const first = sidebar.getModel();
@@ -70,7 +70,8 @@ test('confirmation rejects expired, rerolled, foreign-game and stale concurrent 
   await sidebar.scan();
   const expired = sidebar.getModel();
   advance(60_001);
-  await assert.rejects(sidebar.confirmOffer(confirmation(expired,'recursion')),SessionConflictError);
+  const late = await sidebar.confirmOffer(confirmation(expired,'recursion'));
+  assert.deepEqual(late.owned.map(augment => augment.id),['recursion']);
   await sidebar.scan();
   const oldGame = sidebar.getModel();
   update({gameId:'fixture-next',gameTime:1});
@@ -154,7 +155,7 @@ test('confirmation HTTP endpoint authenticates and returns current model or conf
   const local=await createLocalServer({collector,sidebar,staticDirectory:directory,token:'fixture-confirmation-token'});
   t.after(()=>local.close());
   const headers={'X-Hexguide-Session':local.token,'Content-Type':'application/json'};
-  const body=JSON.stringify(confirmation(original));
+  const body=JSON.stringify({...confirmation(original),pendingId:original.pendingOffers[0].pendingId});
   assert.equal((await request(local.port,'/api/session/confirm',{method:'POST',body})).status,401);
   assert.equal((await request(local.port,'/api/session/confirm',{method:'POST',body,headers:{...headers,Origin:'https://foreign.example'}})).status,403);
   assert.equal((await request(local.port,'/api/session/confirm',{method:'POST',body:'{}',headers})).status,400);
@@ -164,4 +165,23 @@ test('confirmation HTTP endpoint authenticates and returns current model or conf
   assert.equal(response.body.sessionRevision,original.sessionRevision+1);
   assert.ok(response.body.plan.buildItems.length && response.body.plan.nextAugments.length);
   assert.equal((await request(local.port,'/api/session/confirm',{method:'POST',body,headers})).status,409);
+});
+
+test('explicit session reset clears unanswered rounds even with empty owned choices and requires current authenticated guards', async t => {
+  const directory=await folder(t);
+  await writeFile(path.join(directory,'index.html'),'<!doctype html><title>isolated fixture</title>');
+  const {sidebar,collector}=setup(); await sidebar.scan(); const original=sidebar.getModel();
+  assert.deepEqual(original.owned,[]); assert.equal(original.route,'auto'); assert.equal(original.pendingOffers.length,1);
+  const local=await createLocalServer({collector,sidebar,staticDirectory:directory,token:'fixture-reset-token'});
+  t.after(()=>local.close()); const headers={'X-Hexguide-Session':local.token,'Content-Type':'application/json'};
+  const body=JSON.stringify({gameId:original.gameId,revision:original.sessionRevision});
+  assert.equal((await request(local.port,'/api/session/reset',{method:'POST',body})).status,401);
+  assert.equal((await request(local.port,'/api/session/reset',{method:'POST',body,headers:{...headers,Origin:'https://foreign.example'}})).status,403);
+  assert.equal((await request(local.port,'/api/session/reset',{method:'POST',body:'{}',headers})).status,400);
+  assert.equal((await request(local.port,'/api/session/reset',{method:'POST',body:JSON.stringify({gameId:original.gameId,revision:original.sessionRevision,extra:true}),headers})).status,400);
+  const result=await request(local.port,'/api/session/reset',{method:'POST',body,headers});
+  assert.equal(result.status,200); assert.deepEqual(result.body.pendingOffers,[]); assert.deepEqual(result.body.offers,[]);
+  assert.deepEqual(result.body.owned,[]); assert.equal(result.body.route,'auto');
+  assert.equal(result.body.sessionRevision,original.sessionRevision+1);
+  assert.equal((await request(local.port,'/api/session/reset',{method:'POST',body,headers})).status,409);
 });

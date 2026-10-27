@@ -49,7 +49,7 @@ test('own player is matched by Riot ID even when names collide or the other play
 test('team observations contain only public champion, level and inventory fields and follow the local side', () => {
   const data = teamLive();
   Object.assign(data.allPlayers[0], {position:{x:12345,y:67890}, championStats:{armor:999}, augments:[{id:1234}], abilities:{Q:{cooldown:9}}, health:54321});
-  data.allPlayers[0].items.push({itemID:-1}, {itemID:3020.5}, {itemID:3157,displayName:'中娅沙漏',count:3.9,secret:'not-exported'});
+  data.allPlayers[0].items.push({itemID:-1}, {itemID:3020.5}, {itemID:3089,count:3.9}, {itemID:3157,displayName:'中娅沙漏',count:3,secret:'not-exported'});
   let result = snapshotFromLive(data, {index, now});
   assert.equal(result.teams.status, 'detected');
   assert.equal(result.teams.ownTeam, 'ORDER');

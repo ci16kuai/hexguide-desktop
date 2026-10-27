@@ -16,15 +16,15 @@ const active=catalog.augments.filter(a=>!a.isInternalTemplate&&a.availability===
 async function appHarness(hash='',options={}){
   const storage=new Map(),nodes=new Map(),clicks=[],changes=[],hashListeners=[];
   const document=focusDocument();
-  let liveContext,syncContext,manualChanges=0,loading=false;
+  let liveContext,syncContext,manualChanges=0,loading=false,pulls=0;
   const node=selector=>{if(!nodes.has(selector))nodes.set(selector,focusElement(document,{id:selector.startsWith('#')?selector.slice(1):'',textContent:'',hidden:false,value:'',open:false,scrolls:0,classList:{add(){},remove(){},toggle(){}},addEventListener(){},setAttribute(){},removeAttribute(){},showModal(){this.open=true;},close(){this.open=false;},querySelector(){return null;},insertAdjacentHTML(_position,html){this.innerHTML+=html;},scrollIntoView(){this.scrolls++;}}));return nodes.get(selector);};
   const nav=['live','library','champions','stats','synergy','compare'].map(tab=>({...node(`nav-${tab}`),dataset:{nav:tab}}));
   const location={hash};
   const context=vm.createContext({
     enrichData,recommend,getSynergy,getChampionTags,TAG_LABELS,getVersionInfo,replacePreservingFocus,getStaticAugmentStatistics,rankAugmentCandidates,
     createStatisticsView:()=>({html:()=>'<div class="statistics-fixture">英雄胜率</div>'}),
-    createLiveController:options=>{liveContext=options;return {isLoadingPreview:()=>loading,html:()=>`<div class="live-fixture">已确认 ${options.getOwned().length} 个海克斯 · ${options.getChampion()?.name}</div>`,manualChampion(){manualChanges++;}};},
-    createSessionSync:options=>{syncContext=options;return {publish(){},close(){}};},
+    createLiveController:controllerOptions=>{liveContext=controllerOptions;return {isLoadingPreview:()=>loading,html:()=>`<div class="live-fixture">已确认 ${controllerOptions.getOwned().length} 个海克斯 · ${controllerOptions.getChampion()?.name}</div>`,manualChampion(){manualChanges++;},confirmCandidate:options.confirmCandidate,resetSession:options.resetSession};},
+    createSessionSync:options=>{syncContext=options;return {publish(){},pull(){pulls++;},close(){}};},
     localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},
     sessionStorage:{getItem:()=>null},location,
     document:Object.assign(document,{title:'',querySelector:node,querySelectorAll:selector=>selector==='[data-nav]'?nav:selector==='dialog'?[node('#detail-dialog'),node('#picker-dialog')]:[],addEventListener:(name,callback)=>{if(name==='click')clicks.push(callback);if(name==='change')changes.push(callback);}}),
@@ -42,14 +42,17 @@ async function appHarness(hash='',options={}){
     change(id,value){changes.forEach(callback=>callback({target:{id,value}}));},
     navigate(tab){location.hash=`#${tab}`;hashListeners.forEach(callback=>callback());},
     click(action,extra={}){const event={preventDefault(){},target:{closest:()=>({dataset:{action,...extra}})}};clicks.forEach(callback=>callback(event));},
-    offers(ids){liveContext.onOffers(ids);},
+    offers(ids,meta){liveContext.onOffers(ids,meta);},
     expireOffers(){liveContext.onOffersExpired();},
     sync(value){syncContext.applyState(value);},
+    pendingConfirmed(){liveContext.onPendingConfirmed();},
+    sessionReset(){liveContext.onSessionReset();},
     refreshLive(){liveContext.renderLive();},
     stage(value){loading=value;liveContext.onStageChange();},
     get buildExpanded(){return liveContext.getBuildExpanded();},
     get selectedAugment(){return liveContext.getSelectedAugment();},
-    get manualChanges(){return manualChanges;}
+    get manualChanges(){return manualChanges;},
+    get pulls(){return pulls;}
   };
 }
 
@@ -137,6 +140,48 @@ test('recognized candidates preserve game order, never adopt themselves, and exp
   assert.doesNotMatch(app.html(),/live-offer-card/);
   assert.match(app.html(),/等待识别/);
   assert.equal(app.storage.has('hexguide-session'),false);
+});
+
+test('authoritative pending candidate adoption uses scoped confirmation before syncing ownership',async()=>{
+  const confirmed=[],app=await appHarness('#live',{confirmCandidate:(id,pendingId,scope)=>{confirmed.push({id,pendingId,...scope});return true;}}),ids=active.slice(0,3).map(a=>String(a.id));
+  app.offers(ids,{pendingId:'pending-round',gameId:'fixture-game',revision:12});
+  const buttons=app.html().match(/<button[^>]*data-action="adopt-candidate"[^>]*>/g)||[];
+  assert.equal(buttons.length,6,'both the game-order cards and the comparison result buttons can confirm');
+  for(const button of buttons){assert.match(button,/data-pending-id="pending-round"/);assert.match(button,/data-game-id="fixture-game"/);assert.match(button,/data-revision="12"/);}
+  app.click('adopt-candidate',{id:ids[1],pendingId:'pending-round',gameId:'fixture-game',revision:'12'});
+  assert.deepEqual(confirmed,[{id:ids[1],pendingId:'pending-round',gameId:'fixture-game',revision:12}]);
+  assert.match(app.html(),/已确认 0 个海克斯/,'a pending click does not submit a full local owned-array correction');
+  assert.equal(app.storage.has('hexguide-session'),false);
+  app.pendingConfirmed();assert.equal(app.pulls,1);
+  app.sync({owned:[ids[1]],route:'auto',gameId:'fixture-game'});
+  assert.equal(app.selectedAugment.id,ids[1]);
+  assert.equal(app.buildExpanded,true);
+});
+
+test('missing pending guards never fall through to a full local session correction',async()=>{
+  const app=await appHarness('#live',{confirmCandidate:()=>false}),ids=active.slice(0,3).map(a=>String(a.id));
+  app.offers(ids,{pendingId:'pending-round',gameId:'fixture-game',revision:12});
+  app.click('adopt-candidate',{id:ids[1]});
+  assert.match(app.html(),/已确认 0 个海克斯/);
+  assert.equal(app.storage.has('hexguide-session'),false);
+});
+
+test('an owned candidate still renders with the other two unresolved choices',async()=>{
+  const app=await appHarness('#live'),ids=active.slice(0,3).map(a=>String(a.id));
+  app.sync({owned:[ids[0]],route:'auto',gameId:'fixture-game'});
+  app.offers(ids,{pendingId:'overlap-round',gameId:'fixture-game',revision:13});
+  assert.equal((app.html().match(/live-offer-card/g)||[]).length,3);
+  assert.match(app.html(),/disabled>已在本局<\/button>/);
+  assert.match(app.html(),/已确认 1 个海克斯/);
+});
+
+test('empty local session reset still requests the explicit server reset operation',async()=>{
+  let resets=0;const app=await appHarness('#live',{resetSession:()=>{resets++;return true;}});
+  app.offers(active.slice(0,3).map(a=>String(a.id)),{pendingId:'unconfirmed',gameId:'fixture-game',revision:12});
+  app.click('reset-session');
+  assert.equal(resets,1);assert.equal(app.storage.has('hexguide-session'),false);
+  app.sessionReset();assert.equal(app.pulls,1);
+  assert.doesNotMatch(app.html(),/live-offer-card/);
 });
 
 test('reference-page champion switch remains manual and updates the shared home selection',async()=>{

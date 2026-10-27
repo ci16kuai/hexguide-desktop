@@ -109,7 +109,8 @@ test('life exports only a boolean and status; neither life nor roster gains play
   Object.assign(data.allPlayers[1],{respawnTimer:9,scores:{deaths:5},position:{x:100,y:200},puuid:'private fixture puuid'});
   const result = snapshot(data);
   assert.deepEqual(Object.keys(result.life).sort(),['isDead','status']);
-  assert.deepEqual(result.teams.allies.map(player => Object.keys(player).sort()),[['championId','championName','items','level']]);
+  assert.deepEqual(result.teams.allies.map(player => Object.keys(player).sort()),[['championId','championName','items','level','performance']]);
+  assert.deepEqual(result.teams.allies[0].performance,{kills:null,deaths:5,assists:null,creepScore:null});
   for (const forbidden of ['local#fixture','other#fixture','fixture name','puuid','respawnTimer','position','scores']) {
     assert.ok(!JSON.stringify(result).includes(forbidden),forbidden);
   }

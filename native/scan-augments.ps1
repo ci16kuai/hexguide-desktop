@@ -150,12 +150,37 @@ function Await-WinRT($Operation, [Type]$ResultType) {
     return $task.Result
 }
 
+function New-OcrSoftwareBitmap($Bitmap) {
+    # Windows OCR consumes BGRA pixels directly. PNG encoding, an asynchronous
+    # stream write, and decoding only round-tripped these same in-memory pixels.
+    # Match WinRT's premultiplied BGRA layout and copy just the packed rows;
+    # BitmapData.Stride may include padding or run backwards for another bitmap.
+    $width = $Bitmap.Width
+    $height = $Bitmap.Height
+    $rowBytes = [int]($width * 4)
+    $bytes = New-Object byte[] ($rowBytes * $height)
+    $rectangle = New-Object System.Drawing.Rectangle(0, 0, $width, $height)
+    $pixels = $Bitmap.LockBits($rectangle, [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppPArgb)
+    try {
+        if ($pixels.Stride -eq $rowBytes) {
+            [Runtime.InteropServices.Marshal]::Copy($pixels.Scan0, $bytes, 0, $bytes.Length)
+        } else {
+            for ($row = 0; $row -lt $height; $row++) {
+                [Runtime.InteropServices.Marshal]::Copy([IntPtr]::Add($pixels.Scan0, $row * $pixels.Stride), $bytes, $row * $rowBytes, $rowBytes)
+            }
+        }
+    } finally { $Bitmap.UnlockBits($pixels) }
+    $buffer = [Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions]::AsBuffer($bytes)
+    # This deep copy owns its pixels after the lock and local byte buffer leave
+    # scope. It must be disposed by the caller after the awaited OCR operation.
+    return [Windows.Graphics.Imaging.SoftwareBitmap]::CreateCopyFromBuffer($buffer,
+        [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, $width, $height,
+        [Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied)
+}
+
 function Invoke-ImageRegionOcr($Image, $Region, [double]$RequestedScale, [string]$Pass, [bool]$Contrast = $false) {
     $recognitionClock = [Diagnostics.Stopwatch]::StartNew()
     $regionBitmap = $null
-    $regionMemory = $null
-    $regionStream = $null
-    $regionWriter = $null
     $regionSoftwareBitmap = $null
     try {
         $scale = [Math]::Min($RequestedScale, $script:maxDimension / [double][Math]::Max($Region.width, $Region.height))
@@ -164,7 +189,7 @@ function Invoke-ImageRegionOcr($Image, $Region, [double]$RequestedScale, [string
         # Use the actual rounded horizontal/vertical scale for the inverse map.
         $scaleX = $targetWidth / [double]$Region.width
         $scaleY = $targetHeight / [double]$Region.height
-        $regionBitmap = New-Object System.Drawing.Bitmap($targetWidth, $targetHeight, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb))
+        $regionBitmap = New-Object System.Drawing.Bitmap($targetWidth, $targetHeight, ([System.Drawing.Imaging.PixelFormat]::Format32bppPArgb))
         $resize = [System.Drawing.Graphics]::FromImage($regionBitmap)
         $attributes = $null
         try {
@@ -190,19 +215,8 @@ function Invoke-ImageRegionOcr($Image, $Region, [double]$RequestedScale, [string
             if ($attributes) { $attributes.Dispose() }
             $resize.Dispose()
         }
-        $script:stage = 'encode'
-        $regionMemory = New-Object System.IO.MemoryStream
-        $regionBitmap.Save($regionMemory, [System.Drawing.Imaging.ImageFormat]::Png)
-        $script:stage = 'stream-write'
-        $regionStream = New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
-        $regionWriter = New-Object Windows.Storage.Streams.DataWriter($regionStream)
-        $regionWriter.WriteBytes($regionMemory.ToArray())
-        $null = Await-WinRT ($regionWriter.StoreAsync()) ([uint32])
-        $regionStream.Seek(0)
-        $script:stage = 'decode'
-        $decoder = Await-WinRT ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($regionStream)) ([Windows.Graphics.Imaging.BitmapDecoder])
         $script:stage = 'software-bitmap'
-        $regionSoftwareBitmap = Await-WinRT ($decoder.GetSoftwareBitmapAsync([Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, [Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied)) ([Windows.Graphics.Imaging.SoftwareBitmap])
+        $regionSoftwareBitmap = New-OcrSoftwareBitmap $regionBitmap
         $script:stage = 'recognize'
         $result = Await-WinRT ($script:engine.RecognizeAsync($regionSoftwareBitmap)) ([Windows.Media.Ocr.OcrResult])
         foreach ($line in $result.Lines) {
@@ -233,9 +247,6 @@ function Invoke-ImageRegionOcr($Image, $Region, [double]$RequestedScale, [string
     } finally {
         $script:recognitionMs += $recognitionClock.ElapsedMilliseconds
         if ($regionSoftwareBitmap) { $regionSoftwareBitmap.Dispose() }
-        if ($regionWriter) { $regionWriter.Dispose() }
-        if ($regionStream) { $regionStream.Dispose() }
-        if ($regionMemory) { $regionMemory.Dispose() }
         if ($regionBitmap) { $regionBitmap.Dispose() }
     }
 }
@@ -265,10 +276,7 @@ public static class HexGuideGameWindow {
     Add-Type -AssemblyName System.Runtime.WindowsRuntime
     Add-Type -AssemblyName System.Drawing
     $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
-    $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime]
     $null = [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Foundation, ContentType=WindowsRuntime]
-    $null = [Windows.Storage.Streams.InMemoryRandomAccessStream, Windows.Storage.Streams, ContentType=WindowsRuntime]
-    $null = [Windows.Storage.Streams.DataWriter, Windows.Storage.Streams, ContentType=WindowsRuntime]
     $script:stage = 'ocr-language'
     $script:languages = @([Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages)
     # Favor Chinese when installed; all returned proposals still require the player's confirmation.

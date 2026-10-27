@@ -14,7 +14,6 @@ export const DEFAULT_PANEL_SELECTION_POLICY = Object.freeze({
   minimumFrameSpacingMs:100,
   minimumStableDurationMs:250,
   maximumFrameGapMs:2000,
-  closeUsageFraction:0.10,
 });
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -24,7 +23,6 @@ const integer = (value, min = 0, max = Number.MAX_SAFE_INTEGER) => Number.isSafe
 const string = (value, max = 100) => typeof value === 'string' && value.length > 0 && value.length <= max;
 const token = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
 const gameId = value => value === null || typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(value);
-const rate = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 const identifier = (value, max = 100) => string(value,max) && /^[A-Za-z0-9_./:-]+$/.test(value);
 const validIds = ids => Array.isArray(ids) && ids.length === 3 && Array.from(ids).every(id => identifier(id)) && new Set(ids).size === 3;
 const same = (left, right) => left.length === right.length && left.every((value,index) => value === right[index]);
@@ -40,8 +38,6 @@ function policyFor(input) {
     minimumFrameSpacingMs:checkedInteger(value.minimumFrameSpacingMs,defaults.minimumFrameSpacingMs,50,500),
     minimumStableDurationMs:checkedInteger(value.minimumStableDurationMs,defaults.minimumStableDurationMs,100,2000),
     maximumFrameGapMs:checkedInteger(value.maximumFrameGapMs,defaults.maximumFrameGapMs,500,2000),
-    closeUsageFraction:typeof value.closeUsageFraction === 'number' && Number.isFinite(value.closeUsageFraction)
-      && value.closeUsageFraction >= 0 && value.closeUsageFraction <= .25 ? value.closeUsageFraction : defaults.closeUsageFraction,
   };
 }
 
@@ -55,7 +51,8 @@ function contextValid(context) {
     && Array.isArray(context.owned) && context.owned.length <= 6
     && Array.from(context.owned).every(augment => record(augment) && identifier(augment.id) && identifier(augment.iconKey,400))
     && new Set(context.owned.map(augment => augment.id)).size === context.owned.length
-    && !context.ids.some(id => context.owned.some(augment => augment.id === id));
+    && (!('pendingUntilConfirmed' in context) || context.pendingUntilConfirmed === true && integer(context.evidenceNotBefore))
+    && (context.pendingUntilConfirmed === true || !context.ids.some(id => context.owned.some(augment => augment.id === id)));
 }
 
 const slotStates = new Set(['empty','excluded','unmatched','owned','candidate','ambiguous']);
@@ -95,19 +92,9 @@ const summary = (status, reason, context, details = {}) => ({
   ...details,
 });
 
-function statisticFor(offer, context) {
-  const statistic = offer.statistic;
-  // Do not use all-champion popularity, another mode or an old patch to guess
-  // this champion's choice. These values originate from the server repository.
-  if (!record(statistic) || !string(context.patch,30) || statistic.championId !== context.championId || statistic.mode !== 'mayhem'
-    || !integer(statistic.sampleCount,1,1000000000) || !string(statistic.patch,30)
-    || !string(statistic.source,200) || statistic.patch !== context.patch) return null;
-  return {sampleCount:statistic.sampleCount,winRate:rate(statistic.winRate) ? statistic.winRate : null};
-}
-
 /**
  * Success is either `matched` (one current candidate) or `inferred` (a proven
- * current-offer glyph collision resolved by this champion's observed usage).
+ * current-offer glyph collision resolved by the shared recommendation policy).
  * `pending` never changes the session; malformed/stale/scoped-out evidence is
  * `rejected`. No before-panel baseline or user-click lease is required.
  */
@@ -120,11 +107,15 @@ export function validatePanelEvidence(proof, context, suppliedPolicy) {
     || proof.offerToken !== context.offerToken || !same(proof.ids,context.ids)) return summary('rejected','panel-context-mismatch',context);
   const glyphs = panelGlyphIdentity(proof.glyphs,context.offers,context.owned);
   if (!glyphs) return summary('rejected','panel-glyph-identity-invalid',context);
-  if (context.offeredAt > context.now + policy.futureToleranceMs || context.now - context.offeredAt > policy.maxOfferAgeMs)
+  if (context.offeredAt > context.now + policy.futureToleranceMs
+    || context.pendingUntilConfirmed !== true && context.now - context.offeredAt > policy.maxOfferAgeMs
+    || context.pendingUntilConfirmed === true && context.evidenceNotBefore > context.now + policy.futureToleranceMs)
     return summary('rejected','panel-offer-expired',context);
 
   const frames = proof.frames;
   if (frames.some(frame => frame.capturedAt < context.offeredAt)) return summary('rejected','panel-capture-before-offer',context);
+  if (context.pendingUntilConfirmed === true && frames.some(frame => frame.capturedAt < context.evidenceNotBefore))
+    return summary('rejected','panel-capture-before-scope',context);
   if (frames.some(frame => context.now - frame.capturedAt > policy.maxCaptureAgeMs)) return summary('rejected','panel-capture-stale',context);
   if (frames.some(frame => frame.capturedAt > context.now + policy.futureToleranceMs)) return summary('rejected','panel-capture-future',context);
   if (new Set(frames.map(frame => frame.captureId)).size !== frames.length)
@@ -165,23 +156,19 @@ export function validatePanelEvidence(proof, context, suppliedPolicy) {
   const [,group] = newGroups[0];
   const evidence = {kind:'panel-icon-match',surface:'hud-six-slot',frameCount:frames.length,
     matchedSlots:[...group.slots],candidateIndices:[...group.indices],resolution:'icon'};
-  let selectedIndex = group.indices[0], inferred = false;
-  if (group.indices.length > 1) {
-    const candidates = group.indices.map(index => ({index,statistic:statisticFor(context.offers[index],context)}));
-    if (candidates.some(candidate => !candidate.statistic)) return summary('pending','panel-statistics-unavailable',context);
-    // Anchoring to the largest sample avoids a non-transitive pairwise "close"
-    // comparator and makes the result independent of physical card ordering.
-    const maximum = Math.max(...candidates.map(candidate => candidate.statistic.sampleCount));
-    const close = candidates.filter(candidate => candidate.statistic.sampleCount >= maximum * (1-policy.closeUsageFraction));
-    let winner = close[0];
-    if (close.length > 1) {
-      if (close.some(candidate => candidate.statistic.winRate === null)) return summary('pending','panel-statistics-unavailable',context);
-      const highest = Math.max(...close.map(candidate => candidate.statistic.winRate));
-      const leaders = close.filter(candidate => candidate.statistic.winRate === highest);
-      if (leaders.length !== 1) return summary('pending','panel-statistics-tied',context);
-      winner = leaders[0];
-    }
-    selectedIndex = winner.index; inferred = true; evidence.resolution = 'usage-then-win-rate';
+  const selectable = group.indices.filter(index => !context.owned.some(augment => augment.id === context.ids[index]));
+  if (!selectable.length) return summary('pending','panel-no-new-match',context);
+  let selectedIndex = selectable[0], inferred = false;
+  if (selectable.length > 1) {
+    // Ranks come only from the server's current champion/owned/route policy,
+    // shared with the three-card sidebar. They are never supplied in proof.
+    const candidates = selectable.map(index => ({index,rank:context.offers[index].recommendationRank}))
+      .filter(candidate => integer(candidate.rank,1,3));
+    if (!candidates.length) return summary('pending','panel-recommendation-unavailable',context);
+    const best = Math.min(...candidates.map(candidate => candidate.rank));
+    const leaders = candidates.filter(candidate => candidate.rank === best);
+    if (leaders.length !== 1) return summary('pending','panel-recommendation-tied',context);
+    selectedIndex = leaders[0].index; inferred = true; evidence.resolution = 'recommendation-rank';
   }
   return summary(inferred ? 'inferred' : 'matched',inferred ? 'panel-inferred' : 'panel-matched',context,{
     id:context.ids[selectedIndex],selectedIndex,inferred,observedAt:frames.at(-1).capturedAt,evidence,

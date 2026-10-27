@@ -1,6 +1,7 @@
 import {enrichData, getChampionTags, getSynergy, recommend, TAG_LABELS} from './engine.js';
 import {selectBuildEvidence, mixBuildItemEvidence} from './build-evidence.js';
 import {rankAugmentCandidates} from './recommendation-policy.js';
+import {questRewardRule, buildItemQuestPlans, questInventoryIds} from './item-acquisition.js';
 
 const unique = values => [...new Set(values.filter(Boolean))];
 const list = value => Array.isArray(value) ? value : [];
@@ -293,6 +294,7 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
 
   const eligibleItem = id => {
     const item = catalog.get(String(id));
+    if (questRewardRule(id)) return null;
     if (!item || item.inStore === false || item.gold?.purchasable !== true) return null;
     if (item.requiredChampion && item.requiredChampion.toLowerCase() !== String(champion.id).toLowerCase()) return null;
     // Static catalog map flags cannot prove the current Mayhem shop; keep a
@@ -389,7 +391,13 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
       scope:buildEvidence.scope,conditionAugmentId:buildEvidence.conditionAugmentId}})) : [];
   // Missing conditional samples remain explicit; static mechanism options are
   // never relabelled as a hero+augment observed build.
-  const buildItems = [...targetedItems.slice(0, 4), ...(statisticalItems.length ? [...coreItems,...statisticalItems] : choices.flatMap(choice => choice.items))].filter(item => {
+  const questPlans = buildItemQuestPlans({owned:definitions,inventoryIds:questInventoryIds(live,champion.id,now),catalog});
+  const questCards = questPlans.filter(quest => quest.status !== 'earned').map(quest => ({id:quest.rewardId,
+    name:quest.rewardName,icon:quest.rewardIcon,effect:'任务奖励，不能直接购买。',
+    reason:`${quest.routeText}。${quest.progressText}`,evidenceKind:'confirmed-quest',sourceUrl:itemsCatalog?.meta?.sourceUrl || ''}));
+  const questIngredients = questPlans.flatMap(quest => quest.ingredients.filter(item => !item.owned)
+    .map(item => itemCard(item.id,`完成「${quest.rewardName}」任务所需的前置成装。`))).filter(Boolean);
+  const buildItems = [...questCards,...questIngredients,...targetedItems.slice(0, 4), ...(statisticalItems.length ? [...coreItems,...statisticalItems] : choices.flatMap(choice => choice.items))].filter(item => {
     if (!item || seenItems.has(item.id)) return false;
     seenItems.add(item.id); return true;
   }).slice(0, 6);
@@ -421,7 +429,7 @@ export function buildLivePlan({champion, owned = [], route = 'auto', live = {}, 
     stage: isLoading ? 'loading-preview' : hasLive ? 'live' : 'reference',
     title: isLoading ? `${championName}的开局预设` : `${championName}的可选玩法`,
     summary: isLoading ? '已结合本局双方阵容生成开局出装；尚未读取实战装备与面板，进入游戏后继续更新。' : `${hasLive ? '已结合当前英雄、自身面板与装备' : '当前基于英雄静态机制'}${definitions.length ? `，以及 ${definitions.length} 个已确认海克斯` : ''}${enemyContext.status === 'detected' ? '；已加入可见敌方阵容与装备条件' : ''}。以下路线供你比较，随状态和确认列表更新。`,
-    choices, context, buildItems, nextAugments, enemyContext, allyContext,
+    choices, context, buildItems, nextAugments, enemyContext, allyContext, ...(questPlans.length ? {questPlans} : {}),
     statistics:{...mixed, items:undefined, status:buildEvidence.status, source:buildEvidence.source,
       patch:buildEvidence.patch, dataDate:buildEvidence.dataDate || '', cacheStatus:buildEvidence.cacheStatus || buildEvidence.status,
       sourceUrl:buildEvidence.sourceUrl || '', reference:referenceMetadata,

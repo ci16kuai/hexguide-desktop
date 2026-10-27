@@ -90,6 +90,49 @@ test('native Chinese OCR reads all three generated headings and maps title crops
   }
 });
 
+test('direct BGRA transfer matches the former PNG pixels and owns packed, padded and negative-stride input',
+  {skip:process.platform !== 'win32',timeout:10000},async()=>{
+    const bufferFixture=fileURLToPath(new URL('./fixtures/native-ocr-buffer.ps1',import.meta.url));
+    const {stdout}=await execute('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',bufferFixture,'-Source',source],
+      {windowsHide:true,timeout:8000,maxBuffer:65536,encoding:'utf8'});
+    const report=JSON.parse(stdout.replace(/^\uFEFF/,'').trim());
+    assert.deepEqual(report.results.map(result=>result.kind),['packed','padded','negative']);
+    for(const result of report.results){
+      assert.equal(result.samePixels,true,`${result.kind} rows must preserve every BGRA channel`);
+      assert.equal(result.survivesSourceDisposal,true);
+      assert.equal(result.width,17);assert.equal(result.height,9);
+      assert.equal(result.format,'Bgra8');assert.equal(result.alpha,'Premultiplied');
+    }
+  });
+
+for(const [label,width,height,wrapped,maximumDimension] of [
+  ['720p',1280,720,false,0],['ultrawide rounding',3441,1440,false,0],
+  ['two-row title',2560,1440,true,0],['bounded image dimension',2560,1440,false,1100],
+]) test(`direct BGRA OCR preserves original title geometry for ${label}`,{skip:process.platform!=='win32',timeout:15000},async t=>{
+  const {stdout}=await execute('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fixture,'-Source',source,
+    '-Width',String(width),'-Height',String(height),...(wrapped?['-WrappedTitle']:[]),...(maximumDimension?['-MaximumDimension',String(maximumDimension)]:[])],
+    {windowsHide:true,timeout:13000,maxBuffer:1024*1024,encoding:'utf8'});
+  const raw=JSON.parse(stdout.replace(/^\uFEFF/,'').trim());
+  if(raw.unavailable){t.skip(raw.reason);return;}
+  const data=JSON.parse(await readFile(new URL('../dist/data.json',import.meta.url),'utf8'));
+  assert.equal(raw.selectionCapture.width,width);assert.equal(raw.selectionCapture.height,height);
+  for(const pass of ['card-titles-color','card-titles-contrast']){
+    const lines=raw.lines.filter(line=>line.pass===pass);
+    const result=matchOcrProposals({...raw,lines},data.augments);
+    assert.deepEqual(result.proposals.map(item=>item.name),['升级：耀光',wrapped?'灵魂虹吸':'贪欲束缚','急急小子']);
+    assert.equal(result.selectionMetadataStatus,'accepted');
+    assert.equal(new Set(lines.map(line=>line.column)).size,3);
+    for(const line of lines){
+      assert.equal(line.frameId,raw.frameId);
+      assert.ok(line.y>=height*.38&&line.y+line.height<=height*.46,'OCR coordinates must map to the original frame');
+      const anchor=raw.identityAnchors.anchors[line.identityAnchorIndex];
+      assert.equal(anchor.column,line.column);assert.equal(anchor.pass,pass);
+      assert.ok(anchor.box.x>=line.crop.x&&anchor.box.x+anchor.box.width<=line.crop.x+line.crop.width);
+    }
+    if(wrapped) assert.equal(result.selectionCapture.identityAnchors.cards[1].anchors.length,2);
+  }
+});
+
 for(const [acceptStage,expectedPasses,expectedStages] of [
   ['color',3,['color']],['contrast',6,['color','contrast']],[null,7,['color','contrast']],
 ]) test(`generated native staging ${acceptStage ? `accepts ${acceptStage}` : 'continues to full fallback'} with ${expectedPasses} passes`,{skip:process.platform!=='win32',timeout:20000},async t=>{

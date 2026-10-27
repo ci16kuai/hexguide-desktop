@@ -45,7 +45,7 @@ test('shared selections are validated and persist only assistant IDs and route',
   assert.deepEqual(saved.owned,[ids[0]]);
   assert.equal(saved.gameId,'123');
   const disk = JSON.parse(await readFile(path.join(directory,'session.json'),'utf8'));
-  assert.deepEqual(Object.keys(disk).sort(),['gameId','owned','revision','route','selectionSources']);
+  assert.deepEqual(Object.keys(disk).sort(),['gameId','owned','pendingOffers','revision','route','selectionSources']);
   assert.deepEqual(Object.keys(disk.selectionSources),['manualBarrier']);
   assert.equal(typeof disk.selectionSources.manualBarrier,'boolean');
   assert.ok(!JSON.stringify(disk).includes('Do not trust remote name'));
@@ -119,7 +119,7 @@ test('confirmed state survives reconnects but clears on new game ID, end phase, 
   assert.deepEqual(sidebar.getSession().owned,[],'reconnect with no clock does not discard the last known game clock');
 });
 
-test('OCR candidates are not confirmed selections; empty frames retain three cards only for 60 seconds', async () => {
+test('OCR candidates are not confirmed selections; empty frames retain unanswered three cards beyond 60 seconds', async () => {
   let result = recognized();
   const {sidebar,advance} = setup({scanner:async () => result});
   const scanned = await sidebar.scan();
@@ -138,8 +138,8 @@ test('OCR candidates are not confirmed selections; empty frames retain three car
   assert.deepEqual(sidebar.getModel().offers,first.offers);
   assert.equal(sidebar.getModel().ocr.observedAt,first.ocr.observedAt,'empty frames never extend recognized frame lifetime');
   advance(30001);
-  assert.deepEqual(sidebar.getModel().offers,[]);
-  assert.deepEqual(sidebar.getModel().ocr.proposals,[]);
+  assert.deepEqual(sidebar.getModel().offers,first.offers);
+  assert.deepEqual(sidebar.getModel().ocr.proposals.map(offer => offer.id),ids);
 });
 
 test('mixed-quality offers and confirmed augments retain their own catalog rarity independent of rank', async () => {

@@ -53,12 +53,16 @@ test('lifecycle changes on first death and respawn, independent of pacing and re
   const observe = (ms,patch = {}) => {now += ms; live = {...live,...patch,observedAt:new Date(now).toISOString()}; return schedule.decision({live,gameEpoch:7});};
   const opening = observe(0), lifecycle = schedule.lifecycle;
   assert.equal(observe(60000).mode,'follow-up'); assert.equal(schedule.lifecycle,lifecycle);
-  observe(1,{life:{status:'detected',isDead:true}});
+  const death = observe(1,{life:{status:'detected',isDead:true}});
   const deadLifecycle = schedule.lifecycle; assert.ok(deadLifecycle > lifecycle);
-  assert.equal(schedule.windowId,opening.windowId,'death revokes capture ownership before a new window exists');
-  for (let n=0;n<3;n++) {assert.equal(observe(1000).mode,'dead'); assert.equal(schedule.lifecycle,deadLifecycle);}
-  schedule.forgetLife(); assert.equal(schedule.lifecycle,deadLifecycle,'focus loss is not a death or a new choice');
-  observe(1,{life:{status:'unavailable',isDead:null}}); assert.equal(schedule.lifecycle,deadLifecycle);
+  assert.notEqual(death.windowId,opening.windowId); assert.equal(death.trigger,'death');
+  for (let n=0;n<3;n++) {assert.equal(observe(1000).mode,'window'); assert.equal(schedule.lifecycle,deadLifecycle);}
+  const offerCycle = schedule.offerCycle;
+  schedule.forgetLife(); const lostLifecycle = schedule.lifecycle;
+  assert.ok(lostLifecycle > deadLifecycle,'scope loss revokes captures without creating a new choice');
+  assert.equal(schedule.offerCycle,offerCycle); assert.equal(schedule.windowId,death.windowId);
+  assert.equal(observe(1,{life:{status:'unavailable',isDead:null}}).mode,'unknown');
+  assert.equal(schedule.lifecycle,lostLifecycle);
   observe(1,{life:{status:'detected',isDead:true}}); const restoredDeath = schedule.lifecycle;
   const respawn = observe(1,{life:{status:'detected',isDead:false}});
   assert.ok(schedule.lifecycle > restoredDeath); assert.notEqual(respawn.windowId,opening.windowId);
@@ -71,12 +75,15 @@ test('verified death immediately revokes old panel/click proofs and same-ID resp
   h.advance(400); const oldProof = proof(h,old), cycle = h.model().ocr.schedule.windowId;
   const revision = h.model().sessionRevision, epoch = h.model().gameEpoch;
   h.advance(1000,{life:{status:'detected',isDead:true}});
-  assert.equal(h.model().panelSelection.status,'waiting'); assert.deepEqual(h.model().offers,[]);
+  assert.equal(h.model().panelSelection.status,'watching'); assert.deepEqual(h.model().offers.map(offer => offer.id),ids);
+  assert.notEqual(h.model().panelSelection.offerToken,old.offerToken);
   await assert.rejects(h.sidebar.observePanelEvidence(oldProof),SessionConflictError);
   h.advance(1000,{life:{status:'detected',isDead:false}});
   const respawn = h.model(); assert.notEqual(respawn.ocr.schedule.windowId,cycle);
   assert.equal(respawn.sessionRevision,revision); assert.equal(respawn.gameEpoch,epoch);
-  assert.equal(respawn.panelSelection.status,'waiting');
+  assert.equal(respawn.panelSelection.status,'watching');
+  assert.notEqual(respawn.panelSelection.offerToken,old.offerToken);
+  assert.equal(respawn.panelSelection.offeredAt,old.offeredAt,'respawn preserves original capture time');
   await assert.rejects(h.sidebar.observeSelectionEvidence({provider:'screen',offerToken:click.offerToken,
     gameId:click.gameId,gameEpoch:click.gameEpoch,revision:click.revision,ids:click.ids,selectedIndex:0,
     capturedAt:click.capturedAt,clickedAt:click.capturedAt,observedAt:h.time(),
@@ -102,19 +109,21 @@ test('multiple death/respawn cycles revoke every older token even when all three
   assert.equal(new Set(previous.map(value => value.offerToken)).size,3); assert.deepEqual(h.model().owned,[]);
 });
 
-test('unknown screen/focus evidence preserves the bounded panel lease, while a known mode exit revokes it', async t => {
+test('explicit unknown screen scope retains unanswered offers while revoking capture and panel proof', async t => {
   const h = fixture(); t.after(() => h.sidebar.stop()); const current = await offer(h);
   const lifecycle = h.sidebar.scanSchedule.lifecycle;
   h.advance(500,{life:{status:'unavailable',isDead:null}});
   h.sidebar.observeScreenLife({provider:'screen',gameId:current.gameId,gameEpoch:current.gameEpoch,observedAt:h.time(),
     state:'unknown',code:'unavailable',stableFrames:0,countdownSeconds:null});
-  assert.equal(h.sidebar.scanSchedule.lifecycle,lifecycle);
-  assert.equal(h.model().panelSelection.offerToken,current.offerToken);
+  assert.ok(h.sidebar.scanSchedule.lifecycle > lifecycle);
+  const recovered = h.model().panelSelection;
+  assert.equal(recovered.status,'watching'); assert.notEqual(recovered.offerToken,current.offerToken);
+  await assert.rejects(h.sidebar.observePanelEvidence(proof(h,current)),SessionConflictError);
   h.advance(60000); const expiredOffers = h.model();
-  assert.deepEqual(expiredOffers.offers,[]); assert.equal(expiredOffers.panelSelection.offerToken,current.offerToken);
+  assert.deepEqual(expiredOffers.offers.map(offer => offer.id),ids); assert.equal(expiredOffers.panelSelection.offerToken,recovered.offerToken);
   h.advance(1,{mode:{known:true,isMayhem:false}}); assert.equal(h.model().panelSelection.status,'waiting');
   const lostLifecycle = h.sidebar.scanSchedule.lifecycle; assert.ok(lostLifecycle > lifecycle);
-  h.advance(1,{mode:{known:true,isMayhem:true}}); assert.equal(h.model().panelSelection.status,'waiting');
+  h.advance(1,{mode:{known:true,isMayhem:true}}); assert.equal(h.model().panelSelection.status,'watching');
   await assert.rejects(h.sidebar.observePanelEvidence(proof(h,current)),SessionConflictError);
   assert.deepEqual(h.model().owned,[]); assert.equal(h.model().ocr.schedule.mode,'idle');
 });
@@ -251,13 +260,14 @@ for (const firstAutomatic of [false,true]) for (const secondAutomatic of [false,
 }
 
 for (const boundary of ['disconnected','inactive-stage','stale-snapshot']) {
-  test(`existing panel, click and manual offer leases cannot revive after observed ${boundary} loss`, async t => {
+  test(`unanswered offers survive ${boundary} loss while old panel and click tokens stay revoked`, async t => {
     const h = fixture(); t.after(() => h.sidebar.stop()); const old = await offer(h), click = h.sidebar.getSelectionObservation();
     h.advance(400); const panel = proof(h,old), lifecycle = h.sidebar.scanSchedule.lifecycle, windowId = h.model().ocr.schedule.windowId;
     loseCaptureEligibility(h,boundary); const recovered = recoverCaptureEligibility(h);
     assert.equal(h.sidebar.scanSchedule.lifecycle,lifecycle); assert.equal(recovered.ocr.schedule.windowId,windowId);
-    assert.equal(recovered.panelSelection.status,'waiting'); assert.equal(recovered.selection.status,'waiting');
-    assert.equal(recovered.selectionResult.status,'waiting'); assert.deepEqual(recovered.offers,[]);
+    assert.equal(recovered.panelSelection.status,'watching'); assert.notEqual(recovered.panelSelection.offerToken,old.offerToken);
+    assert.equal(recovered.selection.status,'waiting');
+    assert.equal(recovered.selectionResult.status,'waiting'); assert.deepEqual(recovered.offers.map(offer => offer.id),ids);
     await assert.rejects(h.sidebar.observePanelEvidence(panel),SessionConflictError);
     await assert.rejects(h.sidebar.observeSelectionEvidence(clickProof(h,click)),SessionConflictError);
     await assert.rejects(h.sidebar.confirmOffer({id:ids[0],gameId:old.gameId,revision:old.revision,offerToken:old.offerToken}),SessionConflictError);
@@ -277,7 +287,7 @@ test('recovery cannot arm a new scan with a cached frame from before capture eli
   assert.equal(model.selection.status,'waiting'); assert.deepEqual(model.plan.ownedIds,[]);
 });
 
-test('a focus-only unknown life update does not revoke an otherwise eligible shared capture', async t => {
+test('an explicit unknown screen scope revokes a shared capture without discarding existing game context', async t => {
   let finish;
   const h = fixture({scanner:() => new Promise(resolve => {finish=resolve;})}); t.after(() => h.sidebar.stop());
   const capturedAt = h.time(), first = h.sidebar.scan(), scope = h.model();
@@ -286,7 +296,7 @@ test('a focus-only unknown life update does not revoke an otherwise eligible sha
   h.sidebar.observeScreenLife({provider:'screen',gameId:scope.gameId,gameEpoch:scope.gameEpoch,observedAt:h.time(),
     state:'unknown',code:'unavailable',stableFrames:0,countdownSeconds:null});
   const second = h.sidebar.scan({automatic:true}); finish(cards(capturedAt));
-  const results = await Promise.all([first,second]); assert.equal(results[0].status,'recognized'); assert.deepEqual(results[0],results[1]);
-  assert.equal(h.sidebar.scanSchedule.captureRevision,revision); assert.equal(h.sidebar.scanSchedule.lifecycle,lifecycle);
-  assert.equal(h.model().panelSelection.status,'watching');
+  const results = await Promise.all([first,second]); assert.equal(results[0].code,'scan-context-changed'); assert.deepEqual(results[0],results[1]);
+  assert.equal(h.sidebar.scanSchedule.captureRevision,revision); assert.ok(h.sidebar.scanSchedule.lifecycle > lifecycle);
+  assert.equal(h.model().panelSelection.status,'waiting'); assert.deepEqual(h.model().offers,[]);
 });

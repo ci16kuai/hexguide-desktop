@@ -35,6 +35,13 @@ test('matching desktop plan supplies authoritative equipment and source caption 
   assert.deepEqual(h.owned,[]);
 });
 
+test('task reward cards retain the acquisition route and pending reward explanation',async()=>{
+  const h=await harness({alterModel:m=>{m.plan.buildItems=[{id:'228002',name:'沃格勒特的巫师帽',effect:'任务奖励，不能直接购买。',
+    evidenceKind:'confirmed-quest',reason:'中娅沙漏 + 灭世者的死亡之帽 → 沃格勒特的巫师帽。前置已齐，等待游戏发放奖励。'}];}});
+  assert.match(h.html(),/前置已齐，等待游戏发放奖励/);
+  assert.match(h.html(),/任务奖励，不能直接购买/);
+});
+
 test('loading authoritative plan still displays only equipment and both rosters',async()=>{
   const h=await harness({stage:'loading'});
   const html=h.html();
@@ -126,8 +133,8 @@ test('statistical panel choices are visibly inferred only with matching session 
   h.setOwned(['chosen']);h.session({owned:['chosen']});
   h.model(m=>({...m,owned:[{id:'chosen',inferred:true}],plan:{...m.plan,ownedIds:['chosen']}}));
   await h.tick();
-  assert.match(h.html(),/推定已选（同图标统计）/);
-  assert.match(h.html(),/对局选择次数推定/);
+  assert.match(h.html(),/推定已选（同图标）/);
+  assert.match(h.html(),/此记录为助手推定/);
   h.session({revision:8});
-  assert.doesNotMatch(h.html(),/推定已选（同图标统计）/,'stale metadata cannot label another session');
+  assert.doesNotMatch(h.html(),/推定已选（同图标）/,'stale metadata cannot label another session');
 });

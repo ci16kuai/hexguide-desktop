@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $executable = [IO.Path]::GetFullPath($ExecutablePath)
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'Build the desktop executable first.' }
 $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($executable)
-if ([version]$version.FileVersion -lt [version]'1.12.1.0') { throw 'This executable does not support the isolated instance fixture mode.' }
+if ([version]$version.FileVersion -lt [version]'1.13.1.0') { throw 'This executable does not support the AppData redirection instance fixtures.' }
 if (-not $WorkPath) { $WorkPath = Join-Path 'H:\Chatgpt\work' ((Get-Date -Format 'yyyy-MM-dd') + '\hexguide-native-instance') }
 $work = [IO.Path]::GetFullPath($WorkPath)
 New-Item -ItemType Directory -Path $work -Force | Out-Null
@@ -38,5 +38,5 @@ try {
     if ($process.ExitCode -ne 0) { throw ('Instance fixtures failed: ' + $errors) }
 } finally { $process.Dispose() }
 $result = $output | ConvertFrom-Json
-if ($result.mode -ne 'offline-instance-no-ui' -or $result.liveGameVerified -ne $false -or $result.checks -lt 13) { throw 'Unexpected instance fixture contract.' }
+if ($result.mode -ne 'offline-instance-no-ui' -or $result.liveGameVerified -ne $false -or $result.checks -lt 22) { throw 'Unexpected instance fixture contract.' }
 $result | ConvertTo-Json -Compress

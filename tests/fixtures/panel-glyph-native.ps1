@@ -26,7 +26,7 @@ $output = Join-Path $Work 'panel-glyph-native.exe'
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $compilerArguments = @('/nologo', '/target:exe', '/platform:x64', '/optimize+', '/utf8output', '/codepage:65001', ('/out:' + $output), '/main:HexGuide.Desktop.PanelGlyphNativeFixture',
     '/reference:System.dll', '/reference:System.Core.dll', '/reference:System.Drawing.dll', '/reference:System.Windows.Forms.dll', '/reference:System.Web.Extensions.dll',
-    (Join-Path $Root 'native\OwnedPanelWatcher.cs'), (Join-Path $Root 'native\ScreenSelectionWatcher.cs'), (Join-Path $Root 'native\CardTitleIdentity.cs'),
+    (Join-Path $Root 'native\OwnedPanelWatcher.cs'), (Join-Path $Root 'native\ScreenSelectionWatcher.cs'), (Join-Path $Root 'native\EarlySelectionReplay.cs'), (Join-Path $Root 'native\RecognitionTrace.cs'), (Join-Path $Root 'native\CardTitleIdentity.cs'),
     $compatibilityPath, (Join-Path $Root 'tests\fixtures\panel-glyph-native.cs'))
 $buildOutput = & $compiler @compilerArguments 2>&1
 if ($LASTEXITCODE -ne 0) { throw ($buildOutput -join "`n") }

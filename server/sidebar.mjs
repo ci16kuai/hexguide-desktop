@@ -10,6 +10,8 @@ import {OcrScanSchedule} from './ocr-schedule.mjs';
 import {OcrScheduleDiagnostics} from './ocr-schedule-diagnostics.mjs';
 import {ScreenLifeSource, ScreenLifeValidationError, ScreenLifeConflictError} from './screen-life.mjs';
 import {validatePanelEvidence} from './panel-selection.mjs';
+import {PendingOffers} from './pending-offers.mjs';
+import {buildNextItemRecommendation, isPurchaseTarget} from './next-item.mjs';
 
 const ROUTES = new Set(['auto', 'attack', 'spell', 'tank', 'support', 'crit']);
 const END_PHASES = new Set(['ChampSelect', 'Lobby', 'Matchmaking', 'ReadyCheck', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
@@ -20,6 +22,14 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
 const METADATA_STATUSES = new Set(['accepted','missing','shape-invalid','title-outside-region','title-incomplete']);
 const FOREGROUND_SCAN_FAILURES = new Set(['game-not-foreground','foreground-changed']);
 const diagnosticAge = (time, now) => Number.isSafeInteger(time) && time >= 0 ? Math.min(60000, Math.max(0, Math.floor(now - time))) : null;
+const sameRectangle = (left, right) => ['x','y','width','height'].every(key => left[key] === right[key]);
+// Panel leases keep one validated reference across repeated OCR frames. Only
+// geometry changes replace it: new pixels, frame IDs or capture times must not
+// continually reset the native observer's independent-frame stability window.
+const samePanelCaptureGeometry = (left, right) => ['windowHandle','originX','originY','width','height'].every(key => left[key] === right[key])
+  && left.regions.every((region,index) => sameRectangle(region,right.regions[index]))
+  && left.identityAnchors.cards.every((card,index) => card.anchors.length === right.identityAnchors.cards[index].anchors.length
+    && card.anchors.every((anchor,position) => sameRectangle(anchor.box,right.identityAnchors.cards[index].anchors[position].box)));
 
 export class SessionValidationError extends Error {}
 export class SessionConflictError extends Error {}
@@ -45,9 +55,9 @@ function publicOcrDetails(raw) {
 
 /** Confirmed choices and public game observations, shared by both app windows. */
 export class BackgroundSidebar {
-  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, recommendationRepository, recommendationPolicy = {}, scanPolicy = {}, panelPolicy = {}, timers = {}, now = () => Date.now(), offerLifetime = 60000} = {}) {
+  constructor({collector, scanner, data = {}, itemsCatalog = {}, dataDirectory, appearance, recommendationRepository, recommendationPolicy = {}, scanPolicy = {}, panelPolicy = {}, timers = {}, now = () => Date.now()} = {}) {
     if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
-    Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, recommendationRepository, recommendationPolicy, panelPolicy, now, offerLifetime});
+    Object.assign(this, {collector, scanner, itemsCatalog, dataDirectory, appearance, recommendationRepository, recommendationPolicy, panelPolicy, now});
     this.scanSchedule = new OcrScanSchedule({now, policy:scanPolicy});
     this.lifeSource = new ScreenLifeSource({now});
     this.scanDiagnostics = new OcrScheduleDiagnostics({dataDirectory, now});
@@ -59,26 +69,30 @@ export class BackgroundSidebar {
     this.champions = new Map((data.champions || []).map(champion => [champion.id, champion]));
     this.augments = new Map(enrichData({augments:(data.augments || []).filter(eligible)}).augments.map(augment => [augment.id, augment]));
     this.session = {owned:[], route:'auto', gameId:null, revision:0};
+    this.purchaseTarget = null;
     this.snapshotBlocked = false;
     this.choiceSources = Object.create(null);
     this.panelLease = null;
+    this.panelPendingId = null;
     this.observedScanLifecycle = null;
     this.captureEligible = null;
     this.captureEligibleSince = 0;
+    this.candidateInvalidatedAt = -Infinity;
     this.panelStatus = {status:'waiting', reason:'waiting-offer'};
-    this.ocr = {enabled:true, status:'waiting', message:'自动识别已开启；等待开局或复活后的识别窗口。', observedAt:null};
-    this.offers = [];
-    this.offerToken = null;
+    this.ocr = {enabled:true, status:'waiting', message:'自动识别已开启；等待开局、死亡或复活后的识别窗口。', observedAt:null};
+    this.pendingOffers = new PendingOffers();
     this.consumedOfferKey = null;
     this.selectionObserver = new SelectionObserver({now});
     this.selectionAttempt = {metadataStatus:'not-scanned', scanCode:'not-scanned', capturedAt:null, completedAt:null};
-    this.offerTime = 0;
     this.generation = 0;
     this.gameEpoch = 0;
     this.persistTail = Promise.resolve();
     this.preferencesTail = Promise.resolve();
     this.stopped = true;
   }
+
+  get offers() { return (this.pendingOffers.latest?.ids || []).map(id => ({id,name:this.augments.get(id).name,confidence:'exact'})); }
+  get offerToken() { return this.pendingOffers.latest?.offerToken || null; }
 
   async load() {
     if (!this.dataDirectory) return this;
@@ -87,7 +101,12 @@ export class BackgroundSidebar {
       const saved = JSON.parse(await readFile(file, 'utf8'));
       const selected = this.validateSession({owned:saved.owned, route:saved.route});
       this.session = {...selected, gameId:gameId(saved.gameId), revision:Number.isSafeInteger(saved.revision) && saved.revision >= 0 ? saved.revision : 0};
+      const target = saved.purchaseTarget;
+      if (this.session.gameId && target && isPurchaseTarget(target.itemId,this.champions.get(target.championId),this.itemsCatalog)) {
+        this.purchaseTarget = {championId:target.championId,itemId:target.itemId};
+      }
       this.snapshotBlocked = saved.selectionSources?.manualBarrier === true;
+      if (this.session.gameId) this.pendingOffers.restore(saved.pendingOffers, id => this.augments.has(id), this.session.owned);
       const inferred = saved.selectionSources?.inferredChoices;
       if (Array.isArray(inferred) && inferred.length <= 12 && inferred.every(id => typeof id === 'string' && this.session.owned.includes(id))) {
         for (const id of inferred) this.choiceSources[id] = 'panel-statistical';
@@ -116,7 +135,7 @@ export class BackgroundSidebar {
     if (!this.dataDirectory) return Promise.resolve();
     // Serialize writes so a slower previous write cannot restore old selections.
     const inferredChoices = this.session.owned.filter(id => this.choiceSources[id] === 'panel-statistical');
-    const payload = JSON.stringify({...this.session, selectionSources:{manualBarrier:this.snapshotBlocked,
+    const payload = JSON.stringify({...this.session, ...(this.purchaseTarget ? {purchaseTarget:this.purchaseTarget} : {}), pendingOffers:this.pendingOffers.save(), selectionSources:{manualBarrier:this.snapshotBlocked,
       ...(inferredChoices.length ? {inferredChoices} : {})}}, null, 2) + '\n';
     this.persistTail = this.persistTail.catch(() => {}).then(async () => {
       await mkdir(this.dataDirectory, {recursive:true});
@@ -146,16 +165,17 @@ export class BackgroundSidebar {
 
   clearGame() {
     this.lifeSource.reset();
+    this.purchaseTarget = null;
     this.snapshotBlocked = false;
     this.choiceSources = Object.create(null);
     this.panelLease = null;
+    this.panelPendingId = null;
     this.panelStatus = {status:'waiting', reason:'waiting-offer'};
     this.session = {owned:[], route:'auto', gameId:null, revision:this.session.revision + 1};
-    this.offers = [];
-    this.offerToken = null;
+    this.pendingOffers.clear();
     this.consumedOfferKey = null;
     this.selectionObserver.invalidate();
-    this.offerTime = 0;
+    this.invalidateCandidateCapture();
     this.generation++;
     this.gameEpoch++;
     this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
@@ -177,7 +197,12 @@ export class BackgroundSidebar {
     const loadingStarted = live.stage === 'loading' && last?.stage !== 'loading';
     let changed = false;
     const boundary = Boolean(changedGame || leftGame || timeReset || loadingStarted);
-    if (boundary) { this.clearGame(); changed = true; }
+    // A restarted collector can briefly expose the same game's loading roster
+    // before its live endpoint recovers. Keep the saved purchase intent through
+    // that fallback while retaining the existing recognition reset boundary.
+    const recoveringTarget = loadingStarted && !changedGame && !leftGame && !timeReset && currentId && currentId === this.session.gameId
+      ? this.purchaseTarget : null;
+    if (boundary) { this.clearGame(); this.purchaseTarget = recoveringTarget; changed = true; }
     if (inGame && currentId && this.session.gameId !== currentId) {
       this.session.gameId = currentId;
       this.session.revision++;
@@ -213,13 +238,6 @@ export class BackgroundSidebar {
       void this.recommendationRepository.ensure(live.championId).catch(() => {});
     }
     if (live.phase !== 'InProgress' || live.stage === 'loading' || live.mode?.known && !live.mode.isMayhem) this.selectionObserver.invalidate();
-    if (this.offers.length && this.now() - this.offerTime >= this.offerLifetime) {
-      this.offers = [];
-      this.offerToken = null;
-      this.selectionObserver.invalidate();
-      this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
-      this.ocr.message = '上一轮识别已过期，等待当前三选一卡片；已确认海克斯仍保留。';
-    }
     return live;
   }
 
@@ -236,7 +254,7 @@ export class BackgroundSidebar {
   }
   captureContextEligible(live) {
     if (live.phase !== 'InProgress' || live.connection?.status !== 'connected'
-      || live.mode?.known && !live.mode.isMayhem || this.scanSchedule.lastLife?.isDead === true
+      || live.mode?.known && !live.mode.isMayhem
       || live.stage !== undefined && !['live','playing'].includes(live.stage)) return false;
     // Preserve legacy manual-only snapshots that predate the live-stage
     // contract. Current collector snapshots must be fresh and in order.
@@ -248,25 +266,34 @@ export class BackgroundSidebar {
     const eligible = this.captureContextEligible(live), previous = this.captureEligible;
     this.captureEligible = eligible;
     if (eligible === previous) return;
-    if (eligible) { this.captureEligibleSince = this.scanSchedule.time(); return; }
+    if (eligible) {
+      this.captureEligibleSince = this.scanSchedule.time();
+      if (this.ocr.enabled && this.offers.length) {
+        this.ocr.status = 'recognized';
+        this.ocr.message = '候选仍待确认；继续核对海克斯强化符文面板。';
+      }
+      return;
+    }
     if (previous !== true) return;
     this.scanSchedule.revokeCapture();
     this.revokeCaptureEvidence('暂时无法确认游戏状态；恢复后将重新识别。');
   }
   revokeCaptureEvidence(message) {
+    this.invalidateCandidateCapture();
     if (this.offers.length || this.panelLease || this.selectionObserver.observation || this.selectionObserver.resultLease
       || this.selectionObserver.fxContinuation) {
       this.selectionObserver.invalidate();
     }
     this.panelLease = null;
+    this.pendingOffers.revokeClickScopes();
     this.panelStatus = {status:'waiting', reason:'waiting-offer'};
-    this.offers = [];
-    this.offerToken = null;
-    this.offerTime = 0;
-    this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
+    this.ocr.status = this.ocr.enabled ? this.offers.length ? 'recognized' : 'waiting' : 'disabled';
     this.ocr.message = this.ocr.enabled ? message : '自动识别已暂停；已确认海克斯仍保留。';
     delete this.ocr.code;
     delete this.ocr.diagnostics;
+  }
+  invalidateCandidateCapture() {
+    this.candidateInvalidatedAt = Math.max(this.candidateInvalidatedAt, this.scanSchedule.time());
   }
   schedulingSnapshot(live) {
     const life = this.lifeSource.resolve(live, this.selectionContext());
@@ -291,50 +318,128 @@ export class BackgroundSidebar {
     if (value.state === 'unknown' && life.source === 'unavailable') this.scanSchedule.forgetLife();
     return this.getModel();
   }
-  selectionEligible(live) { return this.ocr.enabled && this.captureEligible !== false && live.phase === 'InProgress' && live.stage !== 'loading' && !(live.mode?.known && !live.mode.isMayhem); }
+  selectionEligible(live) {
+    return this.ocr.enabled && this.captureEligible !== false
+      && !this.scanSchedule.awaitingAliveAfterDeath && this.scanSchedule.lastLife?.isDead !== true
+      && live.phase === 'InProgress' && live.stage !== 'loading' && !(live.mode?.known && !live.mode.isMayhem);
+  }
+  panelContextEligible(live) {
+    // A visible owned-result panel proves a result independently of a click
+    // or life state. Keep its current game/surface fence, without inheriting
+    // the pointer observer's dead/unknown-after-death restrictions. A newer
+    // screen-life timestamp must not conceal a stale collector snapshot.
+    return this.ocr.enabled && this.captureEligible === true
+      && live.phase === 'InProgress' && live.stage === 'live' && live.connection?.status === 'connected'
+      && live.mode?.known === true && live.mode.isMayhem === true && this.champions.has(live.championId)
+      && gameId(live.gameId) !== null && gameId(live.gameId) === this.session.gameId
+      && this.scanSchedule.snapshotTime(live,this.scanSchedule.time()) !== null;
+  }
   getSelectionObservation() { const live = this.observe(); return this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live)); }
 
-  // The result panel is opened by the player after choosing. It therefore has
-  // its own bounded result scope, independent of the animation/click lease and
-  // the shorter lifetime of the visible three-card suggestions.
+  // Recognition delivery is independent of recommendation rendering. This
+  // snapshot can be polled quickly without rebuilding equipment/statistics.
+  recognitionSnapshot(live) {
+    const eligible = this.selectionEligible(live);
+    const selection = this.selectionObserver.get(this.selectionContext(), eligible);
+    const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), eligible);
+    return {version:'1.17.5', recognitionAt:this.now(), updatedAt:live.observedAt || new Date(this.now()).toISOString(), connection:live.connection,
+      phase:live.phase, stage:live.stage || 'waiting', gameId:this.session.gameId,
+      gameEpoch:this.gameEpoch, sessionRevision:this.session.revision,
+      mode:live.mode || {queueId:null,isMayhem:false,known:false},
+      life:this.lifeSource.resolve(live, this.selectionContext()),
+      ocr:{enabled:this.ocr.enabled}, selection, selectionResult,
+      panelSelection:this.getPanelSelection(live), selectionDiagnostics:this.selectionDiagnostics(selection),
+      screenObservationScope:{version:1,
+        eligible:Boolean(eligible && this.captureEligible && live.stage === 'live'
+          && live.connection?.status === 'connected' && live.mode?.known === true && live.mode.isMayhem === true
+          && this.champions.has(live.championId) && this.scanSchedule.lastLife?.isDead !== true
+          && (this.scanSchedule.awaitingConfirmation || this.pending || selection.status === 'armed')),
+        ...this.selectionContext(), lifecycle:this.scanSchedule.lifecycle,
+        captureRevision:this.scanSchedule.captureRevision,
+        notBefore:Math.max(0,this.scanSchedule.lifecycleStartedAt,this.captureEligibleSince,
+          Number.isFinite(this.selectionObserver.hardInvalidatedAt) ? this.selectionObserver.hardInvalidatedAt+1 : 0)}};
+  }
+
+  getRecognitionModel() { return this.recognitionSnapshot(this.observe()); }
+
+  // Logical unanswered rounds survive death and focus loss. Each return to a
+  // live capture scope creates a fresh panel token and independent-frame fence;
+  // the original descriptor is an anchor, never newly captured click proof.
   getPanelSelection(live) {
-    const lease = this.panelLease, current = this.selectionContext();
-    const active = lease && this.selectionEligible(live) && live.stage === 'live'
-      && lease.lifecycle === this.scanSchedule.lifecycle && this.scanSchedule.lastLife?.isDead !== true
-      && lease.captureRevision === this.scanSchedule.captureRevision
-      && live.connection?.status === 'connected' && live.mode?.known === true && live.mode.isMayhem === true
-      && this.champions.has(live.championId) && this.now() - lease.offeredAt <= 300000
-      && ['gameId','gameEpoch','revision'].every(key => lease[key] === current[key]);
-    if (!active) return {status:'waiting', reason:'waiting-offer'};
+    const current = this.selectionContext();
+    const active = this.panelContextEligible(live);
+    const candidates = this.pendingOffers.entries.filter(entry => entry.capture && entry.ids.some(id => !this.session.owned.includes(id)));
+    let pending = candidates.find(entry => entry.pendingId === this.panelPendingId) || candidates[0];
+    if (!active || !pending) {
+      this.panelLease = null;
+      return {status:'waiting', reason:!this.ocr.enabled ? 'panel-disabled' : !active ? 'panel-context-unavailable'
+        : this.pendingOffers.entries.length && !pending ? 'panel-anchor-unavailable' : 'waiting-offer'};
+    }
+    let lease = this.panelLease;
+    // A panel with no matching candidate does not produce a native submission.
+    // Give each descriptor a full capture dwell, then check another unanswered
+    // round even when no proof arrived. Polls within the dwell keep one token.
+    if (lease && candidates.length > 1 && this.now()-lease.evidenceNotBefore >= 4000) {
+      const index = candidates.findIndex(entry => entry.pendingId === lease.pendingId);
+      pending = candidates[(index+1)%candidates.length];
+      lease = null;
+    }
+    if (!lease || lease.pendingId !== pending.pendingId || lease.lifecycle !== this.scanSchedule.lifecycle
+      || lease.captureRevision !== this.scanSchedule.captureRevision
+      || !samePanelCaptureGeometry(lease.capture,pending.capture)
+      || !['gameId','gameEpoch','revision'].every(key => lease[key] === current[key])) {
+      lease = this.panelLease = {...current,pendingId:pending.pendingId,lifecycle:this.scanSchedule.lifecycle,
+        captureRevision:this.scanSchedule.captureRevision,offerToken:createOfferToken(),ids:[...pending.ids],
+        offeredAt:pending.capture.capturedAt,capture:pending.capture,evidenceNotBefore:this.now()};
+      this.panelStatus = {status:'watching',reason:'waiting-panel'};
+      this.panelPendingId = pending.pendingId;
+    }
     const icon = id => { const a = this.augments.get(id); return {id, icon:text(a?.icon, 400), rarity:text(a?.rarity, 40)}; };
     return {...current, status:'watching', reason:this.panelStatus.reason, offerToken:lease.offerToken,
+      pendingId:lease.pendingId,pendingUntilConfirmed:true,evidenceNotBefore:lease.evidenceNotBefore,
       ids:[...lease.ids], offeredAt:lease.offeredAt, capture:structuredClone(lease.capture),
       offers:lease.ids.map(icon), owned:this.session.owned.map(icon)};
+  }
+
+  advancePendingPanel(lease) {
+    // Rotate only after a valid independent-frame result, with enough dwell
+    // for native 400ms captures. Polling alone can never reset frame stability.
+    if (this.now()-lease.evidenceNotBefore < 1200) return;
+    const candidates = this.pendingOffers.entries.filter(entry => entry.capture && entry.ids.some(id => !this.session.owned.includes(id)));
+    if (candidates.length < 2) return;
+    const index = candidates.findIndex(entry => entry.pendingId === lease.pendingId);
+    this.panelPendingId = candidates[(index+1)%candidates.length].pendingId;
+    this.panelLease = null;
   }
 
   async observePanelEvidence(value) {
     const live = this.observe(), scope = this.getPanelSelection(live), lease = this.panelLease;
     if (scope.status !== 'watching' || !lease) throw new SessionConflictError('The current panel scope has changed.');
     const champion = this.champions.get(live.championId);
-    const entry = this.recommendationRepository?.get(champion.id);
-    const patch = entry?.patch || '16.21';
-    const scopedEntry = entry?.championId === champion.id && entry.patch === patch ? entry : null;
-    const evidence = selectBuildEvidence(scopedEntry, {champion, owned:[], augments:[...this.augments.values()], patch});
+    const owned = this.session.owned.map(id => this.augments.get(id)).filter(Boolean);
+    const {ranked, patch} = this.rankOffers(lease.ids, champion, owned);
+    const ranks = new Map(ranked.map(row => [row.offer.id,row.rank]));
     const identity = id => ({id, iconKey:this.augments.get(id)?.icon || '', kind:'augment'});
-    const offers = lease.ids.map(id => ({...identity(id), statistic:evidence.augmentStatistics[id]
-      ? {...evidence.augmentStatistics[id], championId:champion.id, mode:'mayhem'} : null}));
+    const offers = lease.ids.map(id => ({...identity(id), recommendationRank:ranks.get(id) ?? null}));
     const result = validatePanelEvidence(value, {...this.selectionContext(), eligible:true, now:this.now(),
-      offerToken:lease.offerToken, ids:lease.ids, offeredAt:lease.offeredAt, championId:champion.id, patch,
+      offerToken:lease.offerToken, ids:lease.ids, offeredAt:lease.offeredAt,
+      pendingUntilConfirmed:true,evidenceNotBefore:lease.evidenceNotBefore,championId:champion.id, patch,
       offers, owned:this.session.owned.map(identity)}, this.panelPolicy);
     this.panelStatus = {status:result.status, reason:result.reason};
     if (['panel-context-mismatch', 'panel-offer-expired', 'panel-ineligible'].includes(result.reason)) throw new SessionConflictError('The current panel scope has changed.');
     if (result.status === 'rejected') throw new SessionValidationError('Invalid panel evidence.');
-    if (!result.id) return this.getModel();
+    if (!result.id) { this.advancePendingPanel(lease); return this.getModel(); }
+    if (this.pendingOffers.entries.filter(entry => entry.ids.includes(result.id)).length > 1) {
+      this.panelStatus = {status:'pending',reason:'panel-round-ambiguous'};
+      this.advancePendingPanel(lease);
+      return this.getModel();
+    }
     if (this.session.owned.includes(result.id) || this.session.owned.length >= 12) throw new SessionConflictError('The choice has already been recorded.');
-    return this.commitChoice(result.id, result.inferred ? 'panel-statistical' : 'panel-icon');
+    return this.commitChoice(result.id, result.inferred ? 'panel-statistical' : 'panel-icon',lease.pendingId);
   }
 
   suspendSelectionForScan(raw, live, hard = false) {
+    if (FOREGROUND_SCAN_FAILURES.has(raw?.code)) this.invalidateCandidateCapture();
     if (hard || !live || !this.selectionEligible(live) || FOREGROUND_SCAN_FAILURES.has(raw?.code)) this.selectionObserver.invalidate();
     else this.selectionObserver.suspendForResultCheck(this.selectionContext(), true);
   }
@@ -347,11 +452,11 @@ export class BackgroundSidebar {
         : !capture ? 'shape-invalid' : capture.identityAnchors ? 'accepted' : 'missing';
     if (!contextCurrent) { metadataStatus = 'context-ineligible'; scanCode = sanitizeScanCode(rejectionCode, 'scan-context-ineligible'); }
     else if (metadataStatus === 'accepted') {
-      if (!complete || !this.selectionEligible(live)) { metadataStatus = 'context-ineligible'; if (!rejectionCode) scanCode = 'scan-context-ineligible'; }
+      if (!complete || !this.captureEligible) { metadataStatus = 'context-ineligible'; if (!rejectionCode) scanCode = 'scan-context-ineligible'; }
       else if (!capture) metadataStatus = 'shape-invalid';
       else if (!capture.identityAnchors) metadataStatus = 'missing';
       else if (capture.capturedAt < Math.max(this.scanSchedule.lifecycleStartedAt,this.captureEligibleSince)
-        || capture.capturedAt <= this.selectionObserver.invalidatedAt || capture.capturedAt > this.now() + 1000
+        || capture.capturedAt <= this.candidateInvalidatedAt || capture.capturedAt > this.now() + 1000
         || this.now() - capture.capturedAt > this.selectionObserver.maxAge) { metadataStatus = 'stale'; scanCode = 'scan-capture-stale'; }
     }
     this.selectionAttempt = {metadataStatus, scanCode, capturedAt:capture?.capturedAt ?? null, completedAt:this.now()};
@@ -365,7 +470,7 @@ export class BackgroundSidebar {
       lastScanAgeMs:diagnosticAge(this.selectionAttempt.completedAt, this.now())};
   }
 
-  async setSession(value) {
+  async setSession(value, {reset = false} = {}) {
     const selected = this.validateSession(value);
     const live = this.observe();
     if ('expectedRevision' in value && value.expectedRevision !== this.session.revision
@@ -374,20 +479,22 @@ export class BackgroundSidebar {
     // A late main-window write must not carry a previous game's choices into
     // the opening preset. Return authoritative state so clients can reconcile.
     if (live.stage === 'loading') return this.getSession();
-    if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) || selected.route !== this.session.route) {
+    if (reset || JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) || selected.route !== this.session.route) {
+      const ownedChanged = JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned);
       if (selected.owned.some(id => !this.session.owned.includes(id))) this.scanSchedule.confirmed();
-      if (this.session.owned.some(id => !selected.owned.includes(id))
+      if (reset || this.session.owned.some(id => !selected.owned.includes(id))
         || selected.owned.length === this.session.owned.length && JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned)) this.snapshotBlocked = true;
-      if (JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) && this.offers.length === 3) this.consumedOfferKey = JSON.stringify(this.offers.map(offer => offer.id));
+      if ((reset || ownedChanged) && this.offers.length === 3) this.consumedOfferKey = JSON.stringify(this.offers.map(offer => offer.id));
       this.generation++;
       this.selectionObserver.invalidate();
+      this.invalidateCandidateCapture();
       this.panelLease = null;
       this.choiceSources = Object.fromEntries(Object.entries(this.choiceSources).filter(([id]) => selected.owned.includes(id)));
       this.session = {...this.session, ...selected, revision:this.session.revision + 1};
-      // Once the player confirms a card, that previous round is no longer offered.
-      if (this.offers.some(offer => selected.owned.includes(offer.id))) {
-        this.offers = []; this.offerTime = 0;
-        this.offerToken = null;
+      // A full manual session edit is authoritative, including corrections to
+      // order/removals that cannot be assigned to an unanswered round safely.
+      if (reset || ownedChanged) {
+        this.pendingOffers.clear();
         this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
         this.ocr.message = '已确认选择；等待下一轮三选一卡片。';
         delete this.ocr.code;
@@ -398,13 +505,23 @@ export class BackgroundSidebar {
     return this.getSession();
   }
 
+  async resetSession(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 2
+      || !Object.hasOwn(value,'gameId') || !Object.hasOwn(value,'revision')
+      || !(value.gameId === null || gameId(value.gameId) === value.gameId)
+      || !Number.isSafeInteger(value.revision) || value.revision < 0) throw new SessionValidationError('Invalid reset.');
+    await this.setSession({owned:[],route:'auto',expectedGameId:value.gameId,expectedRevision:value.revision},{reset:true});
+    return this.getModel();
+  }
+
   async confirmOffer(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || ![3,4].includes(Object.keys(value).length) || Object.keys(value).some(key => !['id', 'gameId', 'revision', 'offerToken'].includes(key)) || typeof value.id !== 'string' || !this.augments.has(value.id) || !(value.gameId === null || gameId(value.gameId) === value.gameId) || !Number.isSafeInteger(value.revision) || value.revision < 0 || 'offerToken' in value && (typeof value.offerToken !== 'string' || !/^[a-f0-9]{32}$/.test(value.offerToken))) throw new SessionValidationError('Invalid confirmation.');
+    if (!value || typeof value !== 'object' || Array.isArray(value) || ![3,4,5].includes(Object.keys(value).length) || Object.keys(value).some(key => !['id', 'gameId', 'revision', 'offerToken', 'pendingId'].includes(key)) || typeof value.id !== 'string' || !this.augments.has(value.id) || !(value.gameId === null || gameId(value.gameId) === value.gameId) || !Number.isSafeInteger(value.revision) || value.revision < 0 || ['offerToken','pendingId'].some(key => key in value && (typeof value[key] !== 'string' || !/^[a-f0-9]{32}$/.test(value[key])))) throw new SessionValidationError('Invalid confirmation.');
     const live = this.observe();
+    const pending = 'pendingId' in value ? this.pendingOffers.find(value.pendingId) : this.pendingOffers.latest;
     // Check and mutate synchronously: a roll, another confirmation or a game
     // boundary cannot slip between a UI GET and this authoritative update.
-    if (live.phase !== 'InProgress' || live.stage === 'loading' || value.gameId !== this.session.gameId || value.revision !== this.session.revision || 'offerToken' in value && value.offerToken !== this.offerToken || !this.offers.some(offer => offer.id === value.id) || this.session.owned.includes(value.id) || this.session.owned.length >= 12) throw new SessionConflictError('The current offered choices have changed.');
-    return this.commitChoice(value.id, 'manual');
+    if (live.phase !== 'InProgress' || live.stage === 'loading' || value.gameId !== this.session.gameId || value.revision !== this.session.revision || !pending || 'offerToken' in value && value.offerToken !== pending.offerToken || !pending.ids.includes(value.id) || this.session.owned.includes(value.id) || this.session.owned.length >= 12) throw new SessionConflictError('The current offered choices have changed.');
+    return this.commitChoice(value.id, 'manual',pending.pendingId);
   }
 
   async observeSelectionEvidence(value) {
@@ -416,35 +533,45 @@ export class BackgroundSidebar {
       if (error instanceof SelectionConflictError) throw new SessionConflictError(error.message);
       throw error;
     }
-    if (!this.offers.some(offer => offer.id === observation.id) || this.session.owned.includes(observation.id) || this.session.owned.length >= 12) throw new SessionConflictError('The current offered choices have changed.');
-    return this.commitChoice(observation.id, observation.provider);
+    const pending = this.pendingOffers.entries.find(entry => entry.offerToken === value.offerToken);
+    if (!pending?.ids.includes(observation.id) || this.session.owned.includes(observation.id) || this.session.owned.length >= 12) throw new SessionConflictError('The current offered choices have changed.');
+    return this.commitChoice(observation.id, observation.provider,pending.pendingId);
   }
 
-  async commitChoice(id, provider) {
+  async commitChoice(id, provider, pendingId) {
     const epoch = this.gameEpoch;
-    this.recordChoice(id, provider);
+    this.recordChoice(id, provider, pendingId);
     await this.persist();
     const model = this.getModel();
     if (epoch !== this.gameEpoch || model.phase !== 'InProgress' || !model.owned.some(augment => augment.id === id)) throw new SessionConflictError('The game changed while saving the choice.');
     return model;
   }
 
-  recordChoice(id, provider) {
-    this.scanSchedule.confirmed();
+  recordChoice(id, provider, pendingId) {
+    const pending = pendingId ? this.pendingOffers.find(pendingId)
+      : this.pendingOffers.entries.find(entry => entry.ids.includes(id));
+    // A delayed answer completes only its logical choice opportunity. A death
+    // and its respawn share that opportunity, while capture scopes stay separate.
+    // An older round or restored catalog cannot stop a newer scan opportunity;
+    // the revision below still revokes old proof without renewing its deadline.
+    const currentOpportunity = pending && Number.isSafeInteger(pending.lastSeenOfferCycle)
+      ? pending.lastSeenOfferCycle === this.scanSchedule.offerCycle
+      : pending?.lastSeenLifecycle === this.scanSchedule.lifecycle;
+    if (!pending || currentOpportunity) this.scanSchedule.confirmed();
     this.generation++;
     this.selectionObserver.invalidate();
+    this.invalidateCandidateCapture();
     this.panelLease = null;
     this.choiceSources[id] = provider;
-    this.consumedOfferKey = JSON.stringify(this.offers.map(offer => offer.id));
-    this.session = {...this.session, owned:[...this.session.owned, id], revision:this.session.revision + 1};
-    this.offers = [];
-    this.offerToken = null;
-    this.offerTime = 0;
-    this.ocr.status = this.ocr.enabled ? 'waiting' : 'disabled';
-    this.ocr.message = provider === 'panel-statistical' ? '同图标按当前英雄使用人数推定已选；请核对，可在完整助手移除并改选。'
+    this.consumedOfferKey = pending ? JSON.stringify(pending.ids) : null;
+    const owned = this.pendingOffers.resolve(id,pending?.pendingId,this.session.owned);
+    this.session = {...this.session, owned, revision:this.session.revision + 1};
+    this.ocr.status = this.ocr.enabled ? this.offers.length ? 'recognized' : 'waiting' : 'disabled';
+    this.ocr.message = provider === 'panel-statistical' ? '同图标按本轮推荐顺序推定已选；请核对，可在完整助手移除并改选。'
       : provider === 'panel-icon' ? '六格面板图标已匹配，推荐已更新；可手动纠正。'
       : provider === 'screen' ? '实验性屏幕确认已记录；可手动纠正，等待下一轮三选一卡片。' : provider === 'live-client'
       ? '游戏接口的明确已选结果已记录；推荐已更新，可手动纠正。' : '已确认选择；等待下一轮三选一卡片。';
+    if (this.offers.length) this.ocr.message += ' 其余候选仍待确认，将继续核对。';
     delete this.ocr.code;
     delete this.ocr.diagnostics;
   }
@@ -454,8 +581,11 @@ export class BackgroundSidebar {
     this.ocr.enabled = value.enabled;
     delete this.ocr.code;
     delete this.ocr.diagnostics;
-    if (!value.enabled) { this.generation++; this.selectionObserver.invalidate(); this.panelLease = null; this.ocr.status = 'disabled'; this.ocr.message = '自动识别已暂停；已确认海克斯仍保留。'; }
-    else if (!this.offers.length) { this.ocr.status = 'waiting'; this.ocr.message = '后台识别已开启；等待开局或复活后的识别窗口。'; }
+    if (!value.enabled) { this.generation++; this.selectionObserver.invalidate(); this.invalidateCandidateCapture(); this.pendingOffers.revokeClickScopes(); this.panelLease = null; this.ocr.status = 'disabled'; this.ocr.message = '自动识别已暂停；已确认海克斯仍保留。'; }
+    else {
+      this.ocr.status = this.offers.length ? 'recognized' : 'waiting';
+      this.ocr.message = this.offers.length ? '候选仍待确认；继续核对海克斯强化符文面板。' : '后台识别已开启；等待开局、死亡或复活后的识别窗口。';
+    }
     void this.persistRecognition();
     return this.getModel();
   }
@@ -465,7 +595,7 @@ export class BackgroundSidebar {
     const live = this.observe();
     if (this.pending) return this.pending;
     const startingWindow = this.scanScheduleState(live);
-    if (automatic && !startingWindow.due) return {status:'waiting', message:'等待开局或复活后的识别窗口。', proposals:[]};
+    if (automatic && !startingWindow.due) return {status:'waiting', message:'等待开局、死亡或复活后的识别窗口。', proposals:[]};
     if (!this.captureEligible) {
       this.recordSelectionAttempt(null, false, live, false);
       return {status:'waiting', message:'等待进入海克斯大乱斗对局后识别。', proposals:[]};
@@ -504,17 +634,20 @@ export class BackgroundSidebar {
       completion = {status:complete ? 'recognized' : status, code:this.selectionAttempt.scanCode};
       if (complete) {
         const changedOffers = JSON.stringify(this.offers.map(offer => offer.id)) !== JSON.stringify(proposals.map(offer => offer.id));
-        if (changedOffers || !this.offerToken) this.offerToken = createOfferToken();
-        this.offers = proposals;
         const capture = sanitizeSelectionCapture(raw?.selectionCapture);
-        if (capture?.identityAnchors && this.selectionAttempt.metadataStatus === 'accepted' && this.selectionEligible(current)) {
-          this.panelLease = {...this.selectionContext(), lifecycle, captureRevision, offerToken:this.offerToken, ids:proposals.map(offer => offer.id),
-            offeredAt:capture.capturedAt, capture};
-          this.panelStatus = {status:'watching', reason:'waiting-panel'};
-        } else if (changedOffers) this.panelLease = null;
-        if (capture?.identityAnchors && this.selectionAttempt.metadataStatus === 'accepted' && this.selectionEligible(current)) this.selectionObserver.arm({...this.selectionContext(), offerToken:this.offerToken, ids:proposals.map(offer => offer.id), capture});
+        const acceptedCapture = capture?.identityAnchors && this.selectionAttempt.metadataStatus === 'accepted'
+          && this.captureEligible ? capture : null;
+        const pendingRevision = this.pendingOffers.revision;
+        const pending = this.pendingOffers.accept(proposals.map(offer => offer.id),{lifecycle,offerCycle:this.scanSchedule.offerCycle,captureRevision,now:this.now(),capture:acceptedCapture});
+        if (!pending) {
+          this.selectionObserver.invalidate();
+          completion = {status:'waiting',code:'scan-proposals-incomplete'};
+          this.ocr.message = '仍有六轮候选等待确认；请先确认之前的选择。';
+          return {status:'waiting',message:this.ocr.message,proposals:[],observedAt:scannedAt};
+        }
+        if (acceptedCapture && this.selectionEligible(current)) this.selectionObserver.arm({...this.selectionContext(), offerToken:pending.offerToken, ids:proposals.map(offer => offer.id), capture});
         else this.suspendSelectionForScan(raw, current, changedOffers);
-        this.offerTime = this.now();
+        if (pendingRevision !== this.pendingOffers.revision) void this.persist();
         delete this.ocr.code;
         delete this.ocr.diagnostics;
         Object.assign(this.ocr, {status:'recognized', message:'已识别三个候选；请核对后自行选择，确认已选海克斯后推荐会更新。', observedAt:scannedAt}, publicOcrDetails(raw));
@@ -540,16 +673,24 @@ export class BackgroundSidebar {
     return this.pending;
   }
 
+  rankOffers(ids, champion, owned, recommendationData = champion ? this.recommendationRepository?.get(champion.id) : null) {
+    const scoped = recommendationData?.championId === champion?.id ? recommendationData : null;
+    const patch = scoped?.patch || '16.21';
+    const evidence = selectBuildEvidence(scoped, {champion, owned, augments:[...this.augments.values()], patch});
+    const ranked = rankAugmentCandidates(ids.map(id => {
+      const offer = {id};
+      const augment = this.augments.get(offer.id), result = recommend(augment, champion, owned, this.session.route);
+      return {offer, augment, result, mechanismScore:result.score, conflicts:result.conflicts};
+    }), {champion, owned, statistics:evidence.augmentStatistics, policy:{...this.recommendationPolicy, statisticsPatch:patch}});
+    return {ranked, patch};
+  }
+
   getModel() {
     const live = this.observe();
     const champion = this.champions.get(live.championId) || null;
     const owned = this.session.owned.map(id => this.augments.get(id)).filter(Boolean);
     const recommendationData = champion ? this.recommendationRepository?.get(champion.id) : null;
-    const evidence = selectBuildEvidence(recommendationData, {champion, owned, augments:[...this.augments.values()], patch:recommendationData?.patch || '16.21'});
-    const ranked = rankAugmentCandidates(this.offers.map(offer => {
-      const augment = this.augments.get(offer.id), result = recommend(augment, champion, owned, this.session.route);
-      return {offer, augment, result, mechanismScore:result.score, conflicts:result.conflicts};
-    }), {champion, owned, statistics:evidence.augmentStatistics, policy:{...this.recommendationPolicy, statisticsPatch:recommendationData?.patch || '16.21'}});
+    const {ranked} = this.rankOffers(this.offers.map(offer => offer.id), champion, owned, recommendationData);
     const rank = new Map(ranked.map((entry, index) => [entry.offer.id, index + 1]));
     const offers = this.offers.map(offer => {
       const ranking = ranked.find(entry => entry.offer.id === offer.id);
@@ -565,21 +706,42 @@ export class BackgroundSidebar {
       recommendationData, policy:this.recommendationPolicy, now:this.now()}),
       gameId:this.session.gameId, gameEpoch:this.gameEpoch, sessionRevision:this.session.revision, championId:champion?.id || null,
       ownedIds:[...this.session.owned], route:this.session.route, generatedAt:new Date(this.now()).toISOString()};
-    const selection = this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live));
-    const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), this.selectionEligible(live));
+    const recognition = this.recognitionSnapshot(live);
+    // The compact sidebar has a separate purchase decision. Keep the full
+    // application's plan and its comparison lists unchanged.
+    const {purchaseProgress, ...purchaseDecision} = buildNextItemRecommendation({champion, owned, route:this.session.route, live,
+      augments:[...this.augments.values()], champions:[...this.champions.values()], itemsCatalog:this.itemsCatalog,
+      recommendationData, plan, targetItemId:this.purchaseTarget && this.purchaseTarget.championId === champion?.id ? this.purchaseTarget.itemId : null, now:this.now()});
+    const nextItem = {...purchaseDecision,
+      gameId:this.session.gameId, gameEpoch:this.gameEpoch, sessionRevision:this.session.revision,
+      championId:champion?.id || null, ownedIds:[...this.session.owned], route:this.session.route,
+      generatedAt:new Date(this.now()).toISOString()};
+    // Keep only a bounded purchase intent in the shared session, not stale
+    // rendered recommendations. The pure policy revalidates fresh inventory,
+    // mechanisms and evidence on every refresh. Loading previews do not commit.
+    const purchaseTarget = nextItem.status === 'ready' && nextItem.stage === 'live'
+      ? {championId:champion.id,itemId:nextItem.item.id}
+      : purchaseProgress?.status === 'completed' ? null : this.purchaseTarget;
+    if (purchaseTarget?.championId !== this.purchaseTarget?.championId || purchaseTarget?.itemId !== this.purchaseTarget?.itemId) {
+      this.purchaseTarget = purchaseTarget;
+      void this.persist();
+    }
     return {
-      version:'1.13.0', connection:live.connection, phase:live.phase, stage:live.stage || 'waiting', championSource:live.championSource || null, gameId:this.session.gameId, sessionRevision:this.session.revision,
-      gameEpoch:this.gameEpoch, selection, selectionResult, panelSelection:this.getPanelSelection(live), selectionDiagnostics:this.selectionDiagnostics(selection),
+      ...recognition, championSource:live.championSource || null,
       life:this.lifeSource.resolve(live, this.selectionContext()),
       mode:live.mode || {queueId:null, isMayhem:false, known:false},
       champion:champion ? {id:champion.id, name:champion.name, title:champion.title} : null,
       level:live.level ?? null, gameTime:live.gameTime ?? null, currentGold:live.currentGold ?? null, items:live.items || [],
       teams:live.teams || {status:'unavailable', ownTeam:null, allies:[], enemies:[], observedAt:live.observedAt || null},
       owned:owned.map(augment => ({id:augment.id, name:augment.name, icon:text(augment.icon, 400), rarity:text(augment.rarity, 40),
-        ...(this.choiceSources[augment.id] === 'panel-statistical' ? {inferred:true, confirmationLabel:'推定已选（同图标统计）'} : {}),
+        ...(this.choiceSources[augment.id] === 'panel-statistical' ? {inferred:true, confirmationLabel:'推定已选（同图标）'} : {}),
         summary:text(String(augment.summary || augment.description || '').replace(/<[^>]*>/g, ''), 300)})), offers,
+      pendingRevision:this.pendingOffers.revision,
+      pendingOffers:this.pendingOffers.entries.map(entry => ({pendingId:entry.pendingId,sequence:entry.sequence,
+        active:entry === this.pendingOffers.latest,createdAt:entry.createdAt,
+        offers:entry.ids.map(id => { const augment = this.augments.get(id); return {id,name:augment.name,icon:text(augment.icon,400),rarity:text(augment.rarity,40)}; })})),
       ocr:{...this.ocr, schedule:this.scanScheduleState(live), proposals:this.offers.map(offer => ({...offer}))}, route:this.session.route, updatedAt:live.observedAt || new Date(this.now()).toISOString(),
-      plan,
+      plan, nextItem,
       ...(this.appearance ? {appearance:this.appearance.get()} : {}),
     };
   }

@@ -52,3 +52,10 @@ test('action restoration matches item and game slot rather than the first simila
   replacePreservingFocus(root,()=>{replace();root.replaceChildren(first,wrongSlot,next);});
   assert.equal(first.focuses,0);assert.equal(wrongSlot.focuses,0);assert.equal(next.focuses,1);
 });
+
+test('pending confirmations restore focus only within the same unresolved round',()=>{
+  const {doc,root,next}=fixture({dataset:{liveAction:'pending-confirm',id:'same-choice',pendingId:'second-round'}});
+  const otherRound=focusElement(doc,{dataset:{liveAction:'pending-confirm',id:'same-choice',pendingId:'first-round'}});
+  replacePreservingFocus(root,()=>root.replaceChildren(otherRound,next));
+  assert.equal(otherRound.focuses,0);assert.equal(next.focuses,1);
+});

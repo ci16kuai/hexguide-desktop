@@ -11,7 +11,7 @@ export function replacePreservingFocus(root, replace){
       const action=['liveAction','action','statsAction'].find(key=>active.dataset?.[key]);
       if(action){
         selector={'liveAction':'[data-live-action]',action:'[data-action]',statsAction:'[data-stats-action]'}[action];
-        const keys=[action,...['id','slot','statsId'].filter(key=>active.dataset[key]!==undefined)];
+        const keys=[action,...['id','slot','statsId','pendingId'].filter(key=>active.dataset[key]!==undefined)];
         const identity=keys.map(key=>[key,active.dataset[key]]);
         identifies=node=>identity.every(([key,value])=>node.dataset?.[key]===value);
       }

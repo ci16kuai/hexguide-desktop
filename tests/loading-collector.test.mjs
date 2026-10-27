@@ -36,6 +36,9 @@ function harness({phase='GameStart',session=roster(),currentSummoner=identity,ga
 
 test('GameStart exposes only the real loading roster without inventing live stats or items', async () => {
   const h = harness();
+  h.state.session.gameData.teamOne[0].scores = {kills:7,deaths:1,assists:3,creepScore:60};
+  h.state.session.gameData.teamTwo[0].scores = {kills:9};
+  h.state.session.gameData.teamTwo[0].performance = {kills:9,deaths:0,assists:0,creepScore:99};
   const snapshot = await h.collector.pollOnce();
   assert.equal(snapshot.phase,'GameStart');
   assert.equal(snapshot.stage,'loading');

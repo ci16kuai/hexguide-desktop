@@ -16,6 +16,10 @@ namespace HexGuide.Desktop
     {
         private readonly Timer timer;
         private readonly ScreenSelectionDecision decision = new ScreenSelectionDecision();
+        private readonly RecognitionTrace trace;
+        private readonly EarlySelectionReplay early;
+        private bool earlyScopeSupported, earlyButtonKnown, earlyLastDown, earlyHadFocus;
+        private long earlyNextFrameAt;
         private ScreenSelectionObservation observation;
         private bool disposed, lastButtonDown, buttonKnown, eligible, hadGameFocus;
         private long nextFrameAt, lastSeenCapture, nextIdentityCheck;
@@ -35,8 +39,10 @@ namespace HexGuide.Desktop
         internal string StatusCode { get; private set; }
         internal static int LargestDiagnosticFixtureBytes { get; private set; }
 
-        internal ScreenSelectionWatcher()
+        internal ScreenSelectionWatcher(RecognitionTrace recognitionTrace = null)
         {
+            trace = recognitionTrace ?? new RecognitionTrace();
+            early = new EarlySelectionReplay(trace);
             StatusCode = "waiting";
             timer = new Timer { Interval = 25 };
             timer.Tick += delegate { Poll(); };
@@ -45,6 +51,22 @@ namespace HexGuide.Desktop
         internal void UpdateModel(Dictionary<string, object> model)
         {
             if (disposed) return;
+            object scopeValue;
+            if (model != null && model.TryGetValue("screenObservationScope", out scopeValue))
+            {
+                object rawIssuedAt; long issuedAt;
+                if (!model.TryGetValue("recognitionAt", out rawIssuedAt) || !(rawIssuedAt is int || rawIssuedAt is long)
+                    || !ModelValue.Integer(model, "recognitionAt", out issuedAt))
+                { UpdateObservationScope(null); return; }
+                UpdateObservationScope(scopeValue as Dictionary<string, object>, issuedAt);
+                ScreenSelectionObservation nextEarly;
+                long stamp = Now();
+                if (ScreenSelectionObservation.TryRead(ModelValue.Object(model, "selection"), stamp, out nextEarly)
+                    || ScreenSelectionObservation.TryReadContinuation(ModelValue.Object(model, "selectionResult"), stamp, early.ClickedAt, out nextEarly))
+                    early.Bind(nextEarly, stamp);
+                PublishEarly(stamp);
+                return;
+            }
             var ocr = ModelValue.Object(model, "ocr");
             var mode = ModelValue.Object(model, "mode");
             bool nextEligible = ModelValue.Boolean(ocr, "enabled") && ModelValue.Text(model, "phase") == "InProgress"
@@ -88,7 +110,27 @@ namespace HexGuide.Desktop
             SetStatus("baseline");
         }
 
-        internal void CancelForLocalAction() { Suspend("local-action", true); }
+        // Called by the lightweight model guard independently of heavyweight
+        // sidebar rendering and recommendation generation.
+        internal void UpdateObservationScope(Dictionary<string, object> scope)
+        { UpdateObservationScope(null, 0); } // Revocation only; issuing a lease requires its server timestamp.
+
+        private void UpdateObservationScope(Dictionary<string, object> scope, long issuedAt)
+        {
+            if (disposed) return;
+            earlyScopeSupported = true;
+            early.UpdateScope(scope, Now(), issuedAt);
+            eligible = early.Active;
+            if (eligible) timer.Start();
+            else { earlyButtonKnown = earlyHadFocus = false; timer.Stop(); }
+            SetStatus(early.WatcherStatus);
+        }
+
+        internal void CancelForLocalAction()
+        {
+            early.Cancel("local-action", Now()); earlyButtonKnown = false;
+            Suspend("local-action", true);
+        }
 
         // Separate from timer startup so model refresh ordering can be checked
         // with deterministic, in-memory fixtures only.
@@ -193,6 +235,7 @@ namespace HexGuide.Desktop
 
         private void Poll()
         {
+            if (earlyScopeSupported) { PollEarly(); return; }
             if (disposed || !eligible) return;
             long now = Now();
             try
@@ -265,6 +308,78 @@ namespace HexGuide.Desktop
             catch { Suspend("capture-unavailable", true); }
         }
 
+        private void PollEarly()
+        {
+            if (disposed) return;
+            long now = Now();
+            if (!early.CheckLease(now)) { earlyHadFocus = earlyButtonKnown = false; SetStatus(early.WatcherStatus); return; }
+            try
+            {
+                IntPtr foreground = GetForegroundWindow();
+                if (foreground != identityWindow || now >= nextIdentityCheck)
+                {
+                    identityWindow = foreground;
+                    identityVerified = GameWindow.IsVerifiedGame(foreground);
+                    nextIdentityCheck = now + 1000;
+                }
+                if (!identityVerified)
+                {
+                    if (earlyHadFocus || early.FrameCount > 0) CancelEarly("focus-changed", now);
+                    earlyHadFocus = earlyButtonKnown = false;
+                    return;
+                }
+                earlyHadFocus = true;
+                bool down = ButtonDown();
+                if (!earlyButtonKnown)
+                {
+                    earlyButtonKnown = true; earlyLastDown = down;
+                    if (down) { CancelEarly("held-before-observation", now); return; }
+                }
+                bool edge = down != earlyLastDown;
+                earlyLastDown = down;
+                if (!edge && (now < earlyNextFrameAt || !early.WantsFrame(now))) { PublishEarly(now); return; }
+                if (edge || now >= earlyNextFrameAt)
+                {
+                    Rectangle bounds;
+                    if (!ClientBounds(foreground, out bounds)) { CancelEarly("capture-unavailable", now, "client-unavailable"); return; }
+                    var geometry = EarlySelectionReplay.Geometry(foreground, bounds);
+                    int column = -1;
+                    if (edge)
+                    {
+                        PhysicalPoint point;
+                        bool onGame = GetPhysicalCursorPos(out point) && RootWindow(WindowFromPhysicalPoint(point)) == foreground;
+                        column = onGame ? geometry.ColumnAt(point.X, point.Y) : -1;
+                        if (!onGame || column < 0) { CancelEarly("outside-click", now); return; }
+                    }
+                    EarlySelectionFrame frame;
+                    string failure;
+                    bool success = TryCaptureFrame(geometry, out frame, out failure);
+                    RecordCaptureResult(success, failure, Now());
+                    if (!success) { CancelEarly("capture-unavailable", now, failure); return; }
+                    // Timestamp before capture is paired with the actual edge
+                    // sampled above; no final cursor position is replayed.
+                    frame.At = now;
+                    early.Add(frame, edge ? (down ? 1 : 2) : 0, column, Now());
+                    earlyNextFrameAt = now + 65;
+                    PublishEarly(Now());
+                }
+            }
+            catch { CancelEarly("capture-unavailable", now, "capture-exception"); }
+        }
+
+        private void CancelEarly(string reason, long now, string traceReason = null)
+        { early.Cancel(reason, now, traceReason); SetStatus(early.WatcherStatus); }
+
+        private void PublishEarly(long now)
+        {
+            var evidence = early.TryObserve(now);
+            SetStatus(early.WatcherStatus);
+            if (evidence == null) return;
+            SetStatus("observed");
+            var handler = SelectionObserved;
+            if (handler != null) handler(evidence);
+        }
+
         // A bounded technical snapshot. No pixel deltas, handles, identities,
         // coordinates, candidate text, or arbitrary backend values are exposed.
         internal Dictionary<string, object> Diagnostics()
@@ -272,7 +387,7 @@ namespace HexGuide.Desktop
             long now = Now();
             var current = DecisionDiagnostics(StatusCode);
             current["eligible"] = eligible;
-            current["gameForeground"] = hadGameFocus;
+            current["gameForeground"] = earlyScopeSupported ? earlyHadFocus : hadGameFocus;
             current["captureAttempts"] = captureAttempts;
             current["captureSuccesses"] = captureSuccesses;
             current["captureFailures"] = captureFailures;
@@ -282,7 +397,7 @@ namespace HexGuide.Desktop
             current["lastFailureAgeMs"] = Age(now, lastFailureAt);
             current["lastCancelCode"] = lastCancelCode;
             current["lastCancelAgeMs"] = Age(now, lastCancelAt);
-            current["activeCaptureAgeMs"] = Age(now, observation == null ? 0 : observation.CapturedAt);
+            current["activeCaptureAgeMs"] = Age(now, earlyScopeSupported ? early.ReferenceCapturedAt : observation == null ? 0 : observation.CapturedAt);
             current["sameIdentityRefreshes"] = sameIdentityRefreshes;
             current["pendingRefreshesPreserved"] = pendingRefreshesPreserved;
             current["pressedRefreshesPreserved"] = pressedRefreshesPreserved;
@@ -290,13 +405,19 @@ namespace HexGuide.Desktop
             current["titleChecks"] = titleChecks;
             current["titleMatches"] = titleMatches;
             current["titleMatchMask"] = lastTitleMatchMask;
-            foreach (var entry in decision.DiagnosticState(now)) current[entry.Key] = entry.Value;
+            foreach (var entry in earlyScopeSupported ? early.DecisionDiagnostics(now) : decision.DiagnosticState(now)) current[entry.Key] = entry.Value;
             if (lastAttempt != null) current["lastAttempt"] = new Dictionary<string, object>(lastAttempt);
+            current["early"] = early.Diagnostics();
             return current;
         }
 
         private Dictionary<string, object> DecisionDiagnostics(string status)
         {
+            if (earlyScopeSupported) return new Dictionary<string, object> {
+                { "status", status }, { "baselineFrames", early.BaselineFrames },
+                { "feedbackFrames", early.FeedbackFrames }, { "dismissedFrames", early.DismissedFrames },
+                { "pending", early.HasInteraction }
+            };
             return new Dictionary<string, object> {
                 { "status", status }, { "baselineFrames", decision.BaselineFrames },
                 { "feedbackFrames", decision.FeedbackFrames }, { "dismissedFrames", decision.DismissedFrames },
@@ -438,8 +559,22 @@ namespace HexGuide.Desktop
         {
             signatures = null;
             titleMask = 0;
+            EarlySelectionFrame frame;
+            if (!TryCaptureFrame(value, out frame, out failure)) return false;
+            using (frame)
+            {
+                signatures = frame.Signatures;
+                titleMask = frame.TitleMask(value);
+                return true;
+            }
+        }
+
+        private static bool TryCaptureFrame(ScreenSelectionObservation value, out EarlySelectionFrame captured, out string failure)
+        {
+            captured = null;
             failure = "capture-exception";
             IntPtr previous = IntPtr.Zero;
+            EarlySelectionFrame witness = null;
             try
             {
                 previous = SetThreadDpiAwarenessContext(new IntPtr(-4));
@@ -452,8 +587,7 @@ namespace HexGuide.Desktop
                 if (!ClientBounds(value.Window, out client)) { failure = "client-unavailable"; return false; }
                 if (client != value.ClientBounds) { failure = "client-changed"; return false; }
                 if (!Unoccluded(value, out failure)) return false;
-                var frames = new int[3][];
-                int matches = 0;
+                witness = EarlySelectionFrame.Create(value);
                 for (int index = 0; index < 3; index++)
                 {
                     Rectangle region = value.Regions[index];
@@ -463,17 +597,7 @@ namespace HexGuide.Desktop
                         using (var graphics = Graphics.FromImage(bitmap))
                             graphics.CopyFromScreen(client.Left + region.Left, client.Top + region.Top, 0, 0,
                                 region.Size, CopyPixelOperation.SourceCopy);
-                        frames[index] = ReadSignature(bitmap, new Rectangle(Point.Empty, bitmap.Size));
-                        bool cardMatches = value.TitleAnchors != null && value.TitleAnchors.Length == 3
-                            && value.TitleAnchors[index] != null && value.TitleAnchors[index].Length > 0;
-                        if (cardMatches) foreach (ScreenTitleAnchor anchor in value.TitleAnchors[index])
-                        {
-                            Rectangle local = anchor.Box;
-                            local.Offset(-region.X, -region.Y);
-                            CardTitleFeature feature = CardTitleIdentity.Extract(bitmap, local);
-                            if (!feature.Usable || !CardTitleIdentity.Matches(feature.Feature, anchor.Feature)) cardMatches = false;
-                        }
-                        if (cardMatches) matches |= 1 << index;
+                        witness.ReadCard(bitmap, index);
                     }
                 }
                 Rectangle final;
@@ -481,13 +605,16 @@ namespace HexGuide.Desktop
                 if (!ClientBounds(value.Window, out final)) { failure = "client-unavailable"; return false; }
                 if (final != client) { failure = "client-changed"; return false; }
                 if (!Unoccluded(value, out failure)) return false;
-                signatures = frames;
-                titleMask = matches;
+                captured = witness; witness = null;
                 failure = "captured";
                 return true;
             }
             catch { failure = "capture-exception"; return false; }
-            finally { if (previous != IntPtr.Zero) SetThreadDpiAwarenessContext(previous); }
+            finally
+            {
+                if (witness != null) witness.Dispose();
+                if (previous != IntPtr.Zero) SetThreadDpiAwarenessContext(previous);
+            }
         }
 
         internal static int[] ReadSignature(Bitmap image, Rectangle region)
@@ -575,6 +702,7 @@ namespace HexGuide.Desktop
             if (disposed) return;
             disposed = true;
             timer.Stop(); timer.Dispose();
+            early.Dispose();
             observation = null;
             decision.Invalidate(Now()); decision.Reset();
             lastAttempt = null;
@@ -584,7 +712,8 @@ namespace HexGuide.Desktop
         internal static int ValidateFixtures()
         {
             int checks = ScreenSelectionDecision.ValidateFixtures() + ValidateReferenceRefreshFixtures()
-                + CardTitleIdentity.ValidateFixtures() + ScreenSelectionDecision.ValidateTitleIdentityFixtures();
+                + CardTitleIdentity.ValidateFixtures() + ScreenSelectionDecision.ValidateTitleIdentityFixtures()
+                + EarlySelectionReplayFixtures.Run() + RecognitionTrace.ValidateFixtures();
             using (var watcher = new ScreenSelectionWatcher())
             {
                 watcher.RecordCaptureResult(true, "captured", Now());

@@ -34,6 +34,18 @@ function snapshot(id = 103, fetchedAt = TIME) {
     single:{items:[{augmentId:101,...clone(items)}],builds:[{augmentId:101,...clone(builds)}]}
   };
 }
+function largeSnapshot(id = 103, cohorts = 160) {
+  const raw = snapshot(id);
+  const rows = Array.from({length:512}, (_, index) => metrics({id:1000 + index}));
+  raw.single.items = Array.from({length:cohorts}, (_, index) => ({augmentId:index + 1, ...metrics(), all:rows}));
+  raw.single.builds = [];
+  return raw;
+}
+function sourceBody(url, raw = snapshot()) {
+  return url.endsWith('/versions.json')
+    ? {latest:'16.21',versions:[{version:'16.21',dataPath:'data/16.21-fixture',dataDate:'2026-10-24',buildTimeUnixMs:TIME-3600000}]}
+    : url.endsWith('-single-augments.json') ? raw.single : raw.detail;
+}
 function reference(championId = 'Ahri', mode = 'aram', observedAt = TIME) {
   const sourceUrl = mode === 'aram'
     ? `https://op.gg/lol/modes/aram/${championId.toLowerCase()}/items?patch=16.21`
@@ -302,6 +314,70 @@ test('Summoners Rift fallback is explicitly separate from ordinary ARAM', async 
   await repo.close();
 });
 
+test('a separately scoped order fallback survives cache projection without replacing ARAM item rates', async t => {
+  const dataDirectory=await directory(t);
+  const primary={...reference(),ordersContractVersion:1,buildOrders:[]};
+  primary.orderFallback={...reference('Ahri','summoners-rift',TIME-60000),ordersContractVersion:1,
+    buildOrders:[{items:['3100','4645','3089'],sampleCount:500,winRate:.57,pickRate:.2,orderKind:'core-item-sequence'}]};
+  primary.orderFallback.items[0].winRate=.49;
+  const repo=repository({dataDirectory,client:{async load(){return snapshot();}},referenceClient:{async load(){return primary;}}});
+  const result=await repo.ensure('Ahri');
+  assert.equal(result.ordinaryAram.items[0].winRate,.53);assert.equal(result.summonersRift.items[0].winRate,.49);
+  assert.equal(result.summonersRift.mode,'summoners-rift');assert.equal(result.summonersRift.buildOrders[0].winRate,.57);
+  assert.equal(result.summonersRift.observedAt,new Date(TIME-60000).toISOString());
+  await repo.close();
+  let calls=0;const restored=repository({dataDirectory,referenceClient:{async load(){calls++;return null;}}});
+  await restored.ensure('Ahri');assert.equal(calls,0,'a fresh contract with a scoped fallback does not refetch');
+  assert.deepEqual(restored.get('Ahri').summonersRift.buildOrders,result.summonersRift.buildOrders);
+  await restored.close();
+});
+
+test('a fresh legacy reference cache upgrades its order contract once even when the provider has no verified orders', async t => {
+  const dataDirectory=await directory(t);
+  const first=repository({dataDirectory,client:{async load(){return snapshot();}},referenceClient:{async load(){return reference();}}});
+  await first.ensure('Ahri');await first.close();
+  let calls=0;
+  const upgraded=repository({dataDirectory,referenceClient:{async load(){calls++;return {...reference(),ordersContractVersion:1,buildOrders:[]};}}});
+  await upgraded.load();assert.equal(calls,0);assert.equal(upgraded.get('Ahri').referenceStatus,'ready');
+  await upgraded.ensure('Ahri');assert.equal(calls,1);assert.equal(upgraded.get('Ahri').ordinaryAram.ordersContractVersion,1);
+  await upgraded.ensure('Ahri');await upgraded.ensure('Ahri');assert.equal(calls,1,'verified absence must not create a poll loop');
+  await upgraded.close();
+  const restored=repository({dataDirectory,referenceClient:{async load(){calls++;return null;}}});
+  await restored.ensure('Ahri');assert.equal(calls,1,'the contract marker must survive restart');await restored.close();
+});
+
+test('legacy order-cache upgrade failures retain original item evidence and obey reference backoff', async t => {
+  const dataDirectory=await directory(t);
+  const first=repository({dataDirectory,client:{async load(){return snapshot();}},referenceClient:{async load(){return reference();}}});
+  await first.ensure('Ahri');await first.close();
+  let clock=TIME,calls=0;
+  const repo=repository({dataDirectory,now:()=>clock,referenceClient:{async load(){calls++;return calls===1?null:{...reference(),ordersContractVersion:1,buildOrders:[]};}}});
+  await repo.ensure('Ahri');assert.equal(calls,1);assert.equal(repo.get('Ahri').ordinaryAram.items[0].winRate,.53);
+  assert.equal(repo.get('Ahri').referenceStatus,'ready');assert.equal(repo.get('Ahri').referenceErrorCode,'unavailable');
+  await repo.ensure('Ahri');assert.equal(calls,1);clock+=LIMITS.retryMs;
+  await repo.ensure('Ahri');assert.equal(calls,2);assert.equal(repo.get('Ahri').ordinaryAram.ordersContractVersion,1);
+  await repo.ensure('Ahri');assert.equal(calls,2);await repo.close();
+});
+
+test('partial order failures use exponential reference backoff and retain the retry floor across restart', async t => {
+  const dataDirectory=await directory(t);let clock=TIME,calls=0;
+  const partial=()=>({...reference('Ahri','aram',clock),ordersContractVersion:1,buildOrders:[],orderFetchFailure:{code:'fetch-failed'}});
+  const repo=repository({dataDirectory,now:()=>clock,client:{async load(){return snapshot(103,clock);}},
+    referenceClient:{async load(){calls++;return partial();}}});
+  let current=await repo.ensure('Ahri');assert.equal(calls,1);assert.equal(current.referenceRetryAt,TIME+LIMITS.retryMs);
+  clock=current.referenceRetryAt;current=await repo.ensure('Ahri');
+  assert.equal(calls,2);assert.equal(current.referenceRetryAt,clock+2*LIMITS.retryMs);
+  assert.equal(current.ordinaryAram.orderFetchFailure.retryAt,current.referenceRetryAt);
+  const retryAt=current.referenceRetryAt;await repo.close();
+  const restored=repository({dataDirectory,now:()=>clock,
+    referenceClient:{async load(){calls++;return {...reference('Ahri','aram',clock),ordersContractVersion:1,buildOrders:[]};}}});
+  await restored.ensure('Ahri');assert.equal(calls,2,'restart must not discard the persisted order-retry floor');
+  clock=retryAt-1;await restored.ensure('Ahri');assert.equal(calls,2);
+  clock=retryAt;current=await restored.ensure('Ahri');assert.equal(calls,3);
+  assert.equal(current.ordinaryAram.orderFetchFailure,undefined);
+  await restored.ensure('Ahri');assert.equal(calls,3,'a successful empty order result is settled');await restored.close();
+});
+
 test('reference snapshots validate exact hero/mode/patch/source routes and whitelist fields', () => {
   const raw=reference();raw.html='<html>never save</html>';raw.items[0].player='never save';
   raw.observedAt=TIME;
@@ -352,6 +428,103 @@ test('the default Mayhem provider stays lazy and refreshes its own memory cache 
   clock+=LIMITS.ttlMs;
   assert.equal((await repo.ensure('Ahri')).mayhemStatus,'ready');assert.equal(calls,6);
   await repo.close();
+});
+
+test('complete conditional aggregates above 4 MiB survive fetch, three-hero persistence and reload', async t => {
+  const dataDirectory = await directory(t);
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', async url => {
+    requests++;
+    const championId = Number(/\/champion-details\/(\d+)/.exec(url)?.[1] ?? 103);
+    return new Response(JSON.stringify(sourceBody(url, largeSnapshot(championId))));
+  });
+  const repo = repository({dataDirectory});
+  for (const hero of HEROES.slice(0,3)) {
+    const result = await repo.ensure(hero.id);
+    assert.equal(result.mayhemStatus, 'ready');
+    assert.equal(result.snapshot.single.items.length, 160);
+    assert.equal(result.snapshot.single.items.at(-1).all.length, 512);
+    assert.ok(Buffer.byteLength(JSON.stringify(result.snapshot)) > 4 * 1024 * 1024);
+  }
+  await repo.close();
+  const saved = await readFile(path.join(dataDirectory,CACHE_NAME));
+  assert.ok(saved.byteLength > 13 * 1024 * 1024);
+  assert.ok(saved.byteLength <= LIMITS.fileBytes);
+  assert.equal(JSON.parse(saved).entries.length, 3);
+  const previousRequests = requests;
+  const restored = repository({dataDirectory});
+  await restored.load();
+  for (const hero of HEROES.slice(0,3)) {
+    assert.equal((await restored.ensure(hero.id)).mayhemStatus, 'ready');
+    assert.equal(restored.get(hero.id).snapshot.single.items.length, 160);
+  }
+  assert.equal(requests, previousRequests, 'fresh persisted aggregates must not refetch');
+  await restored.close();
+});
+
+test('source input and normalized snapshot have separate finite byte limits and keep field validation', () => {
+  const raw = snapshot();
+  raw.unrelatedPadding = '';
+  raw.unrelatedPadding = 'x'.repeat(LIMITS.sourceSnapshotBytes - Buffer.byteLength(JSON.stringify(raw)));
+  const accepted = validateRecommendationSnapshot(raw,{championId:103,patch:'16.21',now:TIME});
+  assert.equal(accepted.unrelatedPadding, undefined);
+  raw.unrelatedPadding += 'x';
+  assert.throws(() => validateRecommendationSnapshot(raw,{championId:103,patch:'16.21',now:TIME}), error => error.code === 'data-too-large');
+  const excessive = largeSnapshot(103, 270);
+  assert.ok(Buffer.byteLength(JSON.stringify(excessive)) > LIMITS.snapshotBytes);
+  assert.ok(Buffer.byteLength(JSON.stringify(excessive)) < LIMITS.sourceSnapshotBytes);
+  assert.throws(() => validateRecommendationSnapshot(excessive,{championId:103,patch:'16.21',now:TIME}), error => error.code === 'data-too-large');
+  const malformed = largeSnapshot();
+  malformed.single.items[0].all[0].winRate = 1.01;
+  assert.throws(() => validateRecommendationSnapshot(malformed,{championId:103,patch:'16.21',now:TIME}), error => error.code === 'invalid-data');
+});
+
+test('Mayhem response byte boundaries preserve the 4 MiB manifest/detail and 8 MiB conditional caps', async t => {
+  let target;
+  let extra = 0;
+  let contentLength = false;
+  let cancelled = false;
+  t.mock.method(globalThis, 'fetch', async url => {
+    const kind = url.endsWith('/versions.json') ? 'manifest' : url.endsWith('-single-augments.json') ? 'conditional' : 'detail';
+    const body = JSON.stringify(sourceBody(url));
+    if (kind !== target) return new Response(body);
+    const limit = kind === 'conditional' ? LIMITS.conditionalResponseBytes : LIMITS.responseBytes;
+    const size = limit + extra;
+    if (contentLength) {
+      return {ok:true, headers:new Headers({'content-length':String(size)}),
+        body:{async cancel(){cancelled=true;}, async *[Symbol.asyncIterator](){throw new Error('oversized header body must not be read');}}};
+    }
+    return new Response(body + ' '.repeat(size - Buffer.byteLength(body)));
+  });
+  for (target of ['manifest','detail','conditional']) {
+    extra = 0; contentLength = false;
+    const exact = repository();
+    assert.equal((await exact.ensure('Ahri')).mayhemStatus, 'ready', `${target} accepts exactly its cap`);
+    await exact.close();
+    for (contentLength of [false,true]) {
+      extra = 1; cancelled = false;
+      const oversized = repository();
+      const result = await oversized.ensure('Ahri');
+      assert.equal(result.mayhemStatus, 'error');
+      assert.equal(result.errorCode, 'data-too-large', `${target} identifies the size limit rather than a network failure`);
+      assert.equal(result.snapshot, null);
+      if (contentLength) assert.equal(cancelled, true);
+      await oversized.close();
+    }
+  }
+});
+
+test('malformed public JSON remains a format error through the bounded Mayhem transport', async t => {
+  let invalidManifest = true;
+  t.mock.method(globalThis, 'fetch', async url => {
+    const isManifest = url.endsWith('/versions.json');
+    return new Response(isManifest === invalidManifest ? '{invalid' : JSON.stringify(sourceBody(url)));
+  });
+  for (invalidManifest of [true,false]) {
+    const repo = repository();
+    assert.equal((await repo.ensure('Ahri')).errorCode, invalidManifest ? 'invalid-manifest' : 'invalid-data');
+    await repo.close();
+  }
 });
 
 test('the default reference provider retains blocked cooldowns across retries and champions until 30 minutes', async t => {

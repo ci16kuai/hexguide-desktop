@@ -157,14 +157,14 @@ test('a delayed first live sample deducts its age rather than receiving a fresh 
 
 test('only a fresh known dead to alive edge opens a respawn window', () => {
   const f = fixture(); f.update({gameTime:900}); assert.equal(f.decide().due, false);
-  died(f); assert.equal(f.decide().mode, 'dead'); assert.equal(f.decide().due, false);
+  died(f); assert.equal(f.decide().trigger, 'death'); assert.equal(f.decide().due, true);
   const first = respawned(f);
   assert.equal(first.mode, 'window'); assert.equal(first.trigger, 'respawn');
-  assert.equal(first.windowRemainingMs, 60000); assert.equal(first.windowId, 1);
+  assert.equal(first.windowRemainingMs, 60000); assert.equal(first.windowId, 2);
   f.advance(1000); assert.equal(f.decide().windowRemainingMs, 59000);
   f.advance(59000); assert.equal(f.decide().mode, 'follow-up');
   died(f); const second = respawned(f);
-  assert.equal(second.windowId, 2); assert.equal(second.windowRemainingMs, 60000);
+  assert.equal(second.windowId, 4); assert.equal(second.windowRemainingMs, 60000);
 });
 
 test('unknown life data does not trigger a window or infer a resurrection', () => {
@@ -175,7 +175,8 @@ test('unknown life data does not trigger a window or infer a resurrection', () =
     f.advance(1000); f.update({life}); assert.equal(f.decide().due, false);
   }
   died(f); f.advance(1000); f.update({life:{status:'unavailable', isDead:null}});
-  assert.equal(f.decide().mode, 'dead', 'unavailable is not evidence that a known dead player is alive');
+  assert.equal(f.decide().mode, 'unknown', 'unavailable pauses death scanning and is not evidence that the player is alive');
+  assert.equal(f.schedule.awaitingAliveAfterDeath,true);
   assert.equal(respawned(f).trigger, 'respawn', 'a brief unknown gap does not erase recent reliable evidence');
 });
 
@@ -215,28 +216,30 @@ test('new screen life evidence can be consumed against the same fresh collector 
 
 test('forgetLife breaks an unfocused screen chain without starting or renewing any window', () => {
   const f = fixture(); f.update({gameTime:900}); f.observe(); died(f);
+  const deathWindow = f.decide().windowId;
   f.schedule.forgetLife(); assert.equal(f.schedule.lastLife, null);
   f.advance(1000); f.update({life:{status:'detected', isDead:false, observedAt:f.now}});
-  assert.equal(f.decide().mode, 'idle'); assert.equal(f.decide().windowId, null);
+  assert.equal(f.decide().mode, 'idle'); assert.equal(f.decide().windowId, deathWindow);
   const opening = fixture(); opening.observe(); opening.advance(1000); opening.schedule.forgetLife();
   assert.equal(opening.decide().windowRemainingMs, 59000);
 });
 
 test('dead evidence too old to witness a respawn cannot invent a new choice window', () => {
   const f = fixture(); f.update({gameTime:900}); f.observe(); died(f);
+  const deathWindow = f.decide().windowId;
   f.advance(10001); f.update({life:{status:'detected', isDead:false}});
-  assert.equal(f.decide().mode, 'idle'); assert.equal(f.decide().windowId, null);
+  assert.equal(f.decide().mode, 'idle'); assert.equal(f.decide().windowId, deathWindow);
 });
 
-test('repeated alive or dead frames never extend windows, and death closes an active opening window', () => {
+test('repeated alive or dead frames never extend windows, and death replaces an active opening window', () => {
   const f = fixture(); f.observe(); const openingId = f.decide().windowId;
   for (let i = 0; i < 30; i++) { f.advance(1000); f.observe(); }
   assert.equal(f.decide().windowRemainingMs, 30000);
-  died(f); assert.equal(f.decide().windowRemainingMs, 0);
+  died(f); assert.equal(f.decide().windowRemainingMs, 60000);
   for (let i = 0; i < 30; i++) { f.advance(1000); f.observe(); }
-  assert.equal(f.decide().windowId, openingId);
-  assert.equal(f.decide().due, false);
-  assert.equal(respawned(f).windowId, openingId + 1);
+  assert.equal(f.decide().windowId, openingId + 1);
+  assert.equal(f.decide().windowRemainingMs,30000); assert.equal(f.decide().due, true);
+  assert.equal(respawned(f).windowId, openingId + 2);
 });
 
 test('confirmation closes the current window despite candidates and a later actual respawn still works', () => {
@@ -322,7 +325,7 @@ test('slow follow-up tasks preserve five second targets and completion cooldown 
   f.advance(1); assert.equal(f.decide().due, true);
 });
 
-test('confirming in follow-up permanently closes that cycle until a fresh respawn', () => {
+test('confirming in follow-up permanently closes that cycle until a new death opportunity', () => {
   const f = fixture(); f.observe(); f.advance(60000); const slow = f.decide();
   f.schedule.started(); f.advance(300); f.schedule.confirmed();
   f.schedule.completed({status:'unavailable', code:'ocr-engine-unavailable'});
@@ -334,19 +337,20 @@ test('confirming in follow-up permanently closes that cycle until a fresh respaw
   assert.equal(f.schedule.backoffUntil, 0);
   died(f); const next = respawned(f);
   assert.equal(next.mode, 'window'); assert.equal(next.windowRemainingMs, 60000);
-  assert.equal(next.windowId, slow.windowId + 1);
+  assert.equal(next.windowId, slow.windowId + 2);
 });
 
-test('death ends slow follow-up and ignores its late completion before a fresh respawn', () => {
+test('death replaces slow follow-up and ignores its late completion before a fresh respawn', () => {
   const f = fixture(); f.observe(); f.advance(60000); const slow = f.decide();
   f.schedule.started(); died(f);
-  assert.equal(f.decide().mode, 'dead'); assert.equal(f.decide().windowRemainingMs, 0);
-  assert.equal(f.schedule.awaitingConfirmation, false);
+  assert.equal(f.decide().mode, 'window'); assert.equal(f.decide().trigger,'death');
+  assert.equal(f.decide().windowRemainingMs,60000); assert.equal(f.decide().due,false);
+  assert.equal(f.schedule.awaitingConfirmation, true);
   f.schedule.completed({status:'unavailable', code:'ocr-engine-unavailable'});
   assert.equal(f.schedule.backoffUntil, 0);
-  f.advance(5000); assert.equal(f.decide().due, false);
+  f.advance(5000); assert.equal(f.decide().due, true);
   const next = respawned(f);
-  assert.equal(next.mode, 'window'); assert.equal(next.windowId, slow.windowId + 1);
+  assert.equal(next.mode, 'window'); assert.equal(next.windowId, slow.windowId + 2);
   assert.equal(next.due, true);
 });
 
@@ -447,10 +451,11 @@ test('duplicate timestamps cannot synthesize a dead to alive edge', () => {
 
 test('out of order observations and regressing game clocks cannot synthesize a respawn', () => {
   const f = fixture(); f.update({gameTime:900}); f.observe(); died(f); const deathTime = f.timestamp();
+  const deathWindow = f.decide().windowId;
   f.advance(1000); f.update({observedAt:deathTime, life:{status:'detected', isDead:false}});
   assert.equal(f.decide().due, false);
   f.advance(1000); f.update({gameTime:898});
-  assert.equal(f.decide().mode, 'unknown'); assert.equal(f.decide().windowId, null);
+  assert.equal(f.decide().mode, 'unknown'); assert.equal(f.decide().windowId, deathWindow);
   f.advance(1000); f.update({gameTime:904});
   assert.equal(f.decide().trigger, 'respawn', 'the later valid alive evidence may close the witnessed death');
 });
@@ -480,7 +485,7 @@ test('an old epoch completion releases busy without poisoning the new opening wi
 
 test('an old window completion releases busy without poisoning the respawn window', () => {
   const f = fixture(); f.observe(); f.schedule.started(); died(f); const fresh = respawned(f);
-  assert.equal(fresh.windowId, 2); assert.equal(fresh.due, false);
+  assert.equal(fresh.windowId, 3); assert.equal(fresh.due, false);
   f.schedule.completed({status:'unavailable', code:'scan-execution-failed'});
   assert.equal(f.decide().due, true); assert.equal(f.schedule.backoffUntil, 0);
 });
@@ -495,7 +500,7 @@ test('an old follow-up completion cannot write pacing into a new game or respawn
       died(f); respawned(f);
     }
     const fresh = f.decide();
-    assert.equal(fresh.mode, 'window'); assert.equal(fresh.windowId, slow.windowId + 1);
+    assert.equal(fresh.mode, 'window'); assert.equal(fresh.windowId, slow.windowId + (nextEvent === 'game' ? 1 : 2));
     assert.equal(fresh.due, false, 'the one old OCR task remains serial until it returns');
     f.schedule.completed({status:'unavailable', code:'scan-execution-failed'});
     assert.equal(f.decide().due, true); assert.equal(f.schedule.lastCompletedAt, null);
@@ -579,4 +584,119 @@ test('a fifteen minute unconfirmed battle follows up every five seconds after th
   assert.equal(f.decide().mode, 'follow-up'); assert.equal(f.decide().intervalMs, 5000);
   f.schedule.confirmed(); assert.equal(f.decide({hasOffers:true, armed:true}).due, false);
   died(f); assert.equal(respawned(f).due, true);
+});
+
+test('death candidate scans start before respawn and preserve one bounded clock through repeated death samples', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe(); died(f);
+  const first = f.decide(), cycle = f.schedule.offerCycle, lifecycle = f.schedule.lifecycle;
+  assert.equal(first.trigger,'death'); assert.equal(first.mode,'window'); assert.equal(first.due,true);
+  assert.equal(first.intervalMs,500); assert.equal(first.windowRemainingMs,60000);
+  assert.equal(f.schedule.awaitingAliveAfterDeath,true);
+  f.schedule.started(); f.advance(200); f.schedule.completed({status:'recognized',code:'title-layout-confirmed'});
+  assert.equal(f.decide().nextInMs,300,'candidate recognition cannot complete a choice cycle');
+  f.advance(29800);
+  assert.equal(f.decide().windowRemainingMs,30000); assert.equal(f.schedule.lifecycle,lifecycle);
+  assert.equal(f.schedule.offerCycle,cycle); assert.equal(f.decide().windowId,first.windowId);
+  f.advance(30000);
+  assert.equal(f.decide().mode,'follow-up'); assert.equal(f.decide().intervalMs,5000);
+  assert.equal(f.decide().windowId,first.windowId); assert.equal(f.schedule.offerCycle,cycle);
+});
+
+test('first live attachment already dead issues only a death opportunity even without a game clock', () => {
+  for (const gameTime of [0,20,900,null]) {
+    const f = fixture(); f.update({gameTime,life:{status:'detected',isDead:true}});
+    assert.equal(f.decide().trigger,'death'); assert.equal(f.decide().windowId,1);
+    assert.equal(f.schedule.offerCycle,1); assert.equal(f.schedule.awaitingAliveAfterDeath,true);
+    f.advance(1000); f.update({gameTime:30});
+    assert.equal(f.decide().windowId,1,'a later usable opening clock cannot add another event');
+  }
+});
+
+test('unknown death evidence pauses and fresh dead evidence resumes without renewing opportunity, timing or backoff', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe(); died(f);
+  const first = f.decide(), cycle = f.schedule.offerCycle, lifecycle = f.schedule.lifecycle;
+  f.schedule.started(); f.advance(200); f.schedule.completed({status:'unavailable',code:'ocr-engine-unavailable'});
+  const backoffUntil = f.schedule.backoffUntil;
+  f.advance(1000); f.update({life:{status:'unavailable',isDead:null}});
+  assert.equal(f.decide().mode,'unknown'); assert.equal(f.decide().due,false);
+  assert.equal(f.schedule.awaitingAliveAfterDeath,true); assert.equal(f.schedule.backoffUntil,backoffUntil);
+  f.advance(1000); f.update({life:{status:'detected',isDead:true}});
+  assert.equal(f.decide().mode,'backoff'); assert.equal(f.decide().windowRemainingMs,57800);
+  assert.equal(f.decide().windowId,first.windowId); assert.equal(f.schedule.offerCycle,cycle);
+  assert.equal(f.schedule.lifecycle,lifecycle); assert.equal(f.schedule.backoffUntil,backoffUntil);
+});
+
+test('forgetting death fences one capture but retains the same death opportunity and original deadline', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe(); died(f);
+  const first = f.decide(), cycle = f.schedule.offerCycle, lifecycle = f.schedule.lifecycle;
+  f.schedule.started(); f.advance(1000); f.schedule.forgetLife();
+  assert.ok(f.schedule.lifecycle > lifecycle); const revoked = f.schedule.lifecycle;
+  f.schedule.forgetLife(); assert.equal(f.schedule.lifecycle,revoked);
+  assert.equal(f.schedule.awaitingAliveAfterDeath,true);
+  f.update({life:{status:'unavailable',isDead:null}});
+  assert.equal(f.decide().mode,'unknown'); assert.equal(f.decide().windowRemainingMs,59000);
+  f.schedule.completed({status:'unavailable',code:'ocr-engine-unavailable'});
+  assert.equal(f.schedule.backoffUntil,0,'a revoked capture cannot poison the retained opportunity');
+  f.advance(1000); f.update({life:{status:'detected',isDead:true}});
+  assert.equal(f.decide().due,true); assert.equal(f.decide().windowRemainingMs,58000);
+  assert.equal(f.schedule.lifecycle,revoked); assert.equal(f.decide().windowId,first.windowId);
+  assert.equal(f.schedule.offerCycle,cycle);
+});
+
+test('death evidence expiring under fresh collector keepalives pauses scans and resumes only slow follow-up after the original deadline', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe(); died(f);
+  const first = f.decide(), capturedAt = f.now, cycle = f.schedule.offerCycle;
+  f.update({life:{status:'detected',isDead:true,observedAt:capturedAt}});
+  f.advance(10001);
+  assert.equal(f.decide().mode,'unknown'); assert.equal(f.decide().due,false);
+  f.advance(50000);
+  assert.equal(f.decide().mode,'unknown'); assert.equal(f.decide().windowRemainingMs,0);
+  f.advance(1000); f.update({life:{status:'detected',isDead:true,observedAt:f.now}});
+  assert.equal(f.decide().mode,'follow-up'); assert.equal(f.decide().intervalMs,5000);
+  assert.equal(f.decide().windowId,first.windowId); assert.equal(f.schedule.offerCycle,cycle);
+});
+
+test('stale death or forgotten continuity followed by alive closes death scanning without inventing a respawn clock', () => {
+  for (const forget of [false,true]) {
+    const f = fixture(); f.update({gameTime:900}); f.observe(); died(f);
+    const first = f.decide(), cycle = f.schedule.offerCycle;
+    f.schedule.started();
+    if (forget) f.schedule.forgetLife();
+    const lifecycle = f.schedule.lifecycle;
+    f.advance(forget ? 1000 : 10001); f.update({life:{status:'detected',isDead:false}});
+    const alive = f.decide();
+    assert.equal(alive.mode,'idle'); assert.equal(alive.due,false); assert.equal(alive.windowRemainingMs,0);
+    assert.ok(f.schedule.lifecycle > lifecycle); assert.equal(f.schedule.awaitingAliveAfterDeath,false);
+    assert.equal(alive.windowId,first.windowId); assert.equal(f.schedule.offerCycle,cycle);
+    f.schedule.completed({status:'unavailable',code:'ocr-engine-unavailable'});
+    assert.equal(f.schedule.backoffUntil,0);
+    f.advance(60000); assert.equal(f.decide().due,false);
+  }
+});
+
+test('respawn gets a fresh capture window but retains its logical death offer cycle', () => {
+  const f = fixture(); f.observe(); const openingCycle = f.schedule.offerCycle;
+  died(f); const dead = f.decide(), cycle = f.schedule.offerCycle, lifecycle = f.schedule.lifecycle;
+  assert.ok(cycle > openingCycle);
+  f.schedule.started(); const alive = respawned(f);
+  assert.equal(alive.trigger,'respawn'); assert.equal(alive.windowRemainingMs,60000);
+  assert.ok(alive.windowId > dead.windowId); assert.ok(f.schedule.lifecycle > lifecycle);
+  assert.equal(f.schedule.offerCycle,cycle); assert.equal(f.schedule.awaitingAliveAfterDeath,false);
+  assert.equal(alive.due,false,'the revoked death task still occupies the one capture slot');
+  f.schedule.completed({status:'unavailable',code:'ocr-engine-unavailable'});
+  assert.equal(f.decide().due,true); assert.equal(f.schedule.backoffUntil,0);
+});
+
+test('a confirmed death cycle cannot reopen at respawn or when lost death evidence returns', () => {
+  const f = fixture(); f.update({gameTime:900}); f.observe(); died(f);
+  const cycle = f.schedule.offerCycle; f.schedule.confirmed();
+  assert.equal(f.decide().mode,'dead'); assert.equal(f.decide().due,false);
+  f.schedule.forgetLife(); f.advance(1000); f.update({life:{status:'detected',isDead:true}});
+  assert.equal(f.decide().mode,'dead'); assert.equal(f.schedule.offerCycle,cycle);
+  const lifecycle = f.schedule.lifecycle, alive = respawned(f);
+  assert.ok(f.schedule.lifecycle > lifecycle); assert.equal(f.schedule.offerCycle,cycle);
+  assert.equal(alive.mode,'idle'); assert.equal(alive.due,false); assert.equal(alive.windowRemainingMs,0);
+  f.advance(60000); assert.equal(f.decide().due,false);
+  died(f); assert.equal(f.decide().trigger,'death'); assert.equal(f.decide().due,true);
+  assert.ok(f.schedule.offerCycle > cycle,'a later actual death is a new opportunity');
 });

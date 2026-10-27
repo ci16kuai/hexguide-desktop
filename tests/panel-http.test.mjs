@@ -190,17 +190,19 @@ test('three stable panel frames update the authoritative plan exactly once and r
   assert.deepEqual(after.plan.ownedIds,[ids[2]]);
 });
 
-test('a wrong-champion statistics adapter cannot turn a shared icon into a current-hero inference',async t => {
+test('wrong-champion statistics are discarded and shared icons use current-hero mechanism fallback',async t => {
   const candidateIds = ['eureka','archmage','recursion'];
   const repository = {get:() => ({championId:'Teemo',patch:'16.21',status:'ready',augmentStatistics:{
-    eureka:{sampleCount:9000,winRate:.9,patch:'16.21',source:'fixture'},
-    archmage:{sampleCount:1000,winRate:.5,patch:'16.21',source:'fixture'},
+    eureka:{sampleCount:1000,winRate:.5,patch:'16.21',source:'fixture'},
+    archmage:{sampleCount:9000,winRate:.9,patch:'16.21',source:'fixture'},
   }}),ensure:async () => {},close:async () => {}};
   const h = await harness(t,{candidateIds,recommendationRepository:repository});
+  const baseline = await harness(t,{candidateIds});
+  const expected = baseline.sidebar.getModel().offers.filter(offer => candidateIds.slice(0,2).includes(offer.id)).sort((a,b)=>a.rank-b.rank)[0].id;
   assert.equal(data.augments.find(augment => augment.id === candidateIds[0]).icon,data.augments.find(augment => augment.id === candidateIds[1]).icon);
   const result = await h.post('/api/sidebar/panel',proof(h,[0,1]));
   assert.equal(result.status,200);
-  assert.deepEqual(result.body.owned,[]);
-  assert.equal(result.body.panelSelection.reason,'panel-statistics-unavailable');
-  assert.equal(result.body.sessionRevision,h.scope.revision);
+  assert.deepEqual(result.body.owned.map(offer => offer.id),[expected]);
+  assert.equal(result.body.owned[0].inferred,true);
+  assert.equal(result.body.sessionRevision,h.scope.revision+1);
 });

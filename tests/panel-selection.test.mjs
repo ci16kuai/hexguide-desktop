@@ -11,7 +11,7 @@ const statistic = (sampleCount = 1000, winRate = .55, extra = {}) => ({
 const context = () => ({
   now:stamp+2000,gameId:'custom-game',gameEpoch:3,revision:7,offerToken:'a'.repeat(32),
   ids:['left','middle','right'],championId:'MonkeyKing',offeredAt:stamp,patch:'16.21',eligible:true,
-  offers:['left','middle','right'].map((id,index) => ({id,iconKey:`icon-${index}`,kind:'augment',statistic:statistic()})),owned:[],
+  offers:['left','middle','right'].map((id,index) => ({id,iconKey:`icon-${index}`,kind:'augment',recommendationRank:index+1,statistic:statistic()})),owned:[],
 });
 const slots = (matches = [[0]], start = 0) => Array.from({length:6},(_,index) => {
   const indices = matches[index-start] || [];
@@ -50,56 +50,54 @@ test('the panel may be opened late after the cards are gone, within the bounded 
   assert.equal(validatePanelEvidence(value,current).reason,'panel-offer-expired');
 });
 
-test('same-glyph inference prioritizes this champion usage over a material win-rate lead', () => {
+test('same-glyph inference uses the server recommendation instead of raw usage', () => {
   const {current,value} = collision();
   current.offers[0].statistic = statistic(1000,.40); current.offers[1].statistic = statistic(800,.80);
+  current.offers[0].recommendationRank = 2; current.offers[1].recommendationRank = 1;
   const result = validatePanelEvidence(value,current);
-  assert.equal(result.status,'inferred'); assert.equal(result.id,'left'); assert.equal(result.inferred,true);
-  assert.equal(result.evidence.resolution,'usage-then-win-rate');
+  assert.equal(result.status,'inferred'); assert.equal(result.id,'middle'); assert.equal(result.inferred,true);
+  assert.equal(result.evidence.resolution,'recommendation-rank');
   assert.deepEqual(result.evidence.candidateIndices,[0,1]);
 });
 
-test('within the explicit ten-percent usage band the larger win rate resolves a collision', () => {
-  for (const count of [900,950,1000,1050,1100]) {
+test('missing statistics do not block a valid mechanism-based recommendation', () => {
+  for (const count of [null,0,900,950,1000,1050,1100]) {
     const {current,value} = collision();
-    current.offers[0].statistic = statistic(1000,.50); current.offers[1].statistic = statistic(count,.60);
+    current.offers[0].statistic = null; current.offers[1].statistic = count === null ? null : statistic(count,.60);
+    current.offers[0].recommendationRank = 2; current.offers[1].recommendationRank = 1;
     assert.equal(validatePanelEvidence(value,current).id,'middle',String(count));
   }
-  const {current,value} = collision();
-  current.offers[0].statistic = statistic(1000,.50); current.offers[1].statistic = statistic(899,.60);
-  assert.equal(validatePanelEvidence(value,current).id,'left');
-  assert.equal(validatePanelEvidence(value,current,{closeUsageFraction:.20}).id,'middle');
 });
 
-test('anchored usage groups avoid non-transitive pairwise closeness or physical-order bias', () => {
+test('the same server preference wins across physical card order permutations', () => {
   const current = context(); for (const offer of current.offers) offer.iconKey = 'same-glyph';
   current.offers[0].statistic = statistic(1000,.40);
   current.offers[1].statistic = statistic(910,.50);
   current.offers[2].statistic = statistic(830,.90);
+  current.offers[0].recommendationRank = 3; current.offers[1].recommendationRank = 1; current.offers[2].recommendationRank = 2;
   assert.equal(validatePanelEvidence(proof(current,[[0,1,2]]),current).id,'middle');
   const reordered = structuredClone(current); reordered.ids.reverse(); reordered.offers.reverse();
   assert.equal(validatePanelEvidence(proof(reordered,[[0,1,2]]),reordered).id,'middle');
 });
 
-test('unknown or equal collision statistics never silently use physical order or recommendation rank', () => {
-  for (const change of [offer => {delete offer.statistic;}, offer => {offer.statistic.sampleCount = 0;},
-    offer => {offer.statistic.sampleCount = '1000';}, offer => {offer.statistic.championId = 'Teemo';},
-    offer => {offer.statistic.mode = 'aram';}, offer => {offer.statistic.patch = '16.20';},
-    offer => {offer.statistic.source = '';}, offer => {offer.statistic.winRate = null;},
-    offer => {offer.statistic.winRate = NaN;}]) {
-    const {current,value} = collision(); change(current.offers[1]);
-    assert.equal(validatePanelEvidence(value,current).reason,'panel-statistics-unavailable');
+test('missing, invalid or tied server ranks cannot arbitrarily resolve a collision', () => {
+  for (const rank of [undefined,null,0,4,'1',NaN,Infinity]) {
+    const {current,value} = collision();
+    current.offers[0].recommendationRank = rank; current.offers[1].recommendationRank = rank;
+    assert.equal(validatePanelEvidence(value,current).reason,'panel-recommendation-unavailable');
   }
   const {current,value} = collision();
-  assert.equal(validatePanelEvidence(value,current).reason,'panel-statistics-tied');
-  delete current.patch;
-  assert.equal(validatePanelEvidence(value,current).reason,'panel-statistics-unavailable');
+  current.offers[1].recommendationRank = 1;
+  assert.equal(validatePanelEvidence(value,current).reason,'panel-recommendation-tied');
 });
 
-test('a clear usage leader can be inferred when win rate is unavailable because no tiebreak is needed', () => {
+test('an ineligible member is skipped and a higher-ranked unmatched glyph cannot win', () => {
   const {current,value} = collision();
-  current.offers[0].statistic = statistic(1000,null); current.offers[1].statistic = statistic(100,.90);
-  assert.equal(validatePanelEvidence(value,current).id,'left');
+  current.offers[0].recommendationRank = null; current.offers[1].recommendationRank = 2;
+  current.offers[2].recommendationRank = 1;
+  assert.equal(validatePanelEvidence(value,current).id,'middle');
+  value.recommendationRank = 1;
+  assert.equal(validatePanelEvidence(value,current).reason,'panel-evidence-invalid');
 });
 
 test('nearby but different glyph matches do not become statistics-resolvable ambiguity', () => {
@@ -219,9 +217,22 @@ test('scope accepts only ordinary server-known augments and never uses a skill e
 
 test('policy normalization keeps immutable defaults and cannot disable evidence boundaries', () => {
   assert.ok(Object.isFrozen(DEFAULT_PANEL_SELECTION_POLICY));
-  assert.equal(DEFAULT_PANEL_SELECTION_POLICY.closeUsageFraction,.10);
   assert.equal(DEFAULT_PANEL_SELECTION_POLICY.maxOfferAgeMs,300000);
   const {current,value} = collision(); current.offers[0].statistic.sampleCount = 2000;
   assert.equal(validatePanelEvidence(value,current,{closeUsageFraction:1,maxOfferAgeMs:Infinity,maxProofBytes:99999}).id,'left');
   assert.equal(validatePanelEvidence(value,current,{maxProofBytes:512}).reason,'panel-evidence-invalid');
+});
+
+test('trusted unanswered-round context can outlive five minutes but every frame must follow the latest scope fence', () => {
+  const current = context(); current.now = stamp+600000; current.pendingUntilConfirmed = true;
+  current.evidenceNotBefore = current.now-1000;
+  const value = proof(current);
+  for (const [index,frame] of value.frames.entries()) frame.capturedAt = current.now-500+index*150;
+  assert.equal(validatePanelEvidence(value,current).status,'matched');
+  value.frames[0].capturedAt = current.evidenceNotBefore-1;
+  assert.equal(validatePanelEvidence(value,current).reason,'panel-capture-before-scope');
+  delete current.evidenceNotBefore;
+  assert.equal(validatePanelEvidence(value,current).reason,'panel-context-invalid');
+  current.evidenceNotBefore = current.now-1000; current.pendingUntilConfirmed = false;
+  assert.equal(validatePanelEvidence(value,current).reason,'panel-context-invalid');
 });

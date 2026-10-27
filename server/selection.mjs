@@ -131,6 +131,7 @@ export class SelectionObserver {
     this.resultCaptureTimes = [];
     this.fxContinuation = null;
     this.invalidatedAt = -Infinity;
+    this.hardInvalidatedAt = -Infinity;
   }
 
   invalidate() {
@@ -138,6 +139,7 @@ export class SelectionObserver {
     this.resultLease = null; this.resultCaptureTimes = [];
     this.fxContinuation = null;
     this.invalidatedAt = Math.max(this.invalidatedAt, this.now());
+    this.hardInvalidatedAt = Math.max(this.hardInvalidatedAt, this.now());
   }
 
   pruneCaptures() {

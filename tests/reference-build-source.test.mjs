@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createReferenceBuildSource} from '../server/reference-build-source.mjs';
+import {coreRow, coreTable} from './fixtures/reference-build-orders.mjs';
+import {RecommendationRepository} from '../server/recommendation-repository.mjs';
 
 const NOW = Date.parse('2026-10-25T04:10:00.000Z');
 const request = {championId:'Ahri', championSlug:'ahri', patch:'16.21'};
@@ -35,10 +37,14 @@ function html(options, transform = value => value) {
 const response = (page, extra = {}) => ({ok:true, status:200,
   headers:{get:name => name === 'content-type' ? 'text/html; charset=utf-8' : null}, text:async () => page, ...extra});
 function source(fetcher, now = () => NOW) { return createReferenceBuildSource({fetcher, now}); }
+function orderedPage(options = {}, rows = [coreRow()]) {
+  return html({...options, extraSections:[...(options.extraSections || []), section('Core builds', rows, options.mode === 'summoners-rift' ? 'ranked' : 'aram')]})
+    .replace('<script>', coreTable(rows, {patch:options.patch || '16.21'}) + '<script>');
+}
 
 test('ARAM item and boot rates remain true single-item scopes, with no request for ranked', async () => {
   const calls = [];
-  const result = await source(async (url, options) => { calls.push({url, options}); return response(html()); }).load(request);
+  const result = await source(async (url, options) => { calls.push({url, options}); return response(orderedPage()); }).load(request);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'https://op.gg/lol/modes/aram/ahri/items?patch=16.21');
   assert.equal(calls[0].options.credentials, 'omit');
@@ -60,6 +66,84 @@ test('ARAM item and boot rates remain true single-item scopes, with no request f
   assert.equal(result.items[0].scope, 'single-item');
   assert.equal(result.items[1].scope, 'boots');
   assert.match(result.attribution, /OP.GG/);
+  assert.equal(result.ordersContractVersion,1);
+  assert.deepEqual(result.buildOrders[0].items,['6655','4646','4645']);
+  assert.equal(result.buildOrders[0].sampleCount,3053);
+  assert.equal(result.buildOrders[0].orderKind,'core-item-sequence');
+});
+
+test('successful ARAM item data is retained when only ordered core builds need a Rift fallback', async () => {
+  const calls=[];
+  const result=await source(async url=>{calls.push(url);return response(calls.length===1?html():orderedPage({mode:'summoners-rift'}));}).load(request);
+  assert.equal(calls.length,2); assert.equal(result.mode,'aram'); assert.equal(result.items[0].scope,'single-item');
+  assert.deepEqual(result.buildOrders,[]);assert.equal(result.ordersContractVersion,1);
+  assert.equal(result.orderFallback.mode,'summoners-rift');assert.equal(result.orderFallback.position,'mid');
+  assert.match(result.orderFallback.sourceUrl,/type=ranked/);assert.deepEqual(result.orderFallback.buildOrders[0].items,['6655','4646','4645']);
+  assert.equal(result.items.length,2,'core rows never become item-rate rows');
+});
+
+test('ARAM order fallback uses the same 200-game threshold as the engine', async () => {
+  for(const games of [199,200]) {
+    let calls=0;
+    const result=await source(async()=>response(++calls===1?orderedPage({},[coreRow(undefined,{play:String(games)})]):orderedPage({mode:'summoners-rift'}))).load(request);
+    assert.equal(calls,games===199?2:1);assert.equal(result.buildOrders[0].sampleCount,games);
+    assert.equal(Boolean(result.orderFallback),games===199);
+  }
+});
+
+test('missing, malformed, wrong-patch or blocked fallback preserves valid ARAM items and records missing order', async () => {
+  for(const fallback of [{ok:false,status:404},{ok:false,status:403},response(html({mode:'summoners-rift'})),
+    response(orderedPage({mode:'summoners-rift',patch:'16.20'})),response(orderedPage({mode:'summoners-rift',slug:'jinx'}))]) {
+    let calls=0;const result=await source(async()=>++calls===1?response(html()):fallback).load(request);
+    assert.equal(calls,2);assert.equal(result.mode,'aram');assert.equal(result.ordersContractVersion,1);
+    assert.deepEqual(result.buildOrders,[]);assert.equal(result.orderFallback,undefined);assert.equal(result.items.length,2);
+  }
+});
+
+test('failed Rift order requests retain ARAM items and retry after bounded backoff or the blocked cooldown', async t => {
+  for (const failure of ['503','timeout','403']) {
+    let clock=NOW,calls=0,recovered=false;
+    const client=source(async url=>{
+      calls++;
+      if(url.includes('/modes/aram/'))return response(html());
+      if(recovered)return response(orderedPage({mode:'summoners-rift'}));
+      if(failure==='timeout')throw Object.assign(new Error('Synthetic request aborted.'),{name:'AbortError'});
+      return {ok:false,status:Number(failure)};
+    },()=>clock);
+    const repo=new RecommendationRepository({champions:[{id:'Ahri',key:103}],augments:[],now:()=>clock,
+      client:{async load(){throw Error('Mayhem fixture unavailable');}},referenceClient:client});
+    t.after(()=>repo.close());
+    const partial=await repo.ensure('Ahri');
+    assert.equal(calls,2);assert.equal(partial.referenceStatus,'ready');assert.equal(partial.ordinaryAram.items[0].id,6655);
+    assert.ok(partial.ordinaryAram.orderFetchFailure,'a failed fallback must not be cached as confirmed absence');
+    const retryAt=partial.referenceRetryAt;
+    assert.equal(retryAt,NOW+(failure==='403'?30*60000:60000));
+    for(let index=0;index<10;index++){clock+=2000;await repo.ensure('Ahri');}
+    assert.equal(calls,2,'two-second polling must not issue order retries');
+    recovered=true;clock=retryAt-1;await repo.ensure('Ahri');assert.equal(calls,2);
+    clock=retryAt;const restored=await repo.ensure('Ahri');
+    assert.equal(calls,4,'recovery must be retried before the 24-hour item TTL');
+    assert.ok(restored.summonersRift?.buildOrders.length);assert.equal(restored.ordinaryAram.items[0].id,6655);
+    assert.equal(restored.ordinaryAram.orderFetchFailure,undefined);assert.equal(restored.referenceErrorCode,undefined);
+    await repo.ensure('Ahri');assert.equal(calls,4);
+  }
+});
+
+test('failed ARAM followed by valid Rift items without orders also retries the unavailable order source', async t => {
+  let clock=NOW,calls=0,recovered=false;
+  const client=source(async url=>{
+    calls++;
+    if(url.includes('/modes/aram/'))return recovered?response(orderedPage()):{ok:false,status:503};
+    return response(html({mode:'summoners-rift'}));
+  },()=>clock);
+  const repo=new RecommendationRepository({champions:[{id:'Ahri',key:103}],augments:[],now:()=>clock,
+    client:{async load(){throw Error('Mayhem fixture unavailable');}},referenceClient:client});
+  t.after(()=>repo.close());
+  const partial=await repo.ensure('Ahri');assert.equal(calls,2);assert.equal(partial.referenceStatus,'ready');
+  assert.equal(partial.summonersRift.orderFetchFailure.code,'fetch-failed');assert.equal(partial.summonersRift.items[0].id,6655);
+  recovered=true;clock+=2000;await repo.ensure('Ahri');assert.equal(calls,2);
+  clock=partial.referenceRetryAt;const restored=await repo.ensure('Ahri');
+  assert.equal(calls,3);assert.ok(restored.ordinaryAram.buildOrders.length);assert.equal(restored.ordinaryAram.orderFetchFailure,undefined);
 });
 
 test('ranked SR is tried only after unavailable ARAM and retains its actual scope', async () => {

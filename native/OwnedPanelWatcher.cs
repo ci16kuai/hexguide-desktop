@@ -26,6 +26,7 @@ namespace HexGuide.Desktop
         private readonly HashSet<string> needed = new HashSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<string, long> retryAt = new Dictionary<string, long>(StringComparer.Ordinal);
         private readonly OwnedPanelStability stability = new OwnedPanelStability();
+        private readonly OwnedPanelStageDiagnostics captureStages = new OwnedPanelStageDiagnostics();
         private OwnedPanelContext context;
         private bool disposed, publishing;
         private string emittedIdentity = "", lastCode = "waiting-offers";
@@ -83,13 +84,15 @@ namespace HexGuide.Desktop
 
         internal Dictionary<string, object> Diagnostics()
         {
-            return new Dictionary<string, object> {
+            var result = new Dictionary<string, object> {
                 { "provider", "panel-icon" }, { "profile", OwnedPanelMatcher.Profile },
                 { "status", lastCode }, { "attempts", attempts }, { "captured", captured },
                 { "matched", matched }, { "blocked", blocked }, { "lastAt", lastAt },
                 { "stableFrames", stability.Count }, { "templateCount", templates.Count },
                 { "liveVerified", false }, { "skillExclusion", context != null && context.ExcludedUrls.Length > 0 ? "provided" : "unavailable" }
             };
+            captureStages.AddTo(result, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            return result;
         }
 
         private void SetStatus(string code)
@@ -201,19 +204,20 @@ namespace HexGuide.Desktop
             lastAt = stamp; attempts = Increment(attempts);
             Bitmap bitmap; bool titlesVisible; string failure;
             if (!Capture(expected, out bitmap, out titlesVisible, out failure))
-            { blocked = Increment(blocked); stability.Reset(); SetStatus(failure); return; }
+            { blocked = Increment(blocked); captureStages.Record("capture-blocked", stamp, failure); stability.Reset(); SetStatus(failure); return; }
             using (bitmap)
             {
                 captured = Increment(captured);
-                if (titlesVisible) { stability.Reset(); SetStatus("cards-open"); return; }
+                if (titlesVisible) { captureStages.Record("cards-open", stamp); stability.Reset(); SetStatus("cards-open"); return; }
                 OwnedPanelLayout layout;
-                if (!OwnedPanelMatcher.TryLocate(bitmap, expected.Reference.ClientBounds.Size, out layout))
-                { stability.Reset(); SetStatus("waiting-panel"); return; }
+                if (!OwnedPanelMatcher.TryLocate(bitmap, expected.Reference.ClientBounds.Size, shapes, owned, excluded.ToArray(), out layout))
+                { captureStages.Record("layout-missing", stamp); stability.Reset(); SetStatus("waiting-panel"); return; }
                 OwnedPanelSlotMatch[] slots = OwnedPanelMatcher.ReadSlots(bitmap, layout, shapes, owned, excluded.ToArray());
                 bool any = false;
                 foreach (var slot in slots) if (slot.Indices.Length > 0) any = true;
-                if (!any) { stability.Reset(); SetStatus("waiting-panel"); return; }
+                if (!any) { captureStages.Record("slot-mismatch", stamp); stability.Reset(); SetStatus("waiting-panel"); return; }
                 matched = Increment(matched);
+                captureStages.Record("slot-matched", stamp);
                 string geometry = expected.GeometryKey + ":" + layout.Key;
                 var frame = new OwnedPanelProofFrame(stamp, geometry, slots);
                 if (!stability.Observe(expected.Identity, frame)) { SetStatus("pending"); return; }
@@ -228,7 +232,7 @@ namespace HexGuide.Desktop
                 // oversized observation, including maximum owned/template IDs.
                 if (Encoding.UTF8.GetByteCount(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(proof)) > 4096)
                 { stability.Reset(); SetStatus("proof-too-large"); return; }
-                publishing = true; emittedIdentity = expected.Identity; SetStatus("observed");
+                publishing = true; emittedIdentity = expected.Identity; captureStages.Record("evidence-ready", stamp); SetStatus("observed");
                 var handler = EvidenceReady;
                 if (handler != null) handler(proof); else SubmissionCompleted(false);
             }
@@ -330,6 +334,56 @@ namespace HexGuide.Desktop
         [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);
     }
 
+    // These lifetime totals and the last actual attempt survive model scope
+    // changes. A later waiting-offers/local-action status must not erase whether
+    // the previous capture saw cards, missed the HUD layout, or missed a glyph.
+    internal sealed class OwnedPanelStageDiagnostics
+    {
+        private string lastStage = "not-attempted", lastCode = "not-attempted";
+        private long lastAt;
+        private int cardsOpen, layoutMissing, slotMismatch, evidenceReady;
+
+        internal static int Increment(int value) { return Math.Min(1000000, value + 1); }
+
+        internal void Record(string stage, long at, string captureCode = null)
+        {
+            if (at <= 0) return;
+            switch (stage)
+            {
+                case "cards-open": cardsOpen = Increment(cardsOpen); break;
+                case "layout-missing": layoutMissing = Increment(layoutMissing); break;
+                case "slot-mismatch": slotMismatch = Increment(slotMismatch); break;
+                case "evidence-ready": evidenceReady = Increment(evidenceReady); break;
+                case "slot-matched": case "capture-blocked": break;
+                default: return;
+            }
+            lastStage = stage; lastAt = at;
+            lastCode = stage == "capture-blocked" ? CaptureCode(captureCode) : "captured";
+        }
+
+        private static string CaptureCode(string code)
+        {
+            switch (code)
+            {
+                case "dpi-unavailable": case "game-not-foreground": case "game-not-visible":
+                case "geometry-changed": case "region-occluded": case "geometry-or-focus-changed":
+                    return code;
+                default: return "capture-unavailable";
+            }
+        }
+
+        internal void AddTo(Dictionary<string, object> result, long now)
+        {
+            result["lastCaptureStage"] = lastStage;
+            result["lastCaptureCode"] = lastCode;
+            result["lastCaptureStageAgeMs"] = lastAt <= 0 ? (object)null : Math.Min(3600000L, now >= lastAt ? now - lastAt : 0L);
+            result["cardsOpen"] = cardsOpen;
+            result["layoutMissing"] = layoutMissing;
+            result["slotMismatch"] = slotMismatch;
+            result["evidenceReady"] = evidenceReady;
+        }
+    }
+
     internal sealed class OwnedPanelContext
     {
         internal string Token, Identity, GeometryKey;
@@ -367,7 +421,14 @@ namespace HexGuide.Desktop
                 if (ModelValue.Text(entry, "id") != reference.Ids[index] || !OwnedPanelWatcher.TrustedIcon(urls[index], out uri)) return false;
             }
             var ownedIds = new List<string>(); var ownedUrls = new List<string>();
-            var seen = new HashSet<string>(reference.Ids, StringComparer.Ordinal);
+            long evidenceNotBefore;
+            bool pendingScope = ModelValue.Boolean(value, "pendingUntilConfirmed")
+                && ModelValue.Integer(value, "evidenceNotBefore", out evidenceNotBefore);
+            // An older unanswered round can contain a candidate confirmed in
+            // a newer round. Keep that identity for owned-glyph subtraction;
+            // the server excludes it from selectable outcomes.
+            var seen = pendingScope ? new HashSet<string>(StringComparer.Ordinal)
+                : new HashSet<string>(reference.Ids, StringComparer.Ordinal);
             foreach (object raw in ModelValue.Array(value, "owned"))
             {
                 if (ownedIds.Count >= 6) return false;
@@ -519,10 +580,10 @@ namespace HexGuide.Desktop
 
     internal static class OwnedPanelMatcher
     {
-        internal const string Profile = "hud-six-slots-4.0-experimental-v1";
+        internal const string Profile = "hud-six-slots-4.0-experimental-v2";
         // One supplied 2559x1440 screenshot establishes this HUD geometry. Search
         // a bounded family of HUD scales, requiring the complete gold L-frame,
-        // all six dark slot interiors and their grid gutters. It does not treat
+        // all six cell boundaries and their grid gutters. It does not treat
         // arbitrary white symbols or a screen coordinate alone as a panel.
         internal static Rectangle CaptureRegion(Size client)
         {
@@ -534,11 +595,16 @@ namespace HexGuide.Desktop
         }
 
         internal static bool TryLocate(Bitmap roi, Size client, out OwnedPanelLayout layout)
+        { return TryLocate(roi, client, null, null, null, out layout); }
+
+        internal static bool TryLocate(Bitmap roi, Size client, OwnedPanelShape[] candidates, OwnedPanelShape[] owned, OwnedPanelShape[] excluded, out OwnedPanelLayout layout)
         {
             layout = null;
             Rectangle capture = CaptureRegion(client);
             if (roi.Width != capture.Width || roi.Height != capture.Height) return false;
             double best = 0;
+            int bestMatches = 0;
+            double bestSimilarity = 0;
             for (int step = 0; step <= 110; step++)
             {
                 double scale = client.Height / 1440.0 * (.65 + step * .005);
@@ -553,9 +619,23 @@ namespace HexGuide.Desktop
                     for (int slot = 0; slot < 6; slot++) slots[slot] = new Rectangle(left + (int)Math.Round((11 + slot % 3 * 64) * scale),
                         top + (int)Math.Round((10 + slot / 3 * 66) * scale), Math.Max(8, (int)Math.Round(57 * scale)), Math.Max(8, (int)Math.Round(57 * scale)));
                     double score = StructureScore(roi, panel, slots, scale);
-                    if (score < .85 || score <= best) continue;
-                    best = score; layout = new OwnedPanelLayout { Slots = slots, StructureScore = score,
+                    if (score < .85) continue;
+                    var candidateLayout = new OwnedPanelLayout { Slots = slots, StructureScore = score,
                         Key = Profile + ":" + left + ":" + top + ":" + panelWidth + ":" + panelHeight };
+                    int matches = 0; double similarity = 0;
+                    if (candidates != null)
+                    {
+                        foreach (var slot in ReadSlots(roi, candidateLayout, candidates, owned, excluded))
+                            if (slot.State == "candidate" || slot.State == "ambiguous" || slot.State == "owned")
+                            { matches++; similarity += slot.Similarity; }
+                    }
+                    // Borders alone can favour a few pixels of offset. Among
+                    // structurally valid grids, use the same strict scoped
+                    // glyph classifier to align the cell interiors. No new
+                    // template, relaxed threshold or selection is introduced.
+                    if (layout != null && (matches < bestMatches || matches == bestMatches
+                        && (similarity < bestSimilarity || similarity == bestSimilarity && score <= best))) continue;
+                    best = score; bestMatches = matches; bestSimilarity = similarity; layout = candidateLayout;
                 }
             }
             return layout != null;
@@ -563,7 +643,8 @@ namespace HexGuide.Desktop
 
         private static double StructureScore(Bitmap image, Rectangle panel, Rectangle[] slots, double scale)
         {
-            int gold = 0, goldCount = 0, dark = 0, darkCount = 0;
+            int gold = 0, goldCount = 0;
+            double cells = 0;
             int rim = Math.Max(1, (int)Math.Round(scale));
             for (int i = 1; i < 15; i++)
             {
@@ -593,16 +674,37 @@ namespace HexGuide.Desktop
             foreach (Rectangle slot in slots)
             {
                 if (!new Rectangle(Point.Empty, image.Size).Contains(slot)) return 0;
-                int ownDark = 0, ownTotal = 0;
-                for (int sy = 0; sy < 5; sy++) for (int sx = 0; sx < 5; sx++)
-                {
-                    Color pixel = image.GetPixel(slot.X + (slot.Width - 1) * sx / 4, slot.Y + (slot.Height - 1) * sy / 4);
-                    ownTotal++; if (pixel.R < 64 && pixel.G < 76 && pixel.B < 78) ownDark++;
-                }
-                if (ownDark < ownTotal * .60) return 0;
-                dark += ownDark; darkCount += ownTotal;
+                double boundary = CellBoundaryScore(image, slot, scale);
+                if (boundary < .60) return 0;
+                cells += boundary;
             }
-            return .35 * gold / goldCount + .45 * dark / darkCount + .20 * gutters / gutterCount;
+            return .35 * gold / goldCount + .45 * cells / slots.Length + .20 * gutters / gutterCount;
+        }
+
+        // Occupied cells can contain bright full-colour illustrations or a
+        // coloured rarity rim. Locate the grid by the transition across each
+        // cell edge, not by requiring its contents to be mostly black. An
+        // undivided attribute panel has no repeated inner/outer transitions.
+        private static double CellBoundaryScore(Bitmap image, Rectangle cell, double scale)
+        {
+            int inset = Math.Max(1, (int)Math.Round(3 * scale));
+            int outside = Math.Max(1, (int)Math.Round(3 * scale));
+            int matched = 0, count = 0;
+            for (int side = 0; side < 4; side++) for (int step = 1; step <= 4; step++)
+            {
+                int x = cell.Left + (cell.Width - 1) * step / 5;
+                int y = cell.Top + (cell.Height - 1) * step / 5;
+                Point inner, outer;
+                if (side == 0) { inner = new Point(cell.Left + inset, y); outer = new Point(cell.Left - outside, y); }
+                else if (side == 1) { inner = new Point(cell.Right - 1 - inset, y); outer = new Point(cell.Right - 1 + outside, y); }
+                else if (side == 2) { inner = new Point(x, cell.Top + inset); outer = new Point(x, cell.Top - outside); }
+                else { inner = new Point(x, cell.Bottom - 1 - inset); outer = new Point(x, cell.Bottom - 1 + outside); }
+                if (!new Rectangle(Point.Empty, image.Size).Contains(outer)) return 0;
+                Color a = image.GetPixel(inner.X, inner.Y), b = image.GetPixel(outer.X, outer.Y);
+                if (Math.Abs(a.R - b.R) + Math.Abs(a.G - b.G) + Math.Abs(a.B - b.B) >= 36) matched++;
+                count++;
+            }
+            return matched / (double)count;
         }
 
         private static bool GoldNearby(Bitmap bitmap, int x, int y, int radius)
@@ -708,6 +810,53 @@ namespace HexGuide.Desktop
             int checks = 0;
             Action<bool, string> check = delegate(bool condition, string name) { checks++; if (!condition) throw new InvalidOperationException("Owned panel fixture: " + name); };
             var serializer = new System.Web.Script.Serialization.JavaScriptSerializer();
+            var stages = new OwnedPanelStageDiagnostics();
+            var stageSnapshot = new Dictionary<string, object>();
+            stages.AddTo(stageSnapshot, 1000);
+            check(stageSnapshot.Count == 7 && (string)stageSnapshot["lastCaptureStage"] == "not-attempted"
+                && stageSnapshot["lastCaptureStageAgeMs"] == null, "stage diagnostics distinguish no attempted capture");
+            stages.Record("cards-open", 1100);
+            stages.Record("layout-missing", 1200);
+            stages.Record("slot-mismatch", 1300);
+            stages.Record("slot-matched", 1400);
+            stages.AddTo(stageSnapshot, 1500);
+            check((int)stageSnapshot["cardsOpen"] == 1 && (int)stageSnapshot["layoutMissing"] == 1
+                && (int)stageSnapshot["slotMismatch"] == 1 && (int)stageSnapshot["evidenceReady"] == 0,
+                "capture stage totals distinguish titles, layout, glyph and unsubmitted matches");
+            check((string)stageSnapshot["lastCaptureStage"] == "slot-matched" && (string)stageSnapshot["lastCaptureCode"] == "captured"
+                && (long)stageSnapshot["lastCaptureStageAgeMs"] == 100, "last matched frame retains its stage and age");
+            stages.Record("evidence-ready", 1600);
+            stageSnapshot["status"] = "waiting-offers";
+            stages.AddTo(stageSnapshot, 1700);
+            check((string)stageSnapshot["status"] == "waiting-offers" && (string)stageSnapshot["lastCaptureStage"] == "evidence-ready"
+                && (int)stageSnapshot["evidenceReady"] == 1, "scope status cannot erase the last real capture stage");
+            stages.Record("capture-blocked", 1800, "game-not-foreground");
+            stages.AddTo(stageSnapshot, 1900);
+            check((string)stageSnapshot["lastCaptureStage"] == "capture-blocked" && (string)stageSnapshot["lastCaptureCode"] == "game-not-foreground",
+                "capture failure code survives a subsequent scope-only diagnostic snapshot");
+            stages.Record("private-untrusted-data", 2000, "private-untrusted-data");
+            stages.AddTo(stageSnapshot, 2100);
+            check((string)stageSnapshot["lastCaptureStage"] == "capture-blocked" && (long)stageSnapshot["lastCaptureStageAgeMs"] == 300,
+                "unlisted diagnostic stage cannot publish or replace capture data");
+            stages.Record("capture-blocked", 2200, "private-untrusted-data");
+            stages.AddTo(stageSnapshot, 2200);
+            check((string)stageSnapshot["lastCaptureCode"] == "capture-unavailable", "unlisted capture detail is normalized to a fixed code");
+            stages.AddTo(stageSnapshot, long.MaxValue);
+            check((long)stageSnapshot["lastCaptureStageAgeMs"] == 3600000, "old capture stage age is bounded");
+            stages.AddTo(stageSnapshot, 2100);
+            check((long)stageSnapshot["lastCaptureStageAgeMs"] == 0, "clock adjustment cannot publish a negative stage age");
+            check(OwnedPanelStageDiagnostics.Increment(999999) == 1000000 && OwnedPanelStageDiagnostics.Increment(1000000) == 1000000,
+                "stage lifetime counters saturate at the fixed diagnostic bound");
+            var largestDiagnostic = new Dictionary<string, object> {
+                { "provider", "panel-icon" }, { "profile", OwnedPanelMatcher.Profile }, { "status", "geometry-or-focus-changed" },
+                { "attempts", 1000000 }, { "captured", 1000000 }, { "matched", 1000000 }, { "blocked", 1000000 }, { "lastAt", long.MaxValue },
+                { "stableFrames", 3 }, { "templateCount", 96 }, { "liveVerified", false }, { "skillExclusion", "unavailable" },
+                { "schemaVersion", 1 }, { "appVersion", "2147483647.2147483647.2147483647" },
+                { "updatedAtUtc", "9999-12-31T23:59:59.9999999Z" }, { "backendReason", new string('x', 128) }
+            };
+            stages.AddTo(largestDiagnostic, long.MaxValue);
+            foreach (string counter in new[] { "cardsOpen", "layoutMissing", "slotMismatch", "evidenceReady" }) largestDiagnostic[counter] = 1000000;
+            check(Encoding.UTF8.GetByteCount(serializer.Serialize(largestDiagnostic)) <= 2048, "maximal panel stage diagnostics fit the existing complete-file bound");
             Func<Dictionary<string, object>> backendModel = delegate
             {
                 return serializer.DeserializeObject(serializer.Serialize(BackendModel())) as Dictionary<string, object>;
@@ -753,6 +902,15 @@ namespace HexGuide.Desktop
             contextValue = ModelValue.Object(backendModel(), "panelSelection");
             contextValue["owned"] = new object[] { new Dictionary<string, object> { { "id", "a" }, { "icon", "https://raw.communitydragon.org/16.21/game/previous.png" } } };
             check(!OwnedPanelContext.TryRead(contextValue, out parsed), "owned candidate overlap rejected");
+            contextValue["pendingUntilConfirmed"] = true;
+            check(!OwnedPanelContext.TryRead(contextValue, out parsed), "pending overlap requires a fresh evidence fence");
+            contextValue["evidenceNotBefore"] = 2000L;
+            check(OwnedPanelContext.TryRead(contextValue, out parsed) && parsed.OwnedIds[0] == "a", "pending overlap retained for owned occurrence subtraction");
+            contextValue["owned"] = new object[] {
+                new Dictionary<string, object> { { "id", "a" }, { "icon", "https://raw.communitydragon.org/16.21/game/previous.png" } },
+                new Dictionary<string, object> { { "id", "a" }, { "icon", "https://raw.communitydragon.org/16.21/game/previous.png" } }
+            };
+            check(!OwnedPanelContext.TryRead(contextValue, out parsed), "pending overlap never allows duplicate owned IDs");
             Uri uri;
             check(OwnedPanelWatcher.TrustedIcon("https://raw.communitydragon.org/latest/game/icon.png", out uri), "trusted icon");
             check(!OwnedPanelWatcher.TrustedIcon("http://raw.communitydragon.org/icon.png", out uri), "plain HTTP rejected");
@@ -831,6 +989,8 @@ namespace HexGuide.Desktop
                     var matches = OwnedPanelMatcher.ReadSlots(panel, layout, shapes, new OwnedPanelShape[0]);
                     check(matches.Length == 6 && matches[0].State == "candidate", "correct six-slot extraction " + size);
                     for (int i = 1; i < 6; i++) check(matches[i].Indices.Length == 0, "empty slot ignored " + i);
+                    check(OwnedPanelMatcher.TryLocate(panel, size, shapes, new OwnedPanelShape[0], new OwnedPanelShape[0], out layout), "scoped glyph alignment retains structure " + size);
+                    check(OwnedPanelMatcher.ReadSlots(panel, layout, shapes, new OwnedPanelShape[0])[0].State == "candidate", "scoped glyph alignment retains candidate " + size);
                 }
                 using (var blank = DrawPanel(size, 1.0, shapes[0], false))
                 { OwnedPanelLayout layout; check(!OwnedPanelMatcher.TryLocate(blank, size, out layout), "closed panel rejected " + size); }
@@ -847,6 +1007,43 @@ namespace HexGuide.Desktop
             }
             using (var rectangle = DrawPanel(new Size(2559, 1440), 1.0, shapes[0], true, false))
             { OwnedPanelLayout layout; check(!OwnedPanelMatcher.TryLocate(rectangle, new Size(2559, 1440), out layout), "undivided stats panel rejected"); }
+            // A fully illustrated augment and rarity rims are real occupied
+            // cells, not evidence that the whole result panel has disappeared.
+            foreach (double factor in new[] { .825, 1.0, 1.175 })
+            using (var panel = DrawPanel(new Size(2560, 1440), factor, shapes[0], true))
+            {
+                Rectangle capture = OwnedPanelMatcher.CaptureRegion(new Size(2560, 1440));
+                int left = (int)Math.Round(1280 - 634.5 * factor) - capture.Left;
+                int top = 1440 - (int)Math.Round(147 * factor) - capture.Top;
+                using (var graphics = Graphics.FromImage(panel))
+                {
+                    for (int slot = 0; slot < 6; slot++)
+                    {
+                        var cell = new Rectangle(left + (int)Math.Round((11 + slot % 3 * 64) * factor),
+                            top + (int)Math.Round((10 + slot / 3 * 66) * factor), (int)Math.Round(57 * factor), (int)Math.Round(57 * factor));
+                        if (slot == 0) { using (var fill = new SolidBrush(Color.FromArgb(180, 95, 20))) graphics.FillRectangle(fill, cell); }
+                        using (var pen = new Pen(slot % 2 == 0 ? Color.FromArgb(220, 180, 80) : Color.FromArgb(165, 75, 190), Math.Max(1, (float)(2 * factor))))
+                            graphics.DrawRectangle(pen, cell.X, cell.Y, cell.Width - 1, cell.Height - 1);
+                    }
+                }
+                OwnedPanelLayout layout;
+                check(OwnedPanelMatcher.TryLocate(panel, new Size(2560, 1440), out layout), "bright occupied cell and rarity rims remain locatable " + factor);
+            }
+            // Contents cannot veto a genuine frame even when all six cells
+            // are bright. They still cannot produce a candidate match alone.
+            using (var panel = DrawPanel(new Size(2560, 1440), 1.0, shapes[0], true))
+            {
+                var region = OwnedPanelMatcher.CaptureRegion(new Size(2560, 1440));
+                using (var graphics = Graphics.FromImage(panel))
+                using (var fill = new SolidBrush(Color.FromArgb(180, 100, 60)))
+                    for (int slot = 0; slot < 6; slot++) graphics.FillRectangle(fill,
+                        (int)Math.Round(1280 - 634.5) - region.Left + 11 + slot % 3 * 64,
+                        1440 - 147 - region.Top + 10 + slot / 3 * 66, 57, 57);
+                OwnedPanelLayout layout;
+                check(OwnedPanelMatcher.TryLocate(panel, new Size(2560, 1440), shapes, new OwnedPanelShape[0], new OwnedPanelShape[0], out layout), "six bright cells remain a result grid");
+                foreach (var slot in OwnedPanelMatcher.ReadSlots(panel, layout, shapes, new OwnedPanelShape[0]))
+                    check(slot.Indices.Length == 0, "bright fill without a scoped glyph cannot select");
+            }
             return checks;
         }
 

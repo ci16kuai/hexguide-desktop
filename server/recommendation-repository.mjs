@@ -2,13 +2,16 @@ import {open, lstat, mkdir, rename, writeFile, unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
-import {createConditionalStatisticsClient, validateConditionalStatisticsPayload} from '../dist/conditional-statistics.js';
+import {createConditionalStatisticsClient, validateConditionalStatisticsPayload, ConditionalStatisticsError} from '../dist/conditional-statistics.js';
+import {validateReferenceBuildOrders, hasUsableReferenceBuildOrder, REFERENCE_ORDER_CONTRACT_VERSION} from './reference-build-orders.mjs';
 
 const require = createRequire(import.meta.url);
 const CHAMPION_KEYS = require('./resources/champions-16.21.1.json').champions;
 export const RECOMMENDATION_CACHE_LIMITS = Object.freeze({
-  champions:3, ttlMs:24 * 60 * 60 * 1000, snapshotBytes:4 * 1024 * 1024,
-  fileBytes:13 * 1024 * 1024, retryMs:60000, maxRetryMs:15 * 60000
+  champions:3, ttlMs:24 * 60 * 60 * 1000, snapshotBytes:8 * 1024 * 1024,
+  responseBytes:4 * 1024 * 1024, conditionalResponseBytes:8 * 1024 * 1024,
+  sourceSnapshotBytes:12 * 1024 * 1024,
+  fileBytes:25 * 1024 * 1024, retryMs:60000, maxRetryMs:15 * 60000
 });
 const LIMITS = RECOMMENDATION_CACHE_LIMITS;
 const WEIGHTS = Object.freeze({mayhem:0.8, aram:0.2});
@@ -20,6 +23,9 @@ const error = () => {
   const failure = new TypeError('Invalid recommendation aggregate.');
   failure.code = 'invalid-data';
   throw failure;
+};
+const tooLarge = () => {
+  throw new ConditionalStatisticsError('data-too-large', '来源统计超过本地大小限制，无法读取完整数据。');
 };
 const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : error();
 const integer = (value, min = 0, max = Number.MAX_SAFE_INTEGER) => Number.isSafeInteger(value) && value >= min && value <= max ? value : error();
@@ -35,7 +41,8 @@ const freeze = value => {
 };
 const boundedJson = (value, max) => {
   const json = JSON.stringify(value);
-  if (typeof json !== 'string' || Buffer.byteLength(json) > max) error();
+  if (typeof json !== 'string') error();
+  if (Buffer.byteLength(json) > max) tooLarge();
   return json;
 };
 function metrics(value) {
@@ -111,7 +118,9 @@ function date(value) {
 export function validateRecommendationSnapshot(value, {championId, patch, now = Date.now()} = {}) {
   // Parse a bounded copy before examining fields, so caller mutation cannot race
   // validation or later change an accepted in-memory/persisted snapshot.
-  const raw = JSON.parse(boundedJson(value, LIMITS.snapshotBytes));
+  // Public single-augment aggregates can exceed 4 MiB. Bound the combined
+  // input separately from the allowlisted snapshot retained in the cache.
+  const raw = JSON.parse(boundedJson(value, LIMITS.sourceSnapshotBytes));
   record(raw); record(raw.meta); record(raw.detail); record(raw.single);
   if (integer(raw.championId, 1) !== championId || raw.meta.patch !== patch
     || raw.meta.sourceName !== 'ARAMKit' || raw.meta.sourceUrl !== SOURCE_URL
@@ -165,13 +174,15 @@ export function validateRecommendationSnapshot(value, {championId, patch, now = 
       builds:detail.builds?.[scope] ? [{augmentId:1, ...detail.builds[scope]}] : []
     });
   }
-  return freeze({championId, meta:{sourceName:'ARAMKit', sourceUrl:SOURCE_URL, patch,
+  const accepted = {championId, meta:{sourceName:'ARAMKit', sourceUrl:SOURCE_URL, patch,
     dataDate:date(raw.meta.dataDate), buildTimeUnixMs, fetchedAt, dataPath,
-    scope:'all', pairCoverage:'published-top-10'}, detail, single});
+    scope:'all', pairCoverage:'published-top-10'}, detail, single};
+  boundedJson(accepted, LIMITS.snapshotBytes);
+  return freeze(accepted);
 }
 
 /** A reference mode never masquerades as Mayhem or as the other fallback mode. */
-export function validateReferenceBuildSnapshot(value, {championId, patch, now = Date.now()} = {}) {
+export function validateReferenceBuildSnapshot(value, {championId, patch, now = Date.now(), allowOrderFallback = true} = {}) {
   const raw = JSON.parse(boundedJson(value, 256 * 1024));
   record(raw);
   if (raw.championId !== championId || raw.patch !== patch || raw.source !== 'OP.GG' || raw.comparable !== true
@@ -208,8 +219,31 @@ export function validateReferenceBuildSnapshot(value, {championId, patch, now = 
     if (raw[key] !== null && (typeof raw[key] !== 'string' || !/^[a-z][a-z0-9_-]{0,39}$/.test(raw[key]))) error();
     cohort[key] = raw[key];
   }
+  const orderFields = {};
+  if ('ordersContractVersion' in raw) {
+    if (raw.ordersContractVersion !== REFERENCE_ORDER_CONTRACT_VERSION || !Array.isArray(raw.buildOrders)) error();
+    orderFields.ordersContractVersion = REFERENCE_ORDER_CONTRACT_VERSION;
+  }
+  if ('buildOrders' in raw) orderFields.buildOrders = validateReferenceBuildOrders(raw.buildOrders);
+  if ('orderFetchFailure' in raw) {
+    if (!allowOrderFallback || raw.ordersContractVersion !== REFERENCE_ORDER_CONTRACT_VERSION
+      || hasUsableReferenceBuildOrder(orderFields) || 'orderFallback' in raw) error();
+    const failure = record(raw.orderFetchFailure);
+    if (!['timeout','fetch-failed','invalid-data','unavailable'].includes(failure.code)) error();
+    orderFields.orderFetchFailure = {code:failure.code,
+      ...('retryAt' in failure ? {retryAt:integer(failure.retryAt, 1, now + 30 * 60000)} : {})};
+  }
+  if ('orderFallback' in raw) {
+    if (!allowOrderFallback || raw.mode !== 'aram' || raw.ordersContractVersion !== REFERENCE_ORDER_CONTRACT_VERSION
+      || hasUsableReferenceBuildOrder(orderFields) || !raw.orderFallback || typeof raw.orderFallback !== 'object'
+      || 'orderFallback' in raw.orderFallback) error();
+    const fallback = validateReferenceBuildSnapshot(raw.orderFallback, {championId, patch, now, allowOrderFallback:false});
+    if (fallback.mode !== 'summoners-rift' || fallback.ordersContractVersion !== REFERENCE_ORDER_CONTRACT_VERSION
+      || !hasUsableReferenceBuildOrder(fallback)) error();
+    orderFields.orderFallback = fallback;
+  }
   return freeze({mode:raw.mode, championId, patch, comparable:true, source:'OP.GG', sourceUrl:url.href,
-    observedAt:new Date(observed).toISOString(), ...cohort, items});
+    observedAt:new Date(observed).toISOString(), ...cohort, items, ...orderFields});
 }
 
 function localStatistics(snapshot, championIds, augmentCatalog, patch) {
@@ -250,17 +284,21 @@ function localStatistics(snapshot, championIds, augmentCatalog, patch) {
 async function boundedFetch(url, options) {
   const response = await globalThis.fetch(url, options);
   if (!response.ok) return response;
+  // Only the current champion's complete single-augment payload uses the
+  // larger allowance; the manifest and ordinary detail retain their old cap.
+  const limit = /^https:\/\/data\.aramkit\.com\/data\/[A-Za-z0-9._-]+\/stats\/all\/champion-details\/[1-9]\d*-single-augments\.json$/.test(url)
+    ? LIMITS.conditionalResponseBytes : LIMITS.responseBytes;
   const header = response.headers?.get?.('content-length');
-  if (header && /^\d+$/.test(header) && Number(header) > LIMITS.snapshotBytes) { await response.body?.cancel?.(); error(); }
+  if (header && /^\d+$/.test(header) && Number(header) > limit) { await response.body?.cancel?.(); tooLarge(); }
   const chunks = [];
   let bytes = 0;
   for await (const chunk of response.body) {
     bytes += chunk.byteLength;
-    if (bytes > LIMITS.snapshotBytes) error();
+    if (bytes > limit) tooLarge();
     chunks.push(chunk);
   }
-  const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  return {ok:true, json:async () => value};
+  const body = Buffer.concat(chunks).toString('utf8');
+  return {ok:true, json:async () => JSON.parse(body)};
 }
 
 /** No background refresh: only ensure(currentChampion) can make a request. */
@@ -336,7 +374,7 @@ export class RecommendationRepository {
     const entry = id && this.#entries.get(id);
     if (entry) this.#touch(this.#entries, id, entry);
     const failure = id && this.#failures.get(id);
-    const referenceFailure = id && this.#referenceFailures.get(id);
+    const referenceFailure = id && (this.#referenceFailures.get(id) || entry?.reference?.orderFetchFailure);
     const fresh = this.#fresh(entry?.snapshot, entry?.storedAt, time);
     const referenceFresh = this.#fresh(entry?.reference, entry?.referenceStoredAt, time, true);
     const mayhemStatus = !id ? 'unknown-champion' : fresh ? 'ready' : this.#mayhemPending.has(id) ? 'loading' : entry?.snapshot ? 'stale' : failure ? 'error' : 'missing';
@@ -346,7 +384,7 @@ export class RecommendationRepository {
     return freeze({status, championId:id, sourceChampionId:id ? this.#ids.get(id) : null, patch:this.#patch, snapshot:entry?.snapshot ?? null,
       augmentStatistics:this.#static.get(id) ?? freeze({}),
       ordinaryAram:entry?.reference?.mode === 'aram' ? entry.reference : null,
-      summonersRift:entry?.reference?.mode === 'summoners-rift' ? entry.reference : null,
+      summonersRift:entry?.reference?.mode === 'summoners-rift' ? entry.reference : entry?.reference?.orderFallback ?? null,
       configuredWeights:WEIGHTS, mayhemStatus, referenceStatus,
       storageStatus:this.#storageStatus, ...(failure ? {errorCode:failure.code, retryAt:failure.retryAt} : {}),
       ...(referenceFailure ? {referenceErrorCode:referenceFailure.code, referenceRetryAt:referenceFailure.retryAt} : {})});
@@ -364,7 +402,13 @@ export class RecommendationRepository {
     const current = this.get(id);
     const time = this.#time();
     const mayhem = current.mayhemStatus !== 'ready' && time >= (this.#failures.get(id)?.retryAt ?? 0);
-    const reference = current.referenceStatus !== 'ready' && time >= (this.#referenceFailures.get(id)?.retryAt ?? 0);
+    // Upgrade a still-fresh pre-order cache once. A current adapter explicitly
+    // records an empty order result, so legitimate absence does not poll forever.
+    const reference = (current.referenceStatus !== 'ready'
+      || this.#entries.get(id)?.reference?.ordersContractVersion !== REFERENCE_ORDER_CONTRACT_VERSION
+      || this.#entries.get(id)?.reference?.orderFetchFailure != null)
+      && time >= Math.max(this.#referenceFailures.get(id)?.retryAt ?? 0,
+        this.#entries.get(id)?.reference?.orderFetchFailure?.retryAt ?? 0);
     if (!mayhem && !reference) return current;
     if (this.#pending.size >= LIMITS.champions) return freeze({...current, errorCode:'busy'});
     const jobs = [];
@@ -397,7 +441,7 @@ export class RecommendationRepository {
   }
   #failed(map, id, failure) {
     const attempts = Math.min(8, (map.get(id)?.attempts ?? 0) + 1);
-    const code = ['timeout','fetch-failed','invalid-data','invalid-manifest','unavailable-version','unavailable'].includes(failure?.code) ? failure.code : 'fetch-failed';
+    const code = ['timeout','fetch-failed','data-too-large','invalid-data','invalid-manifest','unavailable-version','unavailable'].includes(failure?.code) ? failure.code : 'fetch-failed';
     this.#touch(map, id, {attempts, code, retryAt:this.#time() + Math.min(LIMITS.maxRetryMs, LIMITS.retryMs * 2 ** (attempts - 1))});
   }
   async #refreshReference(id) {
@@ -412,10 +456,19 @@ export class RecommendationRepository {
       const raw = await client.load({championId:id, championSlug:id.toLowerCase(), patch:this.#patch});
       if (raw == null) throw Object.assign(new Error('Reference data unavailable.'), {code:'unavailable'});
       const time = this.#time();
-      const reference = validateReferenceBuildSnapshot(raw, {championId:id, patch:this.#patch, now:time});
+      let reference = validateReferenceBuildSnapshot(raw, {championId:id, patch:this.#patch, now:time});
       if (time - Date.parse(reference.observedAt) >= LIMITS.ttlMs) error();
+      if (reference.orderFetchFailure) {
+        this.#failed(this.#referenceFailures, id, reference.orderFetchFailure);
+        const failure = this.#referenceFailures.get(id);
+        const retryAt = Math.max(failure.retryAt, reference.orderFetchFailure.retryAt ?? 0);
+        this.#touch(this.#referenceFailures, id, {...failure, retryAt});
+        // Persist the retry floor with the useful item snapshot. Restarting
+        // cannot turn a partial source failure into either a tight retry loop
+        // or a settled 24-hour absence of order data.
+        reference = freeze({...reference, orderFetchFailure:{code:reference.orderFetchFailure.code, retryAt}});
+      } else this.#referenceFailures.delete(id);
       this.#touch(this.#entries, id, {...this.#entries.get(id), referenceStoredAt:time, reference});
-      this.#referenceFailures.delete(id);
       this.#persist();
     } catch (failure) { this.#failed(this.#referenceFailures, id, failure); }
     this.#referencePending.delete(id);

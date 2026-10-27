@@ -16,7 +16,7 @@ const manifest = JSON.parse(await readFile(new URL('manifest.json',fixtureRoot),
 const assets = new Map(manifest.assets.map(asset => [asset.id,asset]));
 const stamp = Date.parse('2026-10-25T01:00:00Z');
 function context(ids = ['final_form','surge_field','goliath'], owned = []) {
-  const definition = id => ({id,iconKey:assets.get(id).url,kind:'augment',statistic:{championId:'Ahri',mode:'mayhem',patch:'16.21',source:'offline-fixture',sampleCount:id === 'surge_field' ? 800 : 1000,winRate:.55}});
+  const definition = id => ({id,iconKey:assets.get(id).url,kind:'augment',recommendationRank:ids.indexOf(id)+1});
   return {eligible:true,now:stamp+2000,gameId:'offline-glyph',gameEpoch:1,revision:1,offerToken:'a'.repeat(32),ids,
     championId:'Ahri',patch:'16.21',offeredAt:stamp,offers:ids.map(definition),owned:owned.map(definition)};
 }
@@ -44,7 +44,7 @@ test('cross-URL equivalent offer glyphs share one proven group and retain inferr
   const current = context(), result = validatePanelEvidence(proof(current),current);
   assert.equal(result.status,'inferred'); assert.equal(result.id,'final_form'); assert.equal(result.inferred,true);
   assert.deepEqual(result.evidence.candidateIndices,[0,1]);
-  assert.equal(result.evidence.resolution,'usage-then-win-rate');
+  assert.equal(result.evidence.resolution,'recommendation-rank');
 });
 
 test('a cross-URL known-owned glyph is subtracted before selecting a different new glyph or an extra equivalent glyph',() => {

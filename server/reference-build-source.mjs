@@ -9,6 +9,8 @@
  * This is an HTML adapter, not an official stable data API. Structural changes
  * fail closed. The repository owns caching/current-hero prefetch/backoff.
  */
+import {parseReferenceBuildOrders, hasUsableReferenceBuildOrder, REFERENCE_ORDER_CONTRACT_VERSION} from './reference-build-orders.mjs';
+
 const ORIGIN = 'https://op.gg';
 const MAX_BYTES = 4 * 1024 * 1024;
 const TIMEOUT_MS = 15000;
@@ -144,8 +146,15 @@ function parsePage(html, identity, mode, observedAt) {
   if (!proof) return null;
   const sections = all.filter(node => Array.isArray(node) && node[0] === '$' && node[1] === 'section' && record(node[3]));
   const tables = new Map();
+  let coreRows = null, coreSections = 0;
   for (const section of sections) {
     const title = elementText(array(section[3].children)[0]).trim();
+    if (title === 'Core builds') {
+      coreSections++;
+      const data = objects(section).filter(node => record(node) && Array.isArray(node.data) && typeof node.mode === 'string');
+      if (data.length === 1 && data[0].mode === (mode === 'aram' ? 'aram' : 'ranked')) coreRows = data[0].data;
+      continue;
+    }
     if (title !== 'Items' && title !== 'Boots') continue;
     const data = objects(section).filter(node => record(node) && Array.isArray(node.data) && typeof node.mode === 'string');
     if (data.length !== 1 || data[0].mode !== (mode === 'aram' ? 'aram' : 'ranked')
@@ -160,7 +169,8 @@ function parsePage(html, identity, mode, observedAt) {
   if (new Set(items.map(row => row.id)).size !== items.length) return null;
   return {mode, championId:identity.championId, patch:identity.patch, comparable:true,
     source:'OP.GG', sourceUrl:urlFor(identity, mode), observedAt,
-    ...proof, items,
+    ...proof, items, ordersContractVersion:REFERENCE_ORDER_CONTRACT_VERSION,
+    buildOrders:coreSections === 1 ? parseReferenceBuildOrders({html, rows:coreRows, patch:identity.patch}) : [],
     attribution:'OP.GG public champion item aggregates; item rates and bundle rates are separate.',
   };
 }
@@ -188,7 +198,7 @@ async function responseText(response) {
   return typeof html === 'string' && Buffer.byteLength(html, 'utf8') <= MAX_BYTES ? html : null;
 }
 
-/** At most one ARAM request and, only if unavailable, one ranked SR request. */
+/** At most one ARAM request and one ranked request when items or usable order are missing. */
 export function createReferenceBuildSource({fetcher = globalThis.fetch, now = Date.now} = {}) {
   if (typeof fetcher !== 'function' || typeof now !== 'function') throw TypeError('Invalid reference source configuration.');
   let blockedUntil = 0;
@@ -199,34 +209,52 @@ export function createReferenceBuildSource({fetcher = globalThis.fetch, now = Da
   async function load(request) {
     const identity = requestIdentity(request), started = timestamp();
     if (!identity || started === null || started < blockedUntil) return null;
+    let primary = null, lastFailure = 'unavailable', aramFailure = null;
+    const partial = (code, retryAt, value = primary) => value ? {...value, orderFetchFailure:{code,
+      ...(retryAt != null ? {retryAt} : {})}} : null;
     for (const mode of ['aram', 'summoners-rift']) {
       const url = urlFor(identity, mode), controller = new AbortController();
       let timer;
+      lastFailure = 'fetch-failed';
       try {
         const work = (async () => {
           const response = await fetcher(url, {method:'GET', credentials:'omit', redirect:'error', referrerPolicy:'no-referrer',
             headers:{Accept:'text/html', 'User-Agent':'HexGuide/1.10 (public aggregate reader)'}, signal:controller.signal});
           if ([401, 403, 429].includes(response?.status)) return {blocked:true};
-          if (!response?.ok || response.url && response.url !== url) return {html:null};
-          return {html:await responseText(response)};
+          if (!response?.ok) return {html:null, code:response?.status === 404 ? 'unavailable' : 'fetch-failed'};
+          if (response.url && response.url !== url) return {html:null, code:'invalid-data'};
+          return {html:await responseText(response), code:'invalid-data'};
         })();
         const result = await Promise.race([work, new Promise(resolve => {
-          timer = setTimeout(() => { controller.abort(); resolve({html:null}); }, TIMEOUT_MS);
+          timer = setTimeout(() => { controller.abort(); resolve({html:null, code:'timeout'}); }, TIMEOUT_MS);
         })]);
         if (result.blocked) {
           blockedUntil = (timestamp() ?? started) + BLOCK_BACKOFF_MS;
-          return null;
+          return partial('unavailable', blockedUntil);
         }
         if (result.html) {
           const observed = timestamp();
-          if (observed === null) return null;
+          if (observed === null) return partial('fetch-failed');
+          lastFailure = 'invalid-data';
           const parsed = parsePage(result.html, identity, mode, new Date(observed).toISOString());
-          if (parsed) return parsed;
-        }
-      } catch { /* Unknown/changed pages are unavailable, never synthesized. */ }
+          if (parsed) {
+            if (mode === 'aram') {
+              primary = parsed;
+              if (hasUsableReferenceBuildOrder(parsed)) return parsed;
+            } else return primary
+              ? hasUsableReferenceBuildOrder(parsed) ? {...primary, orderFallback:parsed} : primary
+              : hasUsableReferenceBuildOrder(parsed) || !aramFailure ? parsed : partial(aramFailure, null, parsed);
+          }
+        } else lastFailure = result.code || 'fetch-failed';
+      } catch (error) {
+        if (error?.name === 'AbortError' || error?.name === 'TimeoutError') lastFailure = 'timeout';
+        // Keep successful ARAM items, but distinguish a failed order request
+        // from a parsed source that legitimately supplies no usable orders.
+      }
       finally { clearTimeout(timer); controller.abort(); }
+      if (mode === 'aram' && !primary) aramFailure = lastFailure;
     }
-    return null;
+    return partial(lastFailure);
   }
   return Object.freeze({load});
 }

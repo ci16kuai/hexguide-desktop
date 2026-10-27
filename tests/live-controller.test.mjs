@@ -26,9 +26,9 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
   const globals = ['location', 'sessionStorage', 'history', 'window', 'document', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'Date'];
   const original = new Map(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const realSetTimeout = globalThis.setTimeout;
-  const intervals = [], delays = [], clicks = [], unload = [], liveReplies = [], ocrReplies = [], deferred = [];
+  const intervals = [], delays = [], clicks = [], unload = [], liveReplies = [], ocrReplies = [], sidebarReplies = [], deferred = [];
   const session = new Map([['hexguide-local-session', 'test-only-local-session'], ...Object.entries(stored)]);
-  const state = {championId, owned: [...owned], gameId, resets: 0, offers: [], renders: 0, ocrRequests: 0};
+  const state = {championId, owned: [...owned], gameId, resets: 0, offers: [], currentOffers: [], expired: 0, renders: 0, ocrRequests: 0, confirmations: [], sessionResets: [], pendingConfirmed: 0, explicitReset: 0, session: null};
   let nextSnapshot = initial;
   let sidebarModel={ocr:{enabled:false,status:'disabled',message:'',proposals:[],observedAt:null}};
   const OriginalDate = globalThis.Date;
@@ -52,7 +52,9 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
   });
   define('fetch', async (url, options={}) => {
     if (url === './items.json') return {ok: true, json: async () => items};
-    if (url === '/api/sidebar') return {ok:true,json:async()=>structuredClone(sidebarModel)};
+    if (url === '/api/sidebar') {const model=sidebarReplies.length?await sidebarReplies.shift():structuredClone(sidebarModel);if(model instanceof Error)throw model;return {ok:true,json:async()=>model};}
+    if (url === '/api/session/confirm') {state.confirmations.push(JSON.parse(options.body));return {ok:true,json:async()=>structuredClone(sidebarModel)};}
+    if (url === '/api/session/reset') {state.sessionResets.push(JSON.parse(options.body));return {ok:true,json:async()=>structuredClone(sidebarModel)};}
     if (url === '/api/sidebar/ocr') {sidebarModel.ocr.enabled=JSON.parse(options.body).enabled;return {ok:true,json:async()=>structuredClone(sidebarModel)};}
     if (url === '/api/live') {
       const value = liveReplies.length ? await liveReplies.shift() : nextSnapshot;
@@ -73,11 +75,15 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
     getOwned: () => state.owned.map(id => augments.get(id)).filter(Boolean),
     getRoute: () => 'auto', getAugments: () => data.augments,
     getGameId: () => state.gameId,
+    getSessionContext: () => state.session,
     onGameId: id => { state.gameId = id; },
     renderLive: () => { state.renders++; },
     onChampion: id => { state.championId = id; },
-    onNewGame: () => { state.owned = []; state.resets++; },
-    onOffers: ids => { state.offers.push(ids); }
+    onNewGame: () => { state.owned = []; state.currentOffers=[]; state.resets++; },
+    onOffers: (ids,meta) => { if(state.rejectOffers)return false;state.offers.push(ids); state.currentOffers=[...ids];state.offerScope=meta; },
+    onOffersExpired: () => { state.currentOffers=[]; state.expired++; },
+    onPendingConfirmed: () => { state.pendingConfirmed++; },
+    onSessionReset: () => { state.explicitReset++; }
   });
   await settle();
   t.after(async () => {
@@ -93,7 +99,7 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
   const pendingReply = kind => {
     let resolve;
     const promise = new Promise(done => { resolve = done; });
-    (kind === 'live' ? liveReplies : ocrReplies).push(promise);
+    (kind === 'live' ? liveReplies : kind === 'sidebar' ? sidebarReplies : ocrReplies).push(promise);
     deferred.push({kind, resolve});
     return resolve;
   };
@@ -102,9 +108,11 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
     advance(milliseconds) { currentTime += milliseconds; },
     setSidebar(value) { sidebarModel=value; },
     html: () => controller.html(),
-    deferLive: () => pendingReply('live'), deferOcr: () => pendingReply('ocr'),
+    deferLive: () => pendingReply('live'), deferOcr: () => pendingReply('ocr'), deferSidebar: () => pendingReply('sidebar'),
+    failLive(error = new Error('temporary API failure')) { liveReplies.push(error); },
+    failSidebar(error = new Error('temporary API failure')) { sidebarReplies.push(error); },
     async tick(value) { if (value !== undefined) nextSnapshot = value; for (const callback of intervals) callback(); await settle(); },
-    async click(action) { for (const callback of clicks) callback({target: {closest: () => ({dataset: {liveAction: action}})}}); await settle(); },
+    async click(action, dataset = {}) { for (const callback of clicks) callback({target: {closest: () => ({dataset: {liveAction: action, ...dataset}})}}); await settle(); },
     async finishScanDelay() { for (const callback of delays.splice(0)) callback(); await settle(); }
   };
 }
@@ -114,6 +122,197 @@ test('local session bootstrap opens match home and removes the token from the vi
   assert.equal(location.hash,'#live');
   assert.equal(h.session.get('hexguide-local-session'),'fixture-local-session');
   assert.match(h.html(),/data-ui-id="live-title"[^>]*>我的这一局/);
+});
+
+const pendingGroup=(pendingId,sequence,ids,active=false)=>({pendingId,sequence,active,createdAt:Date.now()-360000,offers:ids.map(id=>{const a=augments.get(id);return {id,name:a.name,icon:a.icon,rarity:a.rarity};})});
+const firstIds=['firebrand','goliath','jeweled_gauntlet'],nextIds=['transmute_prismatic','recursion','shrink_engine'];
+const pendingModel=(groups,overrides={})=>({gameId:'game-one',gameEpoch:4,sessionRevision:12,pendingRevision:12,owned:[],pendingOffers:groups,offers:groups.at(-1)?.offers||[],ocr:{enabled:true,status:'waiting',message:'当前未读到卡片',proposals:[],observedAt:new Date(Date.now()-360000).toISOString()},...overrides});
+
+test('new authoritative candidates received while dead publish without any alive snapshot', {concurrency:false}, async t=>{
+  const dead=snapshot({isDead:true,life:{status:'detected',isDead:true}});
+  const h=await browserHarness(t,{owned:[],initial:dead});
+  h.setSidebar(pendingModel([]));await h.tick(dead);
+  assert.deepEqual(h.state.currentOffers,[]);
+  const group=pendingGroup('death-round',1,nextIds,true);
+  h.setSidebar(pendingModel([group],{pendingRevision:13,life:{status:'detected',isDead:true}}));
+  await h.tick(dead);
+  assert.deepEqual(h.state.currentOffers,nextIds);
+  assert.deepEqual(h.state.owned,[],'dead candidates are displayed, not silently adopted');
+  h.advance(1000);await h.tick(dead);
+  assert.deepEqual(h.state.currentOffers,nextIds,'a repeated dead snapshot keeps the newly delivered cards visible');
+});
+
+test('server pending choices survive death, old observations, pause and temporary disconnects', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  const group=pendingGroup('round-one',1,firstIds,true);
+  h.setSidebar(pendingModel([group]));await h.tick();
+  assert.deepEqual(h.state.currentOffers,firstIds,'an observation older than five minutes still hydrates authoritative pending choices');
+  assert.match(h.html(),/待确认，已保留/);
+  assert.match(h.html(),/最近识别 · 360 秒前/,'numeric server creation times preserve the actual age');
+  h.advance(61000);await h.tick(snapshot({isDead:true}));
+  assert.deepEqual(h.state.currentOffers,firstIds);
+  h.advance(360000);await h.tick(snapshot({isDead:true}));
+  assert.deepEqual(h.state.currentOffers,firstIds);
+  await h.click('pause');h.advance(360000);await h.tick();
+  assert.deepEqual(h.state.currentOffers,firstIds,'pausing does not turn unconfirmed choices into expired frames');
+  assert.match(h.html(),/火上浇油/);
+  await h.click('pause');
+  h.failLive();await h.tick();
+  assert.match(h.html(),/等待连接/);
+  assert.deepEqual(h.state.currentOffers,firstIds,'a failed live API read preserves the last server pending state');
+  h.failSidebar();await h.tick(snapshot({connection:{status:'waiting',message:'暂时断开'},phase:'None',gameId:null,gameTime:null}));
+  assert.deepEqual(h.state.currentOffers,firstIds,'an unavailable nonterminal snapshot also preserves pending choices');
+  assert.deepEqual(h.state.owned,[],'retaining candidates never selects them');
+});
+
+test('pending publication retries after local session hydration initially rejects the cards', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});h.state.rejectOffers=true;
+  h.setSidebar(pendingModel([pendingGroup('round-one',1,firstIds,true)]));await h.tick();
+  assert.deepEqual(h.state.currentOffers,[]);
+  h.state.rejectOffers=false;await h.tick();
+  assert.deepEqual(h.state.currentOffers,firstIds,'a rejected callback does not mark the server group as already displayed');
+});
+
+test('newest pending choices publish independently while older rounds can be confirmed by identity', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  const old=pendingGroup('old-round',1,firstIds),latest=pendingGroup('new-round',2,nextIds,true);
+  h.setSidebar(pendingModel([old,latest]));await h.tick();
+  assert.deepEqual(h.state.currentOffers,nextIds);
+  assert.match(h.html(),/较早轮次待确认/);
+  assert.match(h.html(),/第 1 轮 · 待确认/);
+  assert.match(h.html(),/data-pending-id="old-round" data-id="firebrand"/);
+  assert.deepEqual(h.state.owned,[]);
+  h.setSidebar(pendingModel([latest],{sessionRevision:13,owned:[{id:'firebrand'}]}));
+    await h.click('pending-confirm',{pendingId:'old-round',id:'firebrand',gameId:'game-one',revision:'12'});
+  assert.deepEqual(h.state.confirmations,[{id:'firebrand',pendingId:'old-round',gameId:'game-one',revision:12}]);
+  assert.equal(h.state.pendingConfirmed,1,'the app is told to pull the authoritative selected session');
+  assert.deepEqual(h.state.currentOffers,nextIds,'confirming an older round leaves the newer choices visible');
+  assert.doesNotMatch(h.html(),/较早轮次待确认/);
+    await h.click('pending-confirm',{pendingId:'old-round',id:'goliath',gameId:'game-one',revision:'12'});
+  assert.equal(h.state.confirmations.length,1,'a removed pending identity cannot be submitted again');
+});
+
+test('selection resynchronizes remaining rounds and authoritative empty state suppresses old OCR', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  const old=pendingGroup('old-round',1,firstIds),latest=pendingGroup('new-round',2,nextIds,true);
+  h.setSidebar(pendingModel([old,latest]));await h.tick();
+  h.state.owned=[nextIds[0]];
+  h.setSidebar(pendingModel([{...old,active:true}],{sessionRevision:13,owned:[{id:nextIds[0]}]}));
+  h.controller.confirmedSelection();await settle();
+  assert.deepEqual(h.state.currentOffers,firstIds,'selecting the latest round reveals the remaining unresolved round');
+  h.setSidebar(pendingModel([],{sessionRevision:14,ocr:{enabled:true,status:'recognized',proposals:old.offers,observedAt:new Date(Date.now()).toISOString()}}));
+  await h.tick();
+  assert.deepEqual(h.state.currentOffers,[],'an authoritative empty pending list clears stale choices even when OCR still contains names');
+  assert.doesNotMatch(h.html(),/识别到的候选海克斯|较早轮次待确认/);
+  await h.click('ocr-confirm');assert.deepEqual(h.state.currentOffers,[]);
+});
+
+test('the latest pending triple confirms through its scoped endpoint and keeps older rounds', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  const old=pendingGroup('old-round',1,firstIds),latest=pendingGroup('new-round',2,nextIds,true);
+  h.setSidebar(pendingModel([old,latest]));await h.tick();
+  h.setSidebar(pendingModel([{...old,active:true}],{sessionRevision:13,owned:[{id:nextIds[0]}]}));
+  assert.equal(h.controller.confirmCandidate(nextIds[0],'new-round',{gameId:'game-one',revision:12}),true);await settle();
+  assert.deepEqual(h.state.confirmations,[{id:nextIds[0],pendingId:'new-round',gameId:'game-one',revision:12}]);
+  assert.deepEqual(h.state.currentOffers,firstIds);
+  assert.equal(h.controller.confirmCandidate('not-a-choice',''),true,'missing pending guards are consumed while a server pending group exists');
+});
+
+test('identical triples in different rounds still publish the newest active pending identity', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  h.setSidebar(pendingModel([pendingGroup('old-identical',1,firstIds),pendingGroup('latest-identical',2,firstIds,true)]));await h.tick();
+  assert.equal(h.state.offerScope.pendingId,'latest-identical');
+  assert.match(h.html(),/data-pending-id="old-identical"/);
+  assert.doesNotMatch(h.html(),/data-pending-id="latest-identical"/,'the latest triple stays in the main comparison instead of the older list');
+});
+
+test('pending game, epoch and revision guards reject stale sidebar responses', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  const old=pendingGroup('old-round',1,firstIds,true);
+  h.setSidebar(pendingModel([old]));await h.tick();
+  h.setSidebar(pendingModel([],{sessionRevision:13}));await h.tick();
+  h.setSidebar(pendingModel([old]));await h.tick();
+  assert.deepEqual(h.state.currentOffers,[],'an older server revision cannot reopen a confirmed group');
+  h.setSidebar(pendingModel([old],{gameEpoch:3,sessionRevision:14}));await h.tick();
+  assert.deepEqual(h.state.currentOffers,[],'a previous game epoch cannot reopen a group');
+  const resolve=h.deferSidebar();await h.tick();
+  await h.click('pause');resolve(pendingModel([old],{sessionRevision:15}));await settle();
+  assert.deepEqual(h.state.currentOffers,[],'an in-flight sidebar reply cannot change paused state');
+  h.setSidebar(pendingModel([old],{sessionRevision:15}));await h.click('pause');
+  assert.deepEqual(h.state.currentOffers,firstIds);
+  await h.tick(snapshot({gameId:'game-two',gameTime:3}));
+  assert.deepEqual(h.state.currentOffers,[],'a true game boundary clears the previous pending cache');
+  assert.doesNotMatch(h.html(),/待确认，已保留/);
+  assert.equal(h.state.resets,1);
+});
+
+test('a clock restart with the same game id requires a new server epoch before accepting pending choices', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  const group=pendingGroup('old-round',1,firstIds,true);
+  h.setSidebar(pendingModel([group]));await h.tick();
+  await h.tick(snapshot({gameTime:3}));
+  assert.deepEqual(h.state.currentOffers,[]);
+  h.setSidebar(pendingModel([pendingGroup('next-game-round',1,nextIds,true)],{gameEpoch:5,sessionRevision:13}));
+  await h.tick(snapshot({gameTime:5}));
+  assert.deepEqual(h.state.currentOffers,nextIds);
+});
+
+test('a sidebar read started before confirmation cannot restore its resolved pending group', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  const old=pendingGroup('old-round',1,firstIds),latest=pendingGroup('new-round',2,nextIds,true),before=pendingModel([old,latest]);
+  h.setSidebar(before);await h.tick();
+  const resolve=h.deferSidebar();await h.tick();
+  h.setSidebar(pendingModel([{...old,active:true}],{sessionRevision:13,owned:[{id:nextIds[0]}]}));
+  h.controller.confirmCandidate(nextIds[0],'new-round',{gameId:'game-one',revision:12});await settle();
+  assert.deepEqual(h.state.currentOffers,firstIds);
+  resolve(before);await settle();
+  assert.deepEqual(h.state.currentOffers,firstIds,'the completed confirmation revision wins over the old in-flight read');
+  assert.doesNotMatch(h.html(),/data-pending-id="new-round"/);
+});
+
+test('an older in-flight sidebar read cannot revert a reroll with the same selected-session revision', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]}),before=pendingModel([pendingGroup('before-reroll',1,firstIds,true)]);
+  h.setSidebar(before);await h.tick();
+  const resolve=h.deferSidebar();await h.tick();
+  h.setSidebar(pendingModel([pendingGroup('after-reroll',1,nextIds,true)],{pendingRevision:13}));
+  await h.click('ocr-auto');assert.deepEqual(h.state.currentOffers,nextIds);
+  resolve(before);await settle();
+  assert.deepEqual(h.state.currentOffers,nextIds,'pendingRevision advances independently of selected ownership');
+  h.failLive();await h.tick();h.setSidebar(before);await h.tick();
+  assert.deepEqual(h.state.currentOffers,nextIds,'temporary connection failure keeps the pending revision watermark');
+});
+
+test('overlapping owned candidates do not resolve a different pending round', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:['firebrand']});
+  const group=pendingGroup('older-round',1,firstIds,true);
+  h.setSidebar(pendingModel([group],{sessionRevision:13,owned:[{id:'firebrand'}]}));await h.tick();
+  assert.deepEqual(h.state.currentOffers,firstIds,'the whole triple stays visible when only one candidate is already owned from another round');
+  h.controller.confirmedSelection();await settle();
+  assert.deepEqual(h.state.currentOffers,firstIds,'ownership reconciliation cannot infer which pending group was selected');
+});
+
+test('rendered pending identity and revision never retarget a stale same-name candidate click', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  h.setSidebar(pendingModel([pendingGroup('before-reroll',1,firstIds,true)]));await h.tick();
+  h.setSidebar(pendingModel([pendingGroup('after-reroll',1,firstIds,true)],{sessionRevision:13}));await h.tick();
+  assert.equal(h.controller.confirmCandidate(firstIds[0],'before-reroll',{gameId:'game-one',revision:12}),true);
+  await settle();assert.deepEqual(h.state.confirmations,[],'the stale guarded click is consumed without using the new pending identity');
+  h.controller.confirmCandidate(firstIds[0],'after-reroll',{gameId:'game-one',revision:12});await settle();
+  assert.deepEqual(h.state.confirmations,[],'a stale rendered revision cannot inherit fresh guards');
+  assert.match(h.html(),/本局选择已变化/);
+  assert.equal(h.controller.confirmCandidate(firstIds[0],'',{gameId:null,revision:0}),true,'missing guards are consumed while authoritative pending state exists');
+  await settle();assert.deepEqual(h.state.confirmations,[]);
+});
+
+test('explicit reset clears pending even when no selected augments or route delta exists', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  h.setSidebar(pendingModel([pendingGroup('unconfirmed',1,firstIds,true)]));await h.tick();
+  h.setSidebar(pendingModel([],{sessionRevision:13}));
+  assert.equal(h.controller.resetSession(),true);await settle();
+  assert.deepEqual(h.state.sessionResets,[{gameId:'game-one',revision:12}]);
+  assert.equal(h.state.explicitReset,1);
+  assert.deepEqual(h.state.currentOffers,[]);
+  await h.tick();assert.deepEqual(h.state.currentOffers,[]);
 });
 
 test('live controller follows game boundaries without presenting drafts as current game data', {concurrency: false}, async t => {
