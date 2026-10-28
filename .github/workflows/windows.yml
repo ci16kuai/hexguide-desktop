@@ -18,8 +18,6 @@ jobs:
     name: Test and package Windows x64
     runs-on: windows-2022
     timeout-minutes: 35
-    env:
-      HEXGUIDE_CI_WORK: ${{ runner.temp }}/hexguide-ci
     defaults:
       run:
         shell: powershell
@@ -35,7 +33,9 @@ jobs:
           package-manager-cache: false
       - name: Run tests and build Windows packages
         run: |
-          & ./scripts/ci-windows.ps1 -NodePath (Get-Command node.exe).Source -WorkPath $env:HEXGUIDE_CI_WORK
+          $ciWork = Join-Path $env:RUNNER_TEMP 'hexguide-ci'
+          "HEXGUIDE_CI_WORK=$ciWork" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & ./scripts/ci-windows.ps1 -NodePath (Get-Command node.exe).Source -WorkPath $ciWork
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload verification diagnostics
         if: always()
