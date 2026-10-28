@@ -232,7 +232,8 @@ namespace HexGuide.Desktop
         }
 
         private void RecordTrace(string eventCode, string reason, long now)
-        { trace.Record(eventCode, reason, now, BaselineFrames, FeedbackFrames, DismissedFrames); }
+        { trace.Record(eventCode, reason, now, BaselineFrames, FeedbackFrames, DismissedFrames,
+            0, 0, (eventCode == "cancelled" || eventCode == "proof") && reference != null && pressedAt > 0); }
 
         internal bool Add(EarlySelectionFrame frame, int kind, int column, long now)
         {
@@ -316,8 +317,8 @@ namespace HexGuide.Desktop
                 if (beforeFeedback == 0 && replay.FeedbackFrames > 0) RecordTrace("feedback", "unique-feedback", now);
                 if (!replay.Complete) continue;
                 if (now - item.At > MaximumLeaseMs) { Cancel("evidence-expired", now); return null; }
-                var evidence = reference.Evidence(replay.SelectedIndex, replay.ClickedAt, item.At, replay.DismissedFrames, replay.FeedbackFrames);
-                RecordTrace("proof", "full-proof", now);
+                var evidence = reference.Evidence(replay, item.At);
+                RecordTrace("proof", replay.DirectComplete ? "verified-click-transition" : "full-proof", now);
                 Clear(); emitted = true; State = "observed"; Reason = "full-proof";
                 return evidence;
             }
@@ -572,7 +573,31 @@ namespace HexGuide.Desktop
             using (var replay = Started())
             {
                 Click(replay, false); replay.Bind(Reference(), 1500);
-                Check(replay.TryObserve(1500) == null, "click plus disappearance was accepted without unique feedback");
+                Check(replay.TryObserve(1500) == null, "short uncorroborated transition was accepted without unique feedback");
+            }
+            foreach (bool closedAtRelease in new[] { false, true })
+            using (var replay = Started())
+            {
+                replay.Add(Frame(1000), 0, -1, 1000); replay.Add(Frame(1070), 0, -1, 1070);
+                replay.Add(Frame(1100), 1, 1, 1100);
+                replay.Add(Frame(1178, closedAtRelease ? 100 : 25, !closedAtRelease), 2, 1, 1178);
+                for (long at = 1240; at <= 1590; at += 70) replay.Add(Frame(at, 100, false), 0, -1, at);
+                replay.Bind(Reference(), 1700);
+                var proof = replay.TryObserve(1700);
+                Check(proof != null && (int)proof["selectedIndex"] == 1 && (long)proof["observedAt"] == 1590,
+                    "anchored no-FX interaction did not replay to the physical choice");
+                var detail = ModelValue.Object(proof, "evidence");
+                Check(ModelValue.Text(detail, "kind") == "verified-click-transition" && !detail.ContainsKey("uniqueFeedback"),
+                    "new path masqueraded as a detected FX");
+                Check(replay.FrameCount == 0 && replay.TryObserve(1701) == null, "direct proof retained pixels or emitted twice");
+            }
+            foreach (string reason in new[] { "interaction-interrupted", "focus-changed", "local-action", "outside-click", "capture-unavailable" })
+            using (var replay = Started())
+            {
+                replay.Bind(Reference(), 980); Click(replay, false);
+                replay.Cancel(reason, 1450);
+                for (long at = 1500; at <= 1850; at += 70) replay.Add(Frame(at, 100, false), 0, -1, at);
+                Check(replay.TryObserve(1850) == null, "cancelled no-FX activation was revived: " + reason);
             }
             using (var replay = Started())
             {

@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$NodePath,
     [string]$WorkPath
 )
@@ -157,6 +157,8 @@ try {
         if (-not (Test-Path -LiteralPath (Join-Path $stage 'HexGuide.exe') -PathType Leaf)) { throw 'The build did not produce the isolated executable.' }
         $build = [IO.File]::ReadAllText((Join-Path $stage 'build-info.json')) | ConvertFrom-Json
         if ($build.appVersion -ne $package.version -or $build.architecture -ne 'win-x64') { throw 'Unexpected build manifest.' }
+        $binaryVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $stage 'HexGuide.exe')).ProductVersion
+        if ($binaryVersion -ne $package.version) { throw 'Native executable version differs from package.json.' }
         $build
     }
     $executable = Join-Path $stage 'HexGuide.exe'
@@ -165,6 +167,7 @@ try {
         param($output)
         $result = $output | ConvertFrom-Json
         Assert-PositiveInteger $result.checks 'checks'
+        if ($result.version -ne $package.version) { throw 'Native diagnostic version differs from package.json.' }
         if ($result.mode -ne 'offline-no-ui' -or $result.liveGameVerified -isnot [bool] -or $result.liveGameVerified) { throw 'Unexpected selection fixture contract.' }
         $result
     }
@@ -180,7 +183,7 @@ try {
     Invoke-Stage -Name $currentStage -Executable $executable -Arguments @('--sidebar-self-test', (Join-Path $previews 'sidebar.png')) -TimeoutSeconds 60 -Validate {
         param($output)
         $result = $output | ConvertFrom-Json
-        foreach ($field in @('checks', 'helpChecks', 'selectionChecks', 'pendingOfferChecks', 'passiveActivationChecks', 'augmentIconChecks', 'shortcutChecks', 'appearanceChecks', 'positionChecks', 'liveStateChecks', 'loadingPreviewChecks', 'buildStatisticsChecks', 'initialPlanChecks', 'visibilityChecks', 'width', 'height')) {
+        foreach ($field in @('checks', 'idleHideChecks', 'helpChecks', 'selectionChecks', 'pendingOfferChecks', 'passiveActivationChecks', 'augmentIconChecks', 'shortcutChecks', 'appearanceChecks', 'positionChecks', 'liveStateChecks', 'loadingPreviewChecks', 'buildStatisticsChecks', 'initialPlanChecks', 'visibilityChecks', 'width', 'height')) {
             Assert-PositiveInteger $result.$field $field
         }
         Add-Type -AssemblyName System.Drawing

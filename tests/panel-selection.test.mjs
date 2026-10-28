@@ -1,10 +1,12 @@
 // Synthetic classification proofs validate the boundary, not real HUD capture.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {DEFAULT_PANEL_SELECTION_POLICY, validatePanelEvidence} from '../server/panel-selection.mjs';
 import {glyphProof} from './fixtures/panel-glyph-proof.mjs';
 
 const stamp = Date.parse('2026-10-25T01:00:00Z');
+const catalogAugments = JSON.parse(readFileSync(new URL('../dist/data.json',import.meta.url),'utf8')).augments;
 const statistic = (sampleCount = 1000, winRate = .55, extra = {}) => ({
   championId:'MonkeyKing',mode:'mayhem',patch:'16.21',source:'fixture',sampleCount,winRate,...extra,
 });
@@ -27,6 +29,60 @@ function collision() {
   const current = context(); current.offers[1].iconKey = current.offers[0].iconKey;
   return {current,value:proof(current,[[0,1]])};
 }
+
+test('the real stats_on_stats! catalog identity works as a candidate without normalization', () => {
+  const augment = catalogAugments.find(row => row.id === 'stats_on_stats!');
+  assert.ok(augment,'regression uses the real catalog identity and icon');
+  const candidate = context();
+  candidate.ids[0] = augment.id;
+  candidate.offers[0] = {...candidate.offers[0],id:augment.id,iconKey:augment.icon};
+  const value = proof(candidate);
+  assert.equal(validatePanelEvidence(value,candidate).id,augment.id);
+  value.ids[0] = 'stats_on_stats';
+  assert.equal(validatePanelEvidence(value,candidate).reason,'panel-context-mismatch','punctuation is never normalized away');
+});
+
+test('the real owned stats_on_stats! identity cannot reject a subsequent panel result', () => {
+  const augment = catalogAugments.find(row => row.id === 'stats_on_stats!');
+  assert.ok(augment,'regression uses the real already owned catalog identity');
+  const owned = context(); owned.owned = [{id:augment.id,iconKey:augment.icon}];
+  assert.equal(validatePanelEvidence(proof(owned),owned).id,'left','an owned punctuation-bearing ID cannot reject the entire panel');
+});
+
+test('all bundled catalog IDs and icon binding keys pass the panel contract without fetching icons', () => {
+  assert.ok(catalogAugments.length > 0);
+  for (const augment of catalogAugments) {
+    const candidate = context();
+    candidate.ids[0] = augment.id;
+    candidate.offers[0] = {...candidate.offers[0],id:augment.id,iconKey:augment.icon};
+    assert.equal(validatePanelEvidence(proof(candidate),candidate).id,augment.id,`candidate catalog key: ${augment.id}`);
+    const owned = context(); owned.owned = [{id:augment.id,iconKey:augment.icon}];
+    assert.equal(validatePanelEvidence(proof(owned),owned).id,'left',`owned catalog key: ${augment.id}`);
+  }
+});
+
+test('catalog key support retains bounds, whitespace/control rejection and strict frame identifiers', () => {
+  const invalid = ['',null,'a'.repeat(101),...[' ','\t','\n','\0','\u001f','\u007f','\u0085','\u009f','\u00a0','\u2028','\ufeff'].map(character => `key${character}suffix`)];
+  for (const id of invalid) {
+    const candidate = context(); candidate.ids[0] = id; candidate.offers[0].id = id;
+    assert.equal(validatePanelEvidence(proof(candidate),candidate).reason,'panel-context-invalid',`candidate ${JSON.stringify(id)}`);
+    const owned = context(); owned.owned = [{id,iconKey:'owned-icon'}];
+    assert.equal(validatePanelEvidence(proof(owned),owned).reason,'panel-context-invalid',`owned ${JSON.stringify(id)}`);
+    const current = context(), value = proof(current); value.ids[0] = id;
+    assert.equal(validatePanelEvidence(value,current).reason,'panel-evidence-invalid',`proof ${JSON.stringify(id)}`);
+  }
+  for (const iconKey of invalid.filter(value => value !== 'a'.repeat(101)).concat('a'.repeat(401))) {
+    const candidate = context(), candidateProof = proof(candidate); candidate.offers[0].iconKey = iconKey;
+    assert.equal(validatePanelEvidence(candidateProof,candidate).reason,'panel-context-invalid',`candidate icon ${JSON.stringify(iconKey)}`);
+    const owned = context(); owned.owned = [{id:'previous',iconKey:'owned-icon'}];
+    const ownedProof = proof(owned); owned.owned[0].iconKey = iconKey;
+    assert.equal(validatePanelEvidence(ownedProof,owned).reason,'panel-context-invalid',`owned icon ${JSON.stringify(iconKey)}`);
+  }
+  for (const field of ['captureId','geometryKey']) {
+    const current = context(), value = proof(current); value.frames[0][field] += '!';
+    assert.equal(validatePanelEvidence(value,current).reason,'panel-evidence-invalid',field);
+  }
+});
 
 test('one stable current-offer glyph matches without a prior baseline or game click', () => {
   const current = context(), input = proof(current,[[2]]);

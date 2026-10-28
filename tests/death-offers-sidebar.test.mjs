@@ -18,7 +18,7 @@ const capture = capturedAt => ({capturedAt, width:1920, height:1080, originX:0, 
 function harness(t, {dead = true} = {}) {
   let now = Date.parse('2026-10-27T00:00:00Z'), scans = 0, ids = [...firstIds], deferred = false, release = null;
   let live = {connection:{status:'connected'}, phase:'InProgress', stage:'live', gameId:'death-offer-fixture',
-    championId:'Ahri', level:7, gameTime:300, life:{status:'detected', isDead:dead}, mode:{known:true, isMayhem:true},
+    championId:'Ahri', level:3, gameTime:300, life:{status:'detected', isDead:dead}, mode:{known:true, isMayhem:true},
     items:[], stats:{}, observedAt:new Date(now).toISOString()};
   const advance = ms => {now += ms; live.observedAt = new Date(now).toISOString(); live.gameTime += ms/1000;};
   const sidebar = new BackgroundSidebar({collector:{getSnapshot:() => structuredClone(live)}, data, itemsCatalog, now:() => now,
@@ -30,7 +30,7 @@ function harness(t, {dead = true} = {}) {
     }});
   t.after(async () => {release?.(); await sidebar.stop();});
   return {sidebar, advance, now:() => now, scans:() => scans, model:() => sidebar.getModel(),
-    life(isDead) {live.life = {status:'detected', isDead};}, unknown() {live.life = {status:'unavailable', isDead:null};},
+    life(isDead) {live.life = {status:'detected', isDead};}, level(value) {live.level = value;}, unknown() {live.life = {status:'unavailable', isDead:null};},
     offers(value) {ids = [...value];}, deferNext() {deferred = true;}, release() {release?.();}};
 }
 
@@ -62,7 +62,7 @@ test('new death cards become latest without discarding an older unanswered alive
   const h = harness(t, {dead:false});
   await h.sidebar.scan();
   const old = h.model().pendingOffers[0];
-  h.advance(1000); h.life(true); h.offers(nextIds);
+  h.advance(1000); h.level(11); h.life(true); h.offers(nextIds);
   await h.sidebar.pollOnce();
   const model = h.model();
   assert.deepEqual(model.offers.map(offer => offer.id), nextIds);
@@ -146,7 +146,7 @@ test('manual confirmation while dead stays closed across respawn and a later dea
 test('confirming an older round does not stop scanning the newer death round', async t => {
   const h = harness(t, {dead:false}); await h.sidebar.scan();
   const old = h.model().pendingOffers[0];
-  h.advance(1000); h.life(true); h.offers(nextIds); await h.sidebar.pollOnce();
+  h.advance(1000); h.level(11); h.life(true); h.offers(nextIds); await h.sidebar.pollOnce();
   const current = h.model(), scans = h.scans();
   await h.sidebar.confirmOffer({id:firstIds[0], pendingId:old.pendingId, gameId:current.gameId, revision:current.sessionRevision});
   assert.equal(h.sidebar.scanSchedule.awaitingConfirmation, true);

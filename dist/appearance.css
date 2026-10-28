@@ -44,7 +44,12 @@ html[data-appearance-density="compact"] .live-stats{padding-block:13px}
 .appearance-section-note{font-size:11px;color:#8ca5b5;margin:0 0 19px;line-height:1.8}
 .appearance-field{display:block;margin-bottom:17px;font-size:12px;color:#b8cddb}
 .appearance-field>span{display:flex;justify-content:space-between;gap:10px;margin-bottom:7px}
-.appearance-field select{background:#0c1b29;color:#d4e4ee;border:1px solid #375064;border-radius:5px;padding:8px 10px;width:100%;min-height:38px;font-size:12px}
+.appearance-field select,.appearance-number input{background:#0c1b29;color:#d4e4ee;border:1px solid #375064;border-radius:5px;padding:8px 10px;width:100%;min-height:38px;font-size:12px}
+.appearance-number input{font-variant-numeric:tabular-nums;caret-color:var(--cyan)}
+.appearance-number input:hover:not(:disabled){border-color:#7daab4}
+.appearance-number input[aria-invalid="true"]{border-color:#f0b0a5}
+.appearance-number input:disabled{opacity:.4;cursor:wait}
+.appearance-number small{display:block;margin-top:6px;color:#93aaba;font-size:11px;line-height:1.8}
 .appearance-range input{display:block;width:100%;margin:10px 0 7px;accent-color:#caae76;cursor:pointer;min-height:20px}
 .appearance-range output{color:#d9be87;font-variant-numeric:tabular-nums;font-size:12px}
 .appearance-range small{display:flex;justify-content:space-between;color:#6f8b9f;font-size:10px}

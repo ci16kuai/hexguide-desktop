@@ -25,13 +25,14 @@ applyMain(saved);
 const options=(values,current)=>Object.entries(values).map(([value,label])=>`<option value="${value}"${value===current?' selected':''}>${label}</option>`).join('');
 const select=(name,label,values,current)=>`<label class="appearance-field"><span>${label}</span><select name="${name}">${options(values,current)}</select></label>`;
 const range=(name,label,value,min,max,unit,step=1)=>`<label class="appearance-field appearance-range"><span>${label}<output data-output="${name}" for="appearance-${name}">${value}${unit}</output></span><input id="appearance-${name}" name="${name}" type="range" min="${min}" max="${max}" step="${step}" value="${value}" data-unit="${unit}"><small>${min}${unit}<span>${max}${unit}</span></small></label>`;
+const idleHideInput=value=>`<label class="appearance-field appearance-number"><span>自动收起等待时间（秒）</span><input id="appearance-sidebar-idleHideSeconds" name="sidebar-idleHideSeconds" type="number" min="5" max="300" step="1" required value="${value}" aria-describedby="appearance-idle-hide-help"><small id="appearance-idle-hide-help">5–300 秒；默认 10 秒。</small></label>`;
 const dialog=document.createElement('dialog');
 dialog.id='appearance-dialog';dialog.className='appearance-dialog';dialog.setAttribute('aria-labelledby','appearance-title');
 document.body.append(dialog);
 
 function render(){
   const m=draft.main,s=draft.sidebar;
-  dialog.innerHTML=`<form id="appearance-form"><header class="appearance-head"><div><h2 id="appearance-title">界面设置</h2><p>按自己的习惯，安排每一局的信息。</p></div><button class="icon-button" type="button" data-appearance-action="cancel" aria-label="关闭界面设置">✕</button></header><div class="appearance-scroll"><p class="appearance-preview-note"><span aria-hidden="true">◈</span>主窗口即时预览；点击“保存设置”后，游戏侧栏也会更新。</p><div class="appearance-columns"><fieldset class="appearance-section"><legend>主窗口</legend><p class="appearance-section-note">调整字体、内容大小和资料排列。</p>${select('main-fontFamily','字体',fontNames,m.fontFamily)}${range('main-scale','内容缩放',m.scale,85,130,'%')}${select('main-density','内容间距',{comfortable:'舒适',compact:'紧凑'},m.density)}${select('main-cardLayout','海克斯排列',{grid:'卡片网格',list:'单列列表'},m.cardLayout)}${select('main-panelSide','“我的这一局”位置',{left:'左侧',right:'右侧'},m.panelSide)}<p class="appearance-field-note">窄窗口和手机上保持单列，方便阅读。</p></fieldset><fieldset class="appearance-section"><legend>游戏侧栏</legend><p class="appearance-section-note">保存后生效，不会改变游戏内设置。</p>${select('sidebar-fontFamily','字体',fontNames,s.fontFamily)}${range('sidebar-scale','文字大小',s.scale,85,130,'%')}${range('sidebar-width','侧栏宽度',s.width,280,460,' px')}${select('sidebar-side','显示位置',{right:'屏幕右侧',left:'屏幕左侧'},s.side)}${range('sidebar-opacity','不透明度',s.opacity,75,100,'%')}<div class="appearance-order"><span class="appearance-order-label">信息排列</span><ol id="appearance-order-list">${orderMarkup()}</ol><small>使用上下按钮调整，最上方的信息优先显示。</small></div></fieldset></div><p id="appearance-status" class="appearance-status" role="status" aria-live="polite">${escape(statusText())}</p><span class="appearance-sr-only" id="appearance-order-status" role="status" aria-live="polite"></span></div><footer class="appearance-footer"><button type="button" class="appearance-reset" data-appearance-action="reset">恢复默认</button><div><button type="button" class="secondary-button" data-appearance-action="cancel">取消</button><button type="submit" class="primary-button" id="appearance-save">保存设置</button></div></footer></form>`;
+  dialog.innerHTML=`<form id="appearance-form"><header class="appearance-head"><div><h2 id="appearance-title">界面设置</h2><p>按自己的习惯，安排每一局的信息。</p></div><button class="icon-button" type="button" data-appearance-action="cancel" aria-label="关闭界面设置">✕</button></header><div class="appearance-scroll"><p class="appearance-preview-note"><span aria-hidden="true">◈</span>主窗口即时预览；点击“保存设置”后，游戏侧栏也会更新。</p><div class="appearance-columns"><fieldset class="appearance-section"><legend>主窗口</legend><p class="appearance-section-note">调整字体、内容大小和资料排列。</p>${select('main-fontFamily','字体',fontNames,m.fontFamily)}${range('main-scale','内容缩放',m.scale,85,130,'%')}${select('main-density','内容间距',{comfortable:'舒适',compact:'紧凑'},m.density)}${select('main-cardLayout','海克斯排列',{grid:'卡片网格',list:'单列列表'},m.cardLayout)}${select('main-panelSide','“我的这一局”位置',{left:'左侧',right:'右侧'},m.panelSide)}<p class="appearance-field-note">窄窗口和手机上保持单列，方便阅读。</p></fieldset><fieldset class="appearance-section"><legend>游戏侧栏</legend><p class="appearance-section-note">保存后生效，不会改变游戏内设置。</p>${select('sidebar-fontFamily','字体',fontNames,s.fontFamily)}${range('sidebar-scale','文字大小',s.scale,85,130,'%')}${range('sidebar-width','侧栏宽度',s.width,280,460,' px')}${select('sidebar-side','显示位置',{right:'屏幕右侧',left:'屏幕左侧'},s.side)}${range('sidebar-opacity','不透明度',s.opacity,75,100,'%')}${idleHideInput(s.idleHideSeconds)}<div class="appearance-order"><span class="appearance-order-label">信息排列</span><ol id="appearance-order-list">${orderMarkup()}</ol><small>使用上下按钮调整，最上方的信息优先显示。</small></div></fieldset></div><p id="appearance-status" class="appearance-status" role="status" aria-live="polite">${escape(statusText())}</p><span class="appearance-sr-only" id="appearance-order-status" role="status" aria-live="polite"></span></div><footer class="appearance-footer"><button type="button" class="appearance-reset" data-appearance-action="reset">恢复默认</button><div><button type="button" class="secondary-button" data-appearance-action="cancel">取消</button><button type="submit" class="primary-button" id="appearance-save">保存设置</button></div></footer></form>`;
 }
 function orderMarkup(){return draft.sidebar.sections.map((section,index)=>`<li><span class="appearance-order-grip" aria-hidden="true">⋮⋮</span><span>${sectionNames[section]}</span><div><button type="button" data-appearance-action="up" data-section="${section}" aria-label="将${sectionNames[section]}上移"${index===0?' disabled':''}>↑</button><button type="button" data-appearance-action="down" data-section="${section}" aria-label="将${sectionNames[section]}下移"${index===3?' disabled':''}>↓</button></div></li>`).join('');}
 function statusText(){return notice||(source==='desktop'?'设置保存在本机，重新打开软件后仍然有效。':'网页预览：设置保存在当前浏览器。游戏侧栏需在桌面版中使用。');}
@@ -65,6 +66,7 @@ async function load(){
 }
 async function save(){
   if(saving)return;
+  if(!dialog.querySelector('#appearance-form').reportValidity())return;
   let value;try{value=clone(draft);}catch{setStatus('设置包含不支持的值，请恢复默认后重新调整。',true);return;}
   saving=true;dialog.querySelectorAll('button,input,select').forEach(control=>control.disabled=true);setStatus('正在保存…');
   try{
@@ -85,11 +87,21 @@ async function save(){
 dialog.addEventListener('input',event=>{
   const input=event.target;if(!input.name||saving)return;
   const [part,key]=input.name.split('-');if(!draft[part]||!(key in draft[part]))return;
-  draft[part][key]=input.type==='range'?Number(input.value):input.value;
+  draft[part][key]=input.type==='number'?input.valueAsNumber:input.type==='range'?Number(input.value):input.value;
+  if(input.type==='number'){
+    const invalid=!input.validity.valid;
+    input.setAttribute('aria-invalid',String(invalid));
+    setStatus(invalid?'自动收起等待时间请输入 5–300 之间的整数秒。':statusText(),invalid);
+  }
   const output=dialog.querySelector(`[data-output="${input.name}"]`);if(output)output.value=`${input.value}${input.dataset.unit}`;
   applyMain(draft);
 });
 dialog.addEventListener('submit',event=>{event.preventDefault();void save();});
+dialog.addEventListener('invalid',event=>{
+  if(event.target.name!=='sidebar-idleHideSeconds')return;
+  event.target.setAttribute('aria-invalid','true');
+  setStatus('自动收起等待时间请输入 5–300 之间的整数秒。',true);
+},true);
 dialog.addEventListener('click',event=>{
   const button=event.target.closest('[data-appearance-action]');if(!button||saving)return;
   const action=button.dataset.appearanceAction;

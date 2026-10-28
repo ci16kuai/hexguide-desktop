@@ -29,6 +29,8 @@ namespace HexGuide.Desktop
         private readonly OwnedPanelStageDiagnostics captureStages = new OwnedPanelStageDiagnostics();
         private OwnedPanelContext context;
         private bool disposed, publishing;
+        private bool automaticEnabled;
+        private long manualRequestId, manualExpiresAt;
         private string emittedIdentity = "", lastCode = "waiting-offers";
         private int attempts, captured, matched, blocked;
         private long lastAt;
@@ -48,8 +50,19 @@ namespace HexGuide.Desktop
             if (disposed) return;
             var ocr = ModelValue.Object(model, "ocr");
             var mode = ModelValue.Object(model, "mode");
+            automaticEnabled = ModelValue.Boolean(ocr, "enabled");
+            long requestId, expiresAt;
+            bool manual = ManualScopeActive(ModelValue.Object(model, "manualRecognition"), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), out requestId, out expiresAt);
+            manualExpiresAt = manual ? expiresAt : 0;
+            if (manual && requestId != manualRequestId)
+            {
+                // A button press requests fresh independent frames. It never
+                // clears an accepted identity or bypasses the shared submit gate.
+                manualRequestId = requestId;
+                stability.Reset();
+            }
             OwnedPanelContext next;
-            if (!ModelValue.Boolean(ocr, "enabled") || ModelValue.Text(model, "phase") != "InProgress"
+            if ((!automaticEnabled && !manual) || ModelValue.Text(model, "phase") != "InProgress"
                 || ModelValue.Text(model, "stage") == "loading"
                 || (ModelValue.Boolean(mode, "known") && !ModelValue.Boolean(mode, "isMayhem"))
                 || !OwnedPanelContext.TryRead(ModelValue.Object(model, "panelSelection"), out next))
@@ -71,7 +84,19 @@ namespace HexGuide.Desktop
 
         internal void CancelForLocalAction()
         {
+            manualExpiresAt = 0;
             context = null; stability.Reset(); timer.Stop(); SetStatus("local-action");
+        }
+
+        internal static bool ManualScopeActive(Dictionary<string, object> value, long now, out long requestId, out long expiresAt)
+        {
+            requestId = expiresAt = 0;
+            long startedAt;
+            return ModelValue.Boolean(value, "active")
+                && ModelValue.Integer(value, "requestId", out requestId) && requestId > 0
+                && ModelValue.Integer(value, "startedAt", out startedAt) && startedAt > 0 && startedAt <= now + 1000
+                && ModelValue.Integer(value, "expiresAt", out expiresAt) && expiresAt > now
+                && expiresAt > startedAt && expiresAt - startedAt <= 25000;
         }
 
         // The parent supplies the shared commit endpoint. A failed submission
@@ -186,6 +211,8 @@ namespace HexGuide.Desktop
         private void Poll()
         {
             if (disposed || context == null || publishing || emittedIdentity == context.Identity) return;
+            if (!automaticEnabled && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= manualExpiresAt)
+            { context = null; stability.Reset(); timer.Stop(); SetStatus("waiting-offers"); return; }
             var expected = context;
             var shapes = new OwnedPanelShape[3];
             for (int index = 0; index < 3; index++)
@@ -572,6 +599,8 @@ namespace HexGuide.Desktop
         internal string State;
         internal int[] Indices;
         internal double Similarity;
+        // Local matching/stability identity only; Proof keeps its bounded schema.
+        internal string Fingerprint = "";
         internal Dictionary<string, object> Proof()
         {
             return new Dictionary<string, object> { { "slotIndex", Index }, { "state", State }, { "candidateIndices", Indices } };
@@ -728,9 +757,36 @@ namespace HexGuide.Desktop
             {
                 var area = layout.Slots[index]; area.Inflate(-Math.Max(1, area.Width / 20), -Math.Max(1, area.Height / 20));
                 var shape = OwnedPanelShape.Extract(bitmap, area);
-                result[index] = Match(shape, candidates, owned, excluded); result[index].Index = index;
+                var outer = Match(shape, candidates, owned, excluded);
+                // HUD rims/edge decoration can enter a cell's bright-glyph
+                // bounding box (observed in the top-right cell). One fixed,
+                // scale-relative inner crop removes that rim for every slot.
+                // It uses the same templates, score/margin and exclusions.
+                area = layout.Slots[index];
+                area.Inflate(-Math.Max(2, (int)Math.Round(area.Width * .14)), -Math.Max(2, (int)Math.Round(area.Height * .14)));
+                var inner = Match(OwnedPanelShape.Extract(bitmap, area), candidates, owned, excluded);
+                result[index] = ResolveCrops(outer, inner); result[index].Index = index;
             }
             return result;
+        }
+
+        private static bool Recognized(OwnedPanelSlotMatch value)
+        { return value.State == "candidate" || value.State == "ambiguous" || value.State == "owned"; }
+
+        internal static OwnedPanelSlotMatch ResolveCrops(OwnedPanelSlotMatch outer, OwnedPanelSlotMatch inner)
+        {
+            if (outer.State == "excluded") return outer;
+            if (inner.State == "excluded") return inner;
+            // A near-tie already rejected by the classifier is uncertainty,
+            // not a missing glyph. Cropping must never resolve that veto.
+            if (outer.State == "unmatched" && outer.Similarity >= .90) return outer;
+            if (inner.State == "unmatched" && inner.Similarity >= .90) return inner;
+            if (!Recognized(outer)) return Recognized(inner) ? inner : outer;
+            if (!Recognized(inner)) return outer;
+            if (outer.State != inner.State || string.Join(",", outer.Indices) != string.Join(",", inner.Indices)
+                || (outer.Fingerprint ?? "") != (inner.Fingerprint ?? ""))
+                return new OwnedPanelSlotMatch { State = "unmatched", Indices = new int[0], Similarity = 0 };
+            return outer.Similarity >= inner.Similarity ? outer : inner;
         }
 
         internal static OwnedPanelSlotMatch Match(OwnedPanelShape shape, OwnedPanelShape[] candidates, OwnedPanelShape[] excluded)
@@ -759,6 +815,7 @@ namespace HexGuide.Desktop
                 if (all[i] != null && all[i].Fingerprint == identity) { if (i < 3) group.Add(i); }
                 else if (scores[best] - scores[i] < .065) return output;
             }
+            output.Fingerprint = identity;
             output.Indices = group.ToArray(); output.State = group.Count == 0 ? "owned" : group.Count == 1 ? "candidate" : "ambiguous";
             return output;
         }
@@ -773,7 +830,8 @@ namespace HexGuide.Desktop
         internal string Signature()
         {
             string value = Geometry;
-            foreach (var slot in Slots) value += "|" + slot.Index + ":" + slot.State + ":" + string.Join(",", Array.ConvertAll(slot.Indices, delegate(int i) { return i.ToString(CultureInfo.InvariantCulture); }));
+            foreach (var slot in Slots) value += "|" + slot.Index + ":" + slot.State + ":" + string.Join(",", Array.ConvertAll(slot.Indices, delegate(int i) { return i.ToString(CultureInfo.InvariantCulture); }))
+                + ":" + (slot.Fingerprint ?? "");
             return value;
         }
         internal Dictionary<string, object> Proof()
@@ -809,6 +867,16 @@ namespace HexGuide.Desktop
         {
             int checks = 0;
             Action<bool, string> check = delegate(bool condition, string name) { checks++; if (!condition) throw new InvalidOperationException("Owned panel fixture: " + name); };
+            long manualId, manualExpiry;
+            var manualScope = new Dictionary<string, object> { { "active", true }, { "requestId", 1 }, { "startedAt", 1000L }, { "expiresAt", 26000L } };
+            check(OwnedPanelWatcher.ManualScopeActive(manualScope, 1000, out manualId, out manualExpiry) && manualId == 1 && manualExpiry == 26000, "bounded manual permission accepted");
+            check(!OwnedPanelWatcher.ManualScopeActive(manualScope, 26000, out manualId, out manualExpiry), "expired manual permission rejected without another backend poll");
+            manualScope["expiresAt"] = 26001L;
+            check(!OwnedPanelWatcher.ManualScopeActive(manualScope, 1000, out manualId, out manualExpiry), "unbounded manual permission rejected");
+            manualScope["expiresAt"] = 26000L; manualScope["active"] = false;
+            check(!OwnedPanelWatcher.ManualScopeActive(manualScope, 1000, out manualId, out manualExpiry), "completed request does not enable panel capture");
+            manualScope["active"] = true; manualScope["requestId"] = 0;
+            check(!OwnedPanelWatcher.ManualScopeActive(manualScope, 1000, out manualId, out manualExpiry), "missing request identity rejected");
             var serializer = new System.Web.Script.Serialization.JavaScriptSerializer();
             var stages = new OwnedPanelStageDiagnostics();
             var stageSnapshot = new Dictionary<string, object>();
@@ -1044,6 +1112,62 @@ namespace HexGuide.Desktop
                 foreach (var slot in OwnedPanelMatcher.ReadSlots(panel, layout, shapes, new OwnedPanelShape[0]))
                     check(slot.Indices.Length == 0, "bright fill without a scoped glyph cannot select");
             }
+            foreach (Size size in new[] { new Size(2559, 1440), new Size(1920, 1080), new Size(2560, 1080) })
+            for (int target = 0; target < 6; target++)
+            using (var panel = DrawPanel(size, 1.0, shapes[0], true, true, target, true))
+            {
+                OwnedPanelLayout layout;
+                check(OwnedPanelMatcher.TryLocate(panel, size, shapes, new OwnedPanelShape[0], new OwnedPanelShape[0], out layout),
+                    "rimmed six-cell grid located " + target + " " + size);
+                var matches = OwnedPanelMatcher.ReadSlots(panel, layout, shapes, new OwnedPanelShape[0]);
+                check(matches[target].State == "candidate" && matches[target].Indices.Length == 1 && matches[target].Indices[0] == 0,
+                    "rim interference hid physical slot " + target + " " + size);
+                for (int other = 0; other < 6; other++) if (other != target)
+                    check(matches[other].Indices.Length == 0, "rim recovered a different/empty cell " + other);
+                var excluded = OwnedPanelMatcher.ReadSlots(panel, layout, shapes, new[] { shapes[0] });
+                check(excluded[target].State == "excluded", "inner crop bypassed skill exclusion");
+            }
+            var candidateA = new OwnedPanelSlotMatch { State = "candidate", Indices = new[] { 0 }, Similarity = .95 };
+            var candidateB = new OwnedPanelSlotMatch { State = "candidate", Indices = new[] { 1 }, Similarity = .98 };
+            var known = new OwnedPanelSlotMatch { State = "owned", Indices = new int[0], Similarity = .99 };
+            check(OwnedPanelMatcher.ResolveCrops(candidateA, candidateB).State == "unmatched", "conflicting crop identities selected highest score");
+            check(OwnedPanelMatcher.ResolveCrops(candidateA, known).State == "unmatched", "candidate crop overrode an owned glyph");
+            var uncertain = new OwnedPanelSlotMatch { State = "unmatched", Indices = new int[0], Similarity = .94 };
+            check(OwnedPanelMatcher.ResolveCrops(uncertain, candidateA).State == "unmatched", "inner crop revived a rejected outer near-tie");
+            check(OwnedPanelMatcher.ResolveCrops(candidateA, uncertain).State == "unmatched", "outer crop ignored inner near-tie uncertainty");
+            var ownedCandidates = new[] { shapes[2], shapes[2], shapes[2] };
+            var ownedTemplates = new[] { shapes[0], shapes[1] };
+            var ownedA = OwnedPanelMatcher.Match(shapes[0], ownedCandidates, ownedTemplates, new OwnedPanelShape[0]);
+            var ownedB = OwnedPanelMatcher.Match(shapes[1], ownedCandidates, ownedTemplates, new OwnedPanelShape[0]);
+            check(ownedA.State == "owned" && ownedB.State == "owned", "distinct owned crop fixtures remain outside the current candidates");
+            check(ownedA.Fingerprint == shapes[0].Fingerprint && ownedB.Fingerprint == shapes[1].Fingerprint
+                && ownedA.Fingerprint != ownedB.Fingerprint, "accepted owned matches lost their exact template identity");
+            check(ambiguous.Fingerprint == shapes[0].Fingerprint
+                && OwnedPanelMatcher.Match(shapes[0], shapes, new OwnedPanelShape[0]).Fingerprint == shapes[0].Fingerprint,
+                "candidate or same-glyph group lost its exact template identity");
+            check(OwnedPanelMatcher.ResolveCrops(ownedA, ownedB).State == "unmatched", "different owned glyphs agreed only because both candidate-index lists were empty");
+            check(OwnedPanelMatcher.ResolveCrops(ownedB, ownedA).State == "unmatched", "owned crop conflict depended on crop order");
+            var ownedACopy = OwnedPanelMatcher.Match(shapes[0], ownedCandidates, ownedTemplates, new OwnedPanelShape[0]);
+            check(OwnedPanelMatcher.ResolveCrops(ownedA, ownedACopy).State == "owned", "the same owned glyph failed crop agreement");
+            check(OwnedPanelMatcher.ResolveCrops(known, known).State == "owned"
+                && OwnedPanelMatcher.ResolveCrops(candidateA, candidateA).State == "candidate", "identity-free manual fixtures lost crop agreement");
+            check(OwnedPanelMatcher.ResolveCrops(known, new OwnedPanelSlotMatch { State = "owned", Indices = new int[0], Fingerprint = null }).State == "owned",
+                "legacy null and empty fixture identities disagreed");
+            check(OwnedPanelMatcher.ResolveCrops(ownedA, known).State == "unmatched", "a missing crop identity agreed with a verified owned identity");
+            check(serializer.Serialize(ownedA.Proof()) == serializer.Serialize(ownedB.Proof()) && ownedA.Proof().Count == 3,
+                "internal owned identity leaked into the bounded classification proof");
+            var ownedSlotsA = (OwnedPanelSlotMatch[])slots.Clone(); ownedSlotsA[0] = ownedA;
+            var ownedSlotsB = (OwnedPanelSlotMatch[])slots.Clone(); ownedSlotsB[0] = ownedB;
+            var ownedStability = new OwnedPanelStability();
+            check(!ownedStability.Observe("owned-round", new OwnedPanelProofFrame(1000, "owned-geometry", ownedSlotsA)), "one owned identity frame insufficient");
+            check(!ownedStability.Observe("owned-round", new OwnedPanelProofFrame(1400, "owned-geometry", ownedSlotsA)), "two owned identity frames insufficient");
+            check(!ownedStability.Observe("owned-round", new OwnedPanelProofFrame(1800, "owned-geometry", ownedSlotsB)) && ownedStability.Count == 1,
+                "different owned glyphs satisfied the three-frame stability check");
+            check(!ownedStability.Observe("owned-round", new OwnedPanelProofFrame(2200, "owned-geometry", ownedSlotsB)) && ownedStability.Count == 2,
+                "owned identity reset reused an earlier glyph frame");
+            check(ownedStability.Observe("owned-round", new OwnedPanelProofFrame(2600, "owned-geometry", ownedSlotsB)), "three fresh equal owned identities never stabilized");
+            check(!ownedStability.Observe("owned-round", new OwnedPanelProofFrame(3000, "owned-geometry", ownedSlotsA)) && ownedStability.Count == 1,
+                "returning to an earlier owned glyph retained the previous stable proof");
             return checks;
         }
 
@@ -1091,7 +1215,7 @@ namespace HexGuide.Desktop
             }
         }
 
-        private static Bitmap DrawPanel(Size client, double factor, OwnedPanelShape icon, bool visible, bool grid = true)
+        private static Bitmap DrawPanel(Size client, double factor, OwnedPanelShape icon, bool visible, bool grid = true, int iconSlot = 0, bool rim = false)
         {
             Rectangle region = OwnedPanelMatcher.CaptureRegion(client);
             var image = new Bitmap(region.Width, region.Height, PixelFormat.Format32bppArgb);
@@ -1113,10 +1237,18 @@ namespace HexGuide.Desktop
                 {
                     var cell = new Rectangle(left + (int)Math.Round((11 + slot % 3 * 64) * scale), top + (int)Math.Round((10 + slot / 3 * 66) * scale), Math.Max(8, (int)Math.Round(57 * scale)), Math.Max(8, (int)Math.Round(57 * scale)));
                     using (var brush = new SolidBrush(Color.FromArgb(1, 14, 13))) graphics.FillRectangle(brush, cell);
-                    if (slot != 0) continue;
-                    int side = Math.Max(10, cell.Width - 14);
+                    if (slot != iconSlot) continue;
+                    int side = Math.Max(10, cell.Width - (rim ? (int)Math.Round(cell.Width * .32) : 14));
                     for (int y = 0; y < side; y++) for (int x = 0; x < side; x++)
                         if (icon.Pixels[Math.Min(27, y * 28 / side) * 28 + Math.Min(27, x * 28 / side)]) image.SetPixel(cell.X + (cell.Width - side) / 2 + x, cell.Y + (cell.Height - side) / 2 + y, Color.FromArgb(226, 215, 173));
+                    if (rim)
+                    {
+                        // A bright right edge extends the normalizer's box;
+                        // it is not part of the centered augment glyph.
+                        int edge = Math.Max(3, (int)Math.Round(cell.Width * .08));
+                        using (var brush = new SolidBrush(Color.FromArgb(240, 200, 80)))
+                            graphics.FillRectangle(brush, cell.Right - edge, cell.Top + 2, Math.Max(1, edge / 2), cell.Height - 4);
+                    }
                 }
             }
             return image;

@@ -11,7 +11,9 @@ import {OcrScheduleDiagnostics} from './ocr-schedule-diagnostics.mjs';
 import {ScreenLifeSource, ScreenLifeValidationError, ScreenLifeConflictError} from './screen-life.mjs';
 import {validatePanelEvidence} from './panel-selection.mjs';
 import {PendingOffers} from './pending-offers.mjs';
+import {observedOfferRound, sameOfferRound, validOfferRound} from './offer-round.mjs';
 import {buildNextItemRecommendation, isPurchaseTarget} from './next-item.mjs';
+import {ManualRecognition, MANUAL_MESSAGES} from './manual-recognition.mjs';
 
 const ROUTES = new Set(['auto', 'attack', 'spell', 'tank', 'support', 'crit']);
 const END_PHASES = new Set(['ChampSelect', 'Lobby', 'Matchmaking', 'ReadyCheck', 'WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
@@ -19,6 +21,11 @@ const eligible = augment => augment.availability === 'current' && augment.recomm
 const text = (value, limit = 220) => typeof value === 'string' ? value.slice(0, limit) : '';
 const gameId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(value) ? value : null;
 const finite = value => typeof value === 'number' && Number.isFinite(value);
+// Persist only the confirmed IDs evaluated for a purchase target. An absent or
+// corrupt legacy context is unknown, never an empty set authorizing a replan.
+const purchaseAugmentIds = (value, known) => Array.isArray(value) && value.length <= 12
+  && value.every(id => typeof id === 'string' && known.has(id)) && new Set(value).size === value.length
+  ? [...value].sort() : null;
 const METADATA_STATUSES = new Set(['accepted','missing','shape-invalid','title-outside-region','title-incomplete']);
 const FOREGROUND_SCAN_FAILURES = new Set(['game-not-foreground','foreground-changed']);
 const diagnosticAge = (time, now) => Number.isSafeInteger(time) && time >= 0 ? Math.min(60000, Math.max(0, Math.floor(now - time))) : null;
@@ -80,6 +87,9 @@ export class BackgroundSidebar {
     this.candidateInvalidatedAt = -Infinity;
     this.panelStatus = {status:'waiting', reason:'waiting-offer'};
     this.ocr = {enabled:true, status:'waiting', message:'自动识别已开启；等待开局、死亡或复活后的识别窗口。', observedAt:null};
+    this.manualRecognition = new ManualRecognition({now,timers:this.timers,onEnd:() => {
+      if (!this.ocr.enabled) this.panelLease = null;
+    }});
     this.pendingOffers = new PendingOffers();
     this.consumedOfferKey = null;
     this.selectionObserver = new SelectionObserver({now});
@@ -103,7 +113,9 @@ export class BackgroundSidebar {
       this.session = {...selected, gameId:gameId(saved.gameId), revision:Number.isSafeInteger(saved.revision) && saved.revision >= 0 ? saved.revision : 0};
       const target = saved.purchaseTarget;
       if (this.session.gameId && target && isPurchaseTarget(target.itemId,this.champions.get(target.championId),this.itemsCatalog)) {
-        this.purchaseTarget = {championId:target.championId,itemId:target.itemId};
+        const ownedAugmentIds = purchaseAugmentIds(target.ownedAugmentIds,this.augments);
+        this.purchaseTarget = {championId:target.championId,itemId:target.itemId,
+          ...(ownedAugmentIds ? {ownedAugmentIds} : {})};
       }
       this.snapshotBlocked = saved.selectionSources?.manualBarrier === true;
       if (this.session.gameId) this.pendingOffers.restore(saved.pendingOffers, id => this.augments.has(id), this.session.owned);
@@ -164,6 +176,7 @@ export class BackgroundSidebar {
   }
 
   clearGame() {
+    this.manualRecognition.reset();
     this.lifeSource.reset();
     this.purchaseTarget = null;
     this.snapshotBlocked = false;
@@ -238,6 +251,7 @@ export class BackgroundSidebar {
       void this.recommendationRepository.ensure(live.championId).catch(() => {});
     }
     if (live.phase !== 'InProgress' || live.stage === 'loading' || live.mode?.known && !live.mode.isMayhem) this.selectionObserver.invalidate();
+    this.manualRecognition.sync(this.manualContext(live));
     return live;
   }
 
@@ -279,6 +293,7 @@ export class BackgroundSidebar {
     this.revokeCaptureEvidence('暂时无法确认游戏状态；恢复后将重新识别。');
   }
   revokeCaptureEvidence(message) {
+    this.manualRecognition.cancel();
     this.invalidateCandidateCapture();
     if (this.offers.length || this.panelLease || this.selectionObserver.observation || this.selectionObserver.resultLease
       || this.selectionObserver.fxContinuation) {
@@ -328,11 +343,18 @@ export class BackgroundSidebar {
     // or life state. Keep its current game/surface fence, without inheriting
     // the pointer observer's dead/unknown-after-death restrictions. A newer
     // screen-life timestamp must not conceal a stale collector snapshot.
-    return this.ocr.enabled && this.captureEligible === true
+    return (this.ocr.enabled || this.manualRecognition.panelActive(this.manualContext(live))) && this.manualGameEligible(live);
+  }
+  manualGameEligible(live) {
+    return this.captureEligible === true
       && live.phase === 'InProgress' && live.stage === 'live' && live.connection?.status === 'connected'
       && live.mode?.known === true && live.mode.isMayhem === true && this.champions.has(live.championId)
       && gameId(live.gameId) !== null && gameId(live.gameId) === this.session.gameId
       && this.scanSchedule.snapshotTime(live,this.scanSchedule.time()) !== null;
+  }
+  manualContext(live) {
+    return this.manualGameEligible(live) ? {...this.selectionContext(),lifecycle:this.scanSchedule.lifecycle,
+      captureRevision:this.scanSchedule.captureRevision} : null;
   }
   getSelectionObservation() { const live = this.observe(); return this.selectionObserver.get(this.selectionContext(), this.selectionEligible(live)); }
 
@@ -342,12 +364,12 @@ export class BackgroundSidebar {
     const eligible = this.selectionEligible(live);
     const selection = this.selectionObserver.get(this.selectionContext(), eligible);
     const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), eligible);
-    return {version:'1.17.5', recognitionAt:this.now(), updatedAt:live.observedAt || new Date(this.now()).toISOString(), connection:live.connection,
+    return {version:'1.17.12', recognitionAt:this.now(), updatedAt:live.observedAt || new Date(this.now()).toISOString(), connection:live.connection,
       phase:live.phase, stage:live.stage || 'waiting', gameId:this.session.gameId,
       gameEpoch:this.gameEpoch, sessionRevision:this.session.revision,
       mode:live.mode || {queueId:null,isMayhem:false,known:false},
       life:this.lifeSource.resolve(live, this.selectionContext()),
-      ocr:{enabled:this.ocr.enabled}, selection, selectionResult,
+      ocr:{enabled:this.ocr.enabled}, manualRecognition:this.manualRecognition.snapshot(), selection, selectionResult,
       panelSelection:this.getPanelSelection(live), selectionDiagnostics:this.selectionDiagnostics(selection),
       screenObservationScope:{version:1,
         eligible:Boolean(eligible && this.captureEligible && live.stage === 'live'
@@ -372,7 +394,7 @@ export class BackgroundSidebar {
     let pending = candidates.find(entry => entry.pendingId === this.panelPendingId) || candidates[0];
     if (!active || !pending) {
       this.panelLease = null;
-      return {status:'waiting', reason:!this.ocr.enabled ? 'panel-disabled' : !active ? 'panel-context-unavailable'
+      return {status:'waiting', reason:!this.ocr.enabled && !this.manualRecognition.snapshot().active ? 'panel-disabled' : !active ? 'panel-context-unavailable'
         : this.pendingOffers.entries.length && !pending ? 'panel-anchor-unavailable' : 'waiting-offer'};
     }
     let lease = this.panelLease;
@@ -427,7 +449,10 @@ export class BackgroundSidebar {
       offers, owned:this.session.owned.map(identity)}, this.panelPolicy);
     this.panelStatus = {status:result.status, reason:result.reason};
     if (['panel-context-mismatch', 'panel-offer-expired', 'panel-ineligible'].includes(result.reason)) throw new SessionConflictError('The current panel scope has changed.');
-    if (result.status === 'rejected') throw new SessionValidationError('Invalid panel evidence.');
+    if (result.status === 'rejected') {
+      if (value?.offerToken === lease.offerToken) this.manualRecognition.finish(this.manualRecognition.job,'unavailable',MANUAL_MESSAGES.rejected);
+      throw new SessionValidationError('Invalid panel evidence.');
+    }
     if (!result.id) { this.advancePendingPanel(lease); return this.getModel(); }
     if (this.pendingOffers.entries.filter(entry => entry.ids.includes(result.id)).length > 1) {
       this.panelStatus = {status:'pending',reason:'panel-round-ambiguous'};
@@ -435,6 +460,7 @@ export class BackgroundSidebar {
       return this.getModel();
     }
     if (this.session.owned.includes(result.id) || this.session.owned.length >= 12) throw new SessionConflictError('The choice has already been recorded.');
+    if (!this.panelContextEligible(live)) throw new SessionConflictError('The current panel scope has expired.');
     return this.commitChoice(result.id, result.inferred ? 'panel-statistical' : 'panel-icon',lease.pendingId);
   }
 
@@ -470,6 +496,24 @@ export class BackgroundSidebar {
       lastScanAgeMs:diagnosticAge(this.selectionAttempt.completedAt, this.now())};
   }
 
+  getOfferAttention(live) {
+    const inactive = {active:false,pendingId:null,capturedAt:null,expiresAt:null};
+    const capturedAt = this.selectionAttempt.capturedAt, now = this.now();
+    // Display attention is independent of the alive-only click observer. A
+    // validated death-screen triplet can open the sidebar, while saved pending
+    // rounds and retained result-panel anchors cannot keep it open indefinitely.
+    if (!this.manualGameEligible(live) || this.selectionAttempt.metadataStatus !== 'accepted'
+      || !Number.isSafeInteger(capturedAt) || capturedAt < 0 || !Number.isSafeInteger(now)
+      || capturedAt <= this.candidateInvalidatedAt || capturedAt > now + 1000 || now - capturedAt >= 8000) return inactive;
+    const pending = this.pendingOffers.entries.find(entry => entry.capture?.capturedAt === capturedAt
+      && entry.runtimeLifecycle === this.scanSchedule.lifecycle
+      && entry.runtimeCaptureRevision === this.scanSchedule.captureRevision
+      && entry.lastSeenOfferCycle === this.scanSchedule.offerCycle);
+    if (!pending) return inactive;
+    return {active:true,pendingId:pending.pendingId,capturedAt:new Date(capturedAt).toISOString(),
+      expiresAt:new Date(capturedAt + 8000).toISOString()};
+  }
+
   async setSession(value, {reset = false} = {}) {
     const selected = this.validateSession(value);
     const live = this.observe();
@@ -479,6 +523,7 @@ export class BackgroundSidebar {
     // A late main-window write must not carry a previous game's choices into
     // the opening preset. Return authoritative state so clients can reconcile.
     if (live.stage === 'loading') return this.getSession();
+    this.manualRecognition.cancel();
     if (reset || JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned) || selected.route !== this.session.route) {
       const ownedChanged = JSON.stringify(selected.owned) !== JSON.stringify(this.session.owned);
       if (selected.owned.some(id => !this.session.owned.includes(id))) this.scanSchedule.confirmed();
@@ -540,23 +585,35 @@ export class BackgroundSidebar {
 
   async commitChoice(id, provider, pendingId) {
     const epoch = this.gameEpoch;
-    this.recordChoice(id, provider, pendingId);
-    await this.persist();
+    const manualJob = ['panel-icon','panel-statistical'].includes(provider) ? this.manualRecognition.job : null;
+    this.recordChoice(id, provider, pendingId, manualJob);
+    try { await this.persist(); }
+    catch (error) { this.manualRecognition.finish(manualJob,'unavailable',MANUAL_MESSAGES.saveFailed); throw error; }
     const model = this.getModel();
     if (epoch !== this.gameEpoch || model.phase !== 'InProgress' || !model.owned.some(augment => augment.id === id)) throw new SessionConflictError('The game changed while saving the choice.');
-    return model;
+    if (manualJob && this.manualRecognition.owns(manualJob)) this.manualRecognition.finish(manualJob,'confirmed',
+      provider === 'panel-statistical' ? MANUAL_MESSAGES.inferred : MANUAL_MESSAGES.confirmed);
+    return {...model,manualRecognition:this.manualRecognition.snapshot()};
   }
 
-  recordChoice(id, provider, pendingId) {
+  recordChoice(id, provider, pendingId, manualJob = null) {
+    if (!manualJob) this.manualRecognition.cancel();
     const pending = pendingId ? this.pendingOffers.find(pendingId)
       : this.pendingOffers.entries.find(entry => entry.ids.includes(id));
     // A delayed answer completes only its logical choice opportunity. A death
     // and its respawn share that opportunity, while capture scopes stay separate.
     // An older round or restored catalog cannot stop a newer scan opportunity;
     // the revision below still revokes old proof without renewing its deadline.
-    const currentOpportunity = pending && Number.isSafeInteger(pending.lastSeenOfferCycle)
+    const newestUnanswered = pending && pending === this.pendingOffers.latest
+      && pending.sequence === this.pendingOffers.nextSequence-1;
+    const currentRound = observedOfferRound(this.collector.getSnapshot(),{gameId:this.session.gameId,now:this.now()});
+    // The next milestone may already be available before its first OCR result.
+    // Answering the old cards must not close that still-needed scan window.
+    const newerMilestone = currentRound && validOfferRound(pending?.roundContext)
+      && currentRound.rule === pending.roundContext.rule && currentRound.milestone > pending.roundContext.milestone;
+    const currentOpportunity = newestUnanswered && !newerMilestone && (Number.isSafeInteger(pending.lastSeenOfferCycle)
       ? pending.lastSeenOfferCycle === this.scanSchedule.offerCycle
-      : pending?.lastSeenLifecycle === this.scanSchedule.lifecycle;
+      : pending.lastSeenLifecycle === this.scanSchedule.lifecycle);
     if (!pending || currentOpportunity) this.scanSchedule.confirmed();
     this.generation++;
     this.selectionObserver.invalidate();
@@ -566,6 +623,8 @@ export class BackgroundSidebar {
     this.consumedOfferKey = pending ? JSON.stringify(pending.ids) : null;
     const owned = this.pendingOffers.resolve(id,pending?.pendingId,this.session.owned);
     this.session = {...this.session, owned, revision:this.session.revision + 1};
+    if (manualJob) this.manualRecognition.rebindAcceptedPanel(manualJob,{...this.selectionContext(),
+      lifecycle:this.scanSchedule.lifecycle,captureRevision:this.scanSchedule.captureRevision});
     this.ocr.status = this.ocr.enabled ? this.offers.length ? 'recognized' : 'waiting' : 'disabled';
     this.ocr.message = provider === 'panel-statistical' ? '同图标按本轮推荐顺序推定已选；请核对，可在完整助手移除并改选。'
       : provider === 'panel-icon' ? '六格面板图标已匹配，推荐已更新；可手动纠正。'
@@ -578,6 +637,7 @@ export class BackgroundSidebar {
 
   setOcr(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1 || typeof value.enabled !== 'boolean') throw new SessionValidationError('An enabled boolean is required.');
+    this.manualRecognition.cancel();
     this.ocr.enabled = value.enabled;
     delete this.ocr.code;
     delete this.ocr.diagnostics;
@@ -590,7 +650,41 @@ export class BackgroundSidebar {
     return this.getModel();
   }
 
-  async scan({automatic = false} = {}) {
+  recognizeOnce() {
+    const live = this.observe(), context = this.manualContext(live);
+    if (this.manualRecognition.job) return this.manualRecognition.job.promise;
+    if (this.manualRecognition.closed || !context) return this.manualRecognition.unavailable(MANUAL_MESSAGES.ineligible);
+    const job = this.manualRecognition.begin(context);
+    // Each explicit request needs independent new panel frames, never a late
+    // submission captured under the preceding automatic/manual lease.
+    this.panelLease = null;
+    void this.runManualRecognition(job);
+    return job.promise;
+  }
+
+  async runManualRecognition(job) {
+    try {
+      const result = await this.scan({manualRequest:job});
+      if (!this.manualRecognition.owns(job)) return;
+      // Once accepted panel proof has changed owned state, persistence owns
+      // completion. The concurrent OCR result must not shorten its deadline or
+      // mistake the now-resolved pending round for a failed recognition.
+      if (job.committing) return;
+      const live = this.observe();
+      if (!this.manualRecognition.owns(job)) return;
+      if (result.status === 'recognized' && result.proposals?.length === 3) {
+        this.manualRecognition.finish(job,'recognized',MANUAL_MESSAGES.recognized,result.proposals);
+      } else if (FOREGROUND_SCAN_FAILURES.has(this.selectionAttempt.scanCode)) {
+        this.manualRecognition.finish(job,'unavailable',MANUAL_MESSAGES.unavailable);
+      } else if (!this.pendingOffers.entries.length) {
+        this.manualRecognition.finish(job,'unavailable',MANUAL_MESSAGES.noPending);
+      } else if (this.getPanelSelection(live).status !== 'watching') {
+        this.manualRecognition.finish(job,'unavailable',MANUAL_MESSAGES.noCapture);
+      } else this.manualRecognition.checking(job);
+    } catch { this.manualRecognition.finish(job,'unavailable',MANUAL_MESSAGES.unavailable); }
+  }
+
+  async scan({automatic = false, manualRequest = null} = {}) {
     // Both manual requests and the background timer await the same capture.
     const live = this.observe();
     if (this.pending) return this.pending;
@@ -604,6 +698,7 @@ export class BackgroundSidebar {
     const lifecycle = this.scanSchedule.lifecycle;
     const captureRevision = this.scanSchedule.captureRevision;
     const startedAt = this.now();
+    const startingRound = observedOfferRound(live,{gameId:this.session.gameId,now:startedAt});
     this.scanSchedule.started();
     this.scanCount++;
     let completion = {status:'unavailable', code:'scan-execution-failed'};
@@ -614,7 +709,8 @@ export class BackgroundSidebar {
       const current = this.observe();
       this.scanScheduleState(current);
       if (generation !== this.generation || lifecycle !== this.scanSchedule.lifecycle
-        || captureRevision !== this.scanSchedule.captureRevision || !this.captureEligible) {
+        || captureRevision !== this.scanSchedule.captureRevision || !this.captureEligible
+        || manualRequest && !this.manualRecognition.owns(manualRequest)) {
         completion = {status:'waiting', code:'scan-context-changed'};
         this.recordSelectionAttempt(raw, false, current, false, 'scan-context-changed');
         return {status:'waiting', code:'scan-context-changed', message:'识别周期已变化，请等待当前三选一卡片。', proposals:[]};
@@ -638,7 +734,12 @@ export class BackgroundSidebar {
         const acceptedCapture = capture?.identityAnchors && this.selectionAttempt.metadataStatus === 'accepted'
           && this.captureEligible ? capture : null;
         const pendingRevision = this.pendingOffers.revision;
-        const pending = this.pendingOffers.accept(proposals.map(offer => offer.id),{lifecycle,offerCycle:this.scanSchedule.offerCycle,captureRevision,now:this.now(),capture:acceptedCapture});
+        const completedRound = observedOfferRound(current,{gameId:this.session.gameId,now:this.now()});
+        // A capture spanning a level update cannot borrow the completed
+        // snapshot's progress for cards that may have been read before it.
+        const roundContext = sameOfferRound(startingRound,completedRound) ? completedRound : null;
+        const pending = this.pendingOffers.accept(proposals.map(offer => offer.id),{lifecycle,offerCycle:this.scanSchedule.offerCycle,
+          roundContext,owned:this.session.owned,captureRevision,now:this.now(),capture:acceptedCapture});
         if (!pending) {
           this.selectionObserver.invalidate();
           completion = {status:'waiting',code:'scan-proposals-incomplete'};
@@ -709,9 +810,11 @@ export class BackgroundSidebar {
     const recognition = this.recognitionSnapshot(live);
     // The compact sidebar has a separate purchase decision. Keep the full
     // application's plan and its comparison lists unchanged.
-    const {purchaseProgress, ...purchaseDecision} = buildNextItemRecommendation({champion, owned, route:this.session.route, live,
+    const currentTarget = this.purchaseTarget?.championId === champion?.id ? this.purchaseTarget : null;
+    const {purchaseProgress, purchasePlan, ...purchaseDecision} = buildNextItemRecommendation({champion, owned, route:this.session.route, live,
       augments:[...this.augments.values()], champions:[...this.champions.values()], itemsCatalog:this.itemsCatalog,
-      recommendationData, plan, targetItemId:this.purchaseTarget && this.purchaseTarget.championId === champion?.id ? this.purchaseTarget.itemId : null, now:this.now()});
+      recommendationData, plan, targetItemId:currentTarget?.itemId ?? null,
+      targetAugmentIds:currentTarget?.ownedAugmentIds ?? null, now:this.now()});
     const nextItem = {...purchaseDecision,
       gameId:this.session.gameId, gameEpoch:this.gameEpoch, sessionRevision:this.session.revision,
       championId:champion?.id || null, ownedIds:[...this.session.owned], route:this.session.route,
@@ -719,10 +822,12 @@ export class BackgroundSidebar {
     // Keep only a bounded purchase intent in the shared session, not stale
     // rendered recommendations. The pure policy revalidates fresh inventory,
     // mechanisms and evidence on every refresh. Loading previews do not commit.
+    const evaluatedAugmentIds = purchaseAugmentIds(purchasePlan?.evaluatedAugmentIds,this.augments);
     const purchaseTarget = nextItem.status === 'ready' && nextItem.stage === 'live'
-      ? {championId:champion.id,itemId:nextItem.item.id}
+      ? {championId:champion.id,itemId:nextItem.item.id,...(evaluatedAugmentIds ? {ownedAugmentIds:evaluatedAugmentIds} : {})}
       : purchaseProgress?.status === 'completed' ? null : this.purchaseTarget;
-    if (purchaseTarget?.championId !== this.purchaseTarget?.championId || purchaseTarget?.itemId !== this.purchaseTarget?.itemId) {
+    if (purchaseTarget?.championId !== this.purchaseTarget?.championId || purchaseTarget?.itemId !== this.purchaseTarget?.itemId
+      || JSON.stringify(purchaseTarget?.ownedAugmentIds) !== JSON.stringify(this.purchaseTarget?.ownedAugmentIds)) {
       this.purchaseTarget = purchaseTarget;
       void this.persist();
     }
@@ -737,8 +842,9 @@ export class BackgroundSidebar {
         ...(this.choiceSources[augment.id] === 'panel-statistical' ? {inferred:true, confirmationLabel:'推定已选（同图标）'} : {}),
         summary:text(String(augment.summary || augment.description || '').replace(/<[^>]*>/g, ''), 300)})), offers,
       pendingRevision:this.pendingOffers.revision,
+      offerAttention:this.getOfferAttention(live),
       pendingOffers:this.pendingOffers.entries.map(entry => ({pendingId:entry.pendingId,sequence:entry.sequence,
-        active:entry === this.pendingOffers.latest,createdAt:entry.createdAt,
+        active:entry === this.pendingOffers.latest,previousRound:entry.sequence < this.pendingOffers.nextSequence - 1,createdAt:entry.createdAt,
         offers:entry.ids.map(id => { const augment = this.augments.get(id); return {id,name:augment.name,icon:text(augment.icon,400),rarity:text(augment.rarity,40)}; })})),
       ocr:{...this.ocr, schedule:this.scanScheduleState(live), proposals:this.offers.map(offer => ({...offer}))}, route:this.session.route, updatedAt:live.observedAt || new Date(this.now()).toISOString(),
       plan, nextItem,
@@ -797,6 +903,7 @@ export class BackgroundSidebar {
   }
 
   async stop() {
+    this.manualRecognition.close();
     this.stopped = true; this.timers.clearTimeout(this.timer);
     // Stop our own OCR child before draining an in-flight scan.
     await this.scanner?.close?.();

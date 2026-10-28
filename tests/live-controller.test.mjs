@@ -5,6 +5,7 @@ import {UI_ELEMENTS} from '../dist/layout-elements.js';
 
 const data = JSON.parse(await readFile(new URL('../dist/data.json', import.meta.url), 'utf8'));
 const items = JSON.parse(await readFile(new URL('../dist/items.json', import.meta.url), 'utf8'));
+const appVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 const champions = new Map(data.champions.map(champion => [champion.id, champion]));
 const augments = new Map(data.augments.map(augment => [augment.id, augment]));
 let instance = 0;
@@ -23,18 +24,19 @@ const snapshot = (overrides = {}) => ({
 });
 
 async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', owned = ['firebrand'], stored = {}, gameId = null, initialHash = '#live'} = {}) {
-  const globals = ['location', 'sessionStorage', 'history', 'window', 'document', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'Date'];
+  const globals = ['location', 'sessionStorage', 'history', 'window', 'document', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'Date', 'AbortSignal'];
   const original = new Map(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const realSetTimeout = globalThis.setTimeout;
   const intervals = [], delays = [], clicks = [], unload = [], liveReplies = [], ocrReplies = [], sidebarReplies = [], deferred = [];
   const session = new Map([['hexguide-local-session', 'test-only-local-session'], ...Object.entries(stored)]);
-  const state = {championId, owned: [...owned], gameId, resets: 0, offers: [], currentOffers: [], expired: 0, renders: 0, ocrRequests: 0, confirmations: [], sessionResets: [], pendingConfirmed: 0, explicitReset: 0, session: null};
+  const state = {championId, owned: [...owned], gameId, resets: 0, offers: [], currentOffers: [], expired: 0, renders: 0, ocrRequests: 0, recognitionCalls: [], autoRequests: 0, sidebarRequests: 0, confirmations: [], sessionResets: [], pendingConfirmed: 0, explicitReset: 0, session: null};
   let nextSnapshot = initial;
   let sidebarModel={ocr:{enabled:false,status:'disabled',message:'',proposals:[],observedAt:null}};
   const OriginalDate = globalThis.Date;
   let currentTime = OriginalDate.now();
   const define = (key, value) => Object.defineProperty(globalThis, key, {configurable: true, writable: true, value});
   define('Date', class extends OriginalDate { static now() { return currentTime; } });
+  define('AbortSignal', {timeout: milliseconds => ({timeoutMs:milliseconds})});
   define('location', {hash: initialHash});
   define('sessionStorage', {
     getItem: key => session.has(key) ? session.get(key) : null,
@@ -52,18 +54,20 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
   });
   define('fetch', async (url, options={}) => {
     if (url === './items.json') return {ok: true, json: async () => items};
-    if (url === '/api/sidebar') {const model=sidebarReplies.length?await sidebarReplies.shift():structuredClone(sidebarModel);if(model instanceof Error)throw model;return {ok:true,json:async()=>model};}
+    if (url === '/api/sidebar') {state.sidebarRequests++;const model=sidebarReplies.length?await sidebarReplies.shift():structuredClone(sidebarModel);if(model instanceof Error)throw model;return {ok:true,json:async()=>model};}
     if (url === '/api/session/confirm') {state.confirmations.push(JSON.parse(options.body));return {ok:true,json:async()=>structuredClone(sidebarModel)};}
     if (url === '/api/session/reset') {state.sessionResets.push(JSON.parse(options.body));return {ok:true,json:async()=>structuredClone(sidebarModel)};}
-    if (url === '/api/sidebar/ocr') {sidebarModel.ocr.enabled=JSON.parse(options.body).enabled;return {ok:true,json:async()=>structuredClone(sidebarModel)};}
+    if (url === '/api/sidebar/ocr') {state.autoRequests++;sidebarModel.ocr.enabled=JSON.parse(options.body).enabled;return {ok:true,json:async()=>structuredClone(sidebarModel)};}
     if (url === '/api/live') {
       const value = liveReplies.length ? await liveReplies.shift() : nextSnapshot;
       if (value instanceof Error) throw value;
       return {ok: true, json: async () => value};
     }
-    if (url === '/api/ocr') {
+    if (url === '/api/recognize-once') {
       state.ocrRequests++;
+      state.recognitionCalls.push({method:options.method,body:options.body,timeoutMs:options.signal?.timeoutMs});
       const value = ocrReplies.length ? await ocrReplies.shift() : {status: 'unavailable', proposals: []};
+      if(value instanceof Error)throw value;
       return {ok: true, json: async () => value};
     }
     throw new Error(`Unexpected test request: ${url}`);
@@ -82,7 +86,7 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
     onNewGame: () => { state.owned = []; state.currentOffers=[]; state.resets++; },
     onOffers: (ids,meta) => { if(state.rejectOffers)return false;state.offers.push(ids); state.currentOffers=[...ids];state.offerScope=meta; },
     onOffersExpired: () => { state.currentOffers=[]; state.expired++; },
-    onPendingConfirmed: () => { state.pendingConfirmed++; },
+    onPendingConfirmed: () => { state.pendingConfirmed++;if(state.hydrateConfirmed)state.owned=(sidebarModel.owned||[]).map(value=>typeof value==='string'?value:value.id); },
     onSessionReset: () => { state.explicitReset++; }
   });
   await settle();
@@ -111,6 +115,7 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
     deferLive: () => pendingReply('live'), deferOcr: () => pendingReply('ocr'), deferSidebar: () => pendingReply('sidebar'),
     failLive(error = new Error('temporary API failure')) { liveReplies.push(error); },
     failSidebar(error = new Error('temporary API failure')) { sidebarReplies.push(error); },
+    failRecognition(error = new Error('temporary recognition failure')) { ocrReplies.push(error); },
     async tick(value) { if (value !== undefined) nextSnapshot = value; for (const callback of intervals) callback(); await settle(); },
     async click(action, dataset = {}) { for (const callback of clicks) callback({target: {closest: () => ({dataset: {liveAction: action, ...dataset}})}}); await settle(); },
     async finishScanDelay() { for (const callback of delays.splice(0)) callback(); await settle(); }
@@ -127,6 +132,165 @@ test('local session bootstrap opens match home and removes the token from the vi
 const pendingGroup=(pendingId,sequence,ids,active=false)=>({pendingId,sequence,active,createdAt:Date.now()-360000,offers:ids.map(id=>{const a=augments.get(id);return {id,name:a.name,icon:a.icon,rarity:a.rarity};})});
 const firstIds=['firebrand','goliath','jeweled_gauntlet'],nextIds=['transmute_prismatic','recursion','shrink_engine'];
 const pendingModel=(groups,overrides={})=>({gameId:'game-one',gameEpoch:4,sessionRevision:12,pendingRevision:12,owned:[],pendingOffers:groups,offers:groups.at(-1)?.offers||[],ocr:{enabled:true,status:'waiting',message:'当前未读到卡片',proposals:[],observedAt:new Date(Date.now()-360000).toISOString()},...overrides});
+
+test('one recognition click keeps the return-to-game delay and only displays recognized candidates', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]}),resolve=h.deferOcr(),reads=h.state.sidebarRequests;
+  assert.match(h.html(),/data-live-action="ocr-scan"[^>]*>识别一次<\/button>/);
+  assert.ok(h.html().includes(`Windows 桌面版 ${appVersion} · 测试版`));
+  assert.match(h.html(),/最小化保留任务栏入口/);
+  await h.click('ocr-scan');await h.click('ocr-scan');
+  assert.equal(h.state.ocrRequests,0);
+  assert.match(h.html(),/请在 3 秒内切回游戏/);
+  assert.match(h.html(),/三选一卡片或六格/);
+  assert.match(h.html(),/data-live-action="ocr-scan"[^>]*disabled[^>]*>正在识别…/);
+  await h.finishScanDelay();
+  assert.deepEqual(h.state.recognitionCalls,[{method:'POST',body:'{}',timeoutMs:30000}]);
+  resolve({status:'recognized',message:'CANDIDATES_ONLY',proposals:pendingGroup('read',1,firstIds).offers});
+  await settle();
+  assert.deepEqual(h.state.currentOffers,firstIds);
+  assert.deepEqual(h.state.owned,[]);
+  assert.equal(h.state.pendingConfirmed,0);
+  assert.equal(h.state.autoRequests,0,'one-shot recognition must not enable the automatic setting');
+  assert.ok(h.state.sidebarRequests>reads,'every completed attempt resynchronizes shared state');
+  assert.match(h.html(),/CANDIDATES_ONLY/);
+  assert.match(h.html(),/data-live-action="ocr-scan"[^>]*>识别一次<\/button>/);
+});
+
+test('a confirmed panel result pulls shared ownership while retaining another unanswered round', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});h.state.hydrateConfirmed=true;
+  const old=pendingGroup('old-round',1,firstIds),latest=pendingGroup('new-round',2,nextIds,true);
+  h.setSidebar(pendingModel([old,latest]));await h.tick();
+  const resolve=h.deferOcr();await h.click('ocr-scan');await h.finishScanDelay();
+  h.setSidebar(pendingModel([{...old,active:true,previousRound:true}],{sessionRevision:13,pendingRevision:13,owned:[{id:nextIds[0]}]}));
+  resolve({status:'confirmed',message:'PANEL_CONFIRMED',proposals:[]});
+  await settle();
+  assert.equal(h.state.pendingConfirmed,1);
+  assert.deepEqual(h.state.owned,[nextIds[0]]);
+  assert.deepEqual(h.state.currentOffers,firstIds);
+  assert.equal(h.state.offerScope.pendingId,'old-round');
+  assert.match(h.html(),/PANEL_CONFIRMED/);
+  assert.match(h.html(),/上一轮待确认/);
+  assert.equal(h.state.autoRequests,0);
+});
+
+test('another entry point shares busy state and a completed request cannot regress to active', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  const active={requestId:7,active:true,status:'scanning',message:'NATIVE_SCAN_RUNNING',startedAt:Date.now(),expiresAt:Date.now()+25000};
+  h.setSidebar(pendingModel([],{manualRecognition:active}));await h.tick();
+  assert.match(h.html(),/data-live-action="ocr-scan"[^>]*disabled[^>]*>正在识别…/);
+  assert.match(h.html(),/NATIVE_SCAN_RUNNING/);
+  await h.click('ocr-scan');await h.finishScanDelay();assert.equal(h.state.ocrRequests,0);
+  h.setSidebar(pendingModel([],{manualRecognition:{...active,active:false,status:'unavailable',message:'DONE'}}));await h.tick();
+  assert.doesNotMatch(h.html(),/data-live-action="ocr-scan"[^>]*disabled/);
+  assert.match(h.html(),/DONE/,'the other entry point completion remains visible');
+  assert.doesNotMatch(h.html(),/NATIVE_SCAN_RUNNING/);
+  h.setSidebar(pendingModel([],{manualRecognition:active}));await h.tick();
+  assert.doesNotMatch(h.html(),/data-live-action="ocr-scan"[^>]*disabled/,'late active snapshots cannot reopen the finished request');
+  h.setSidebar(pendingModel([],{gameId:'old-game',manualRecognition:{...active,requestId:8}}));await h.tick();
+  assert.doesNotMatch(h.html(),/data-live-action="ocr-scan"[^>]*disabled/,'another game cannot disable this game control');
+});
+
+test('an external request started during the countdown prevents a duplicate capture request', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  await h.click('ocr-scan');
+  h.setSidebar(pendingModel([],{manualRecognition:{requestId:1,active:true,status:'scanning',message:'OTHER_ENTRY'}}));await h.tick();
+  await h.finishScanDelay();
+  assert.equal(h.state.ocrRequests,0);
+  assert.match(h.html(),/OTHER_ENTRY/);
+});
+
+test('a completed response cannot be reopened by a sidebar snapshot captured while it was active', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]}),resolve=h.deferOcr();
+  await h.click('ocr-scan');await h.finishScanDelay();
+  const active={requestId:4,active:true,status:'checking',message:'STALE_ACTIVE',startedAt:Date.now(),expiresAt:Date.now()+6000};
+  h.setSidebar(pendingModel([],{manualRecognition:active}));
+  resolve({status:'unavailable',message:'FINISHED_WITHOUT_SELECTION',proposals:[],manualRecognition:{...active,active:false,status:'unavailable'}});
+  await settle();
+  assert.doesNotMatch(h.html(),/data-live-action="ocr-scan"[^>]*disabled/);
+  assert.doesNotMatch(h.html(),/STALE_ACTIVE/);
+  assert.match(h.html(),/FINISHED_WITHOUT_SELECTION/);
+  assert.equal(h.state.pendingConfirmed,0);
+});
+
+test('a newer external completion replaces the old web failure notice', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]}),resolve=h.deferOcr(),startedAt=Date.now();
+  await h.click('ocr-scan');await h.finishScanDelay();
+  resolve({status:'unavailable',message:'OLD_WEB_FAILURE',proposals:[],manualRecognition:{requestId:1,active:false,status:'unavailable',message:'OLD_WEB_FAILURE',startedAt,expiresAt:startedAt+25000}});
+  await settle();assert.match(h.html(),/OLD_WEB_FAILURE/);
+  const active={requestId:2,active:true,status:'checking',message:'EXTERNAL_CHECKING',startedAt:startedAt+1,expiresAt:startedAt+6000};
+  h.setSidebar(pendingModel([],{manualRecognition:active}));await h.tick();
+  assert.match(h.html(),/EXTERNAL_CHECKING/);
+  assert.doesNotMatch(h.html(),/OLD_WEB_FAILURE/);
+  h.setSidebar(pendingModel([],{manualRecognition:{...active,active:false,status:'confirmed',message:'EXTERNAL_CONFIRMED'}}));await h.tick();
+  assert.match(h.html(),/EXTERNAL_CONFIRMED/);
+  assert.doesNotMatch(h.html(),/OLD_WEB_FAILURE|EXTERNAL_CHECKING/);
+  assert.equal(h.state.pendingConfirmed,0,'polling shared feedback does not impersonate a local confirmation response');
+});
+
+test('an expired shared request permits retry even when the next sidebar fetch is unavailable', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]});
+  h.setSidebar(pendingModel([],{manualRecognition:{requestId:3,active:true,status:'checking',message:'EXPIRED_CHECK',startedAt:Date.now(),expiresAt:Date.now()+6000}}));
+  await h.tick();assert.match(h.html(),/data-live-action="ocr-scan"[^>]*disabled/);
+  h.advance(6001);h.failSidebar();await h.tick();
+  assert.doesNotMatch(h.html(),/data-live-action="ocr-scan"[^>]*disabled/);
+  await h.click('ocr-scan');await h.finishScanDelay();
+  assert.equal(h.state.ocrRequests,1);
+  assert.equal(h.state.autoRequests,0);
+});
+
+test('a late POST response from an older request cannot replace another entry point result', {concurrency:false}, async t=>{
+  for(const status of ['recognized','confirmed'])await t.test(status,async t=>{
+    const h=await browserHarness(t,{owned:[]}),resolve=h.deferOcr(),startedAt=Date.now();
+    await h.click('ocr-scan');await h.finishScanDelay();
+    const newer={requestId:2,active:true,status:'checking',message:'NEW_REQUEST_RUNNING',startedAt:startedAt+1,expiresAt:startedAt+6000};
+    const group=pendingGroup('new-request-round',2,nextIds,true);
+    h.setSidebar(pendingModel([group],{manualRecognition:newer}));await h.tick();
+    resolve({status,message:'STALE_POST_RESULT',proposals:pendingGroup('old-request',1,firstIds).offers,
+      manualRecognition:{requestId:1,active:false,status,message:'STALE_POST_RESULT',startedAt,expiresAt:startedAt+25000}});
+    await settle();
+    assert.equal(h.state.pendingConfirmed,0,'an obsolete confirmed response must not trigger ownership synchronization');
+    assert.deepEqual(h.state.owned,[]);
+    assert.deepEqual(h.state.currentOffers,nextIds);
+    h.setSidebar(pendingModel([group],{manualRecognition:{...newer,active:false,status:'recognized',message:'NEW_REQUEST_FINISHED'}}));await h.tick();
+    assert.doesNotMatch(h.html(),/STALE_POST_RESULT/,'an obsolete notice must not reappear when the new request finishes');
+    assert.doesNotMatch(h.html(),/data-live-action="ocr-scan"[^>]*disabled/);
+  });
+});
+
+test('a late one-shot result cannot replace a manual correction', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]}),resolve=h.deferOcr();
+  await h.click('ocr-scan');await h.finishScanDelay();
+  h.state.owned=['goliath'];h.controller.confirmedSelection();await settle();
+  resolve({status:'recognized',message:'STALE_AFTER_CORRECTION',proposals:pendingGroup('old',1,firstIds).offers});await settle();
+  assert.deepEqual(h.state.owned,['goliath']);
+  assert.deepEqual(h.state.currentOffers,[]);
+  assert.doesNotMatch(h.html(),/STALE_AFTER_CORRECTION/);
+  assert.equal(h.state.pendingConfirmed,0);
+});
+
+test('a failed one-shot attempt releases busy state and keeps authoritative pending choices', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]}),old=pendingGroup('waiting-round',1,firstIds,true);
+  h.setSidebar(pendingModel([old]));await h.tick();
+  const reads=h.state.sidebarRequests;
+  h.failRecognition(Object.assign(new Error('timeout'),{name:'TimeoutError'}));
+  await h.click('ocr-scan');await h.finishScanDelay();
+  assert.deepEqual(h.state.currentOffers,firstIds);
+  assert.deepEqual(h.state.owned,[]);
+  assert.match(h.html(),/本次识别超时/);
+  assert.doesNotMatch(h.html(),/data-live-action="ocr-scan"[^>]*disabled/);
+  assert.ok(h.state.sidebarRequests>reads);
+  assert.equal(h.state.autoRequests,0);
+});
+
+test('an unconfirmed response cannot publish arbitrary proposal data or claim a selected result', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{owned:[]}),resolve=h.deferOcr();
+  await h.click('ocr-scan');await h.finishScanDelay();
+  resolve({status:'waiting',message:'NO_CONFIRMED_RESULT',proposals:pendingGroup('not-recognized',1,firstIds).offers});await settle();
+  assert.deepEqual(h.state.currentOffers,[]);
+  assert.deepEqual(h.state.owned,[]);
+  assert.equal(h.state.pendingConfirmed,0);
+  assert.doesNotMatch(h.html(),/data-ui-id="live-ocr-proposals"/);
+});
 
 test('new authoritative candidates received while dead publish without any alive snapshot', {concurrency:false}, async t=>{
   const dead=snapshot({isDead:true,life:{status:'detected',isDead:true}});
@@ -211,10 +375,13 @@ test('the latest pending triple confirms through its scoped endpoint and keeps o
   const h=await browserHarness(t,{owned:[]});
   const old=pendingGroup('old-round',1,firstIds),latest=pendingGroup('new-round',2,nextIds,true);
   h.setSidebar(pendingModel([old,latest]));await h.tick();
-  h.setSidebar(pendingModel([{...old,active:true}],{sessionRevision:13,owned:[{id:nextIds[0]}]}));
+  h.setSidebar(pendingModel([{...old,active:true,previousRound:true}],{sessionRevision:13,owned:[{id:nextIds[0]}]}));
   assert.equal(h.controller.confirmCandidate(nextIds[0],'new-round',{gameId:'game-one',revision:12}),true);await settle();
   assert.deepEqual(h.state.confirmations,[{id:nextIds[0],pendingId:'new-round',gameId:'game-one',revision:12}]);
   assert.deepEqual(h.state.currentOffers,firstIds);
+  assert.equal(h.state.offerScope.previousRound,true);
+  assert.equal(h.state.offerScope.sequence,1);
+  assert.match(h.html(),/上一轮待确认 · 第 1 轮/);
   assert.equal(h.controller.confirmCandidate('not-a-choice',''),true,'missing pending guards are consumed while a server pending group exists');
 });
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -20,9 +20,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.17.5.0")]
-[assembly: AssemblyFileVersion("1.17.5.0")]
-[assembly: AssemblyInformationalVersion("1.17.5")]
+[assembly: AssemblyVersion("1.17.12.0")]
+[assembly: AssemblyFileVersion("1.17.12.0")]
+[assembly: AssemblyInformationalVersion("1.17.12")]
 
 namespace HexGuide.Desktop
 {
@@ -70,7 +70,7 @@ namespace HexGuide.Desktop
                         + ScreenLifeObserver.ValidateFixtures() + ScreenLifeController.ValidateFixtures() + OwnedPanelWatcher.ValidateFixtures()
                         + RemoteIconCache.ValidateFixtures();
                     Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                        { "version", "1.17.5" }, { "checks", checks },
+                        { "version", "1.17.12" }, { "checks", checks },
                         { "titleProbeVersion", 1 },
                         { "nativeDiagnosticMaxBytes", ScreenSelectionWatcher.LargestDiagnosticFixtureBytes },
                         { "mode", "offline-no-ui" }, { "liveGameVerified", false }
@@ -341,7 +341,7 @@ namespace HexGuide.Desktop
         private bool lifePosting;
         private bool desiredSidebarVisible;
         private bool explicitActivation, trayHintShown;
-        private bool fetching, scanChanging, confirmChanging, appearanceRequested, appearanceOpening, layoutRequested, layoutOpening;
+        private bool fetching, scanChanging, confirmChanging, recognitionRequesting, appearanceRequested, appearanceOpening, layoutRequested, layoutOpening;
         private long sidebarRequestGeneration;
         private bool recognitionFetching, automaticSelectionPosting;
         private long lastRecognitionAt;
@@ -360,7 +360,7 @@ namespace HexGuide.Desktop
             OverlayVisibilityCompatibility.Prewarm();
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.17.5 · 我的这一局";
+            Text = "海克斯指南 1.17.12 · 我的这一局";
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -423,6 +423,7 @@ namespace HexGuide.Desktop
             sidebar.HideRequested += delegate { sidebarVisibility.Close(); sidebar.Hide(); };
             sidebar.DetailsRequested += delegate { ShowMain(); };
             sidebar.GameRequested += delegate { ReturnToGame(); };
+            sidebar.RecognitionRequested += async delegate { await RecognizeOnceAsync(); };
             sidebar.OfferConfirmed += async delegate(string id) { await ConfirmOfferAsync(id); };
             sidebar.PendingOfferConfirmed += async delegate(string id, string pendingId) { await ConfirmOfferAsync(id, pendingId); };
             selectionWatcher = new ScreenSelectionWatcher(recognitionTrace);
@@ -452,7 +453,7 @@ namespace HexGuide.Desktop
             menu.Items.Add("界面设置", null, async delegate { await OpenAppearanceAsync(); });
             menu.Items.Add("编辑整个界面", null, async delegate { await OpenLayoutAsync(); });
             menu.Items.Add("显示 / 收起游戏侧栏", null, delegate { ToggleSidebar(); });
-            menu.Items.Add("预览侧栏（不切换窗口）", null, delegate { sidebarVisibility.OpenPinned(); UpdateSidebarVisibility(); });
+            menu.Items.Add("预览侧栏（不切换窗口）", null, delegate { sidebarVisibility.OpenPinned(); sidebar.RevealFromIdle(); UpdateSidebarVisibility(); });
             scanMenu = new ToolStripMenuItem("后台识别海克斯");
             scanMenu.Enabled = false;
             scanMenu.ToolTipText = "只识别前台游戏；屏幕自动确认属于实验功能，证据不足时仍可手动确认。";
@@ -482,7 +483,8 @@ namespace HexGuide.Desktop
             recognitionTimer.Tick += async delegate { await FetchRecognitionAsync(); };
             recognitionTimer.Start();
             Shown += async delegate { if (startHidden) Hide(); await StartAsync(); };
-            Resize += delegate { if (!closing && WindowState == FormWindowState.Minimized) HideMain(); };
+            // Taskbar/minimize commands must retain the taskbar entry and the
+            // native restore state. Only explicit tray actions call HideMain.
             KeyDown += delegate(object sender, KeyEventArgs e)
             {
                 // Escape is local to this app; no hook, game-key polling, or global Escape registration.
@@ -531,6 +533,7 @@ namespace HexGuide.Desktop
 
         private void ToggleSidebar()
         {
+            if (sidebar.Visible && sidebar.IsIdleCollapsed) { sidebar.RevealFromIdle(); UpdateSidebarVisibility(); return; }
             sidebarVisibility.Toggle(sidebar.Visible);
             UpdateSidebarVisibility();
         }
@@ -846,7 +849,7 @@ namespace HexGuide.Desktop
                 json = SelectionDiagnosticsJson(selectionWatcher, recognitionModel ?? sidebar.Model, now, recognitionTrace);
                 var panelSnapshot = panelWatcher.Diagnostics();
                 panelSnapshot["schemaVersion"] = 2;
-                panelSnapshot["appVersion"] = "1.17.5";
+                panelSnapshot["appVersion"] = "1.17.12";
                 panelSnapshot["updatedAtUtc"] = now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);
                 panelSnapshot["backendReason"] = PanelReason(recognitionModel ?? sidebar.Model);
                 panelJson = new JavaScriptSerializer().Serialize(panelSnapshot);
@@ -885,7 +888,7 @@ namespace HexGuide.Desktop
             var native = watcher.Diagnostics();
             if (trace != null) native["trace"] = trace.Snapshot();
             var snapshot = new Dictionary<string, object> {
-                { "version", "1.17.5" }, { "schemaVersion", 2 },
+                { "version", "1.17.12" }, { "schemaVersion", 2 },
                 { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
                 { "native", native },
                 { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
@@ -903,7 +906,12 @@ namespace HexGuide.Desktop
                 case "waiting-offer": case "waiting-panel": case "panel-recommendation-unavailable":
                 case "panel-disabled": case "panel-context-unavailable": case "panel-anchor-unavailable":
                 case "panel-recommendation-tied": case "panel-collision-unverified": case "panel-no-new-match":
-                case "panel-multiple-new-groups": case "panel-unstable": return reason;
+                case "panel-multiple-new-groups": case "panel-unstable": case "panel-round-ambiguous":
+                case "panel-context-invalid": case "panel-evidence-invalid": case "panel-glyph-identity-invalid":
+                case "panel-context-mismatch": case "panel-offer-expired": case "panel-ineligible":
+                case "panel-capture-before-offer": case "panel-capture-before-scope": case "panel-capture-stale":
+                case "panel-capture-future": case "panel-captures-not-independent": case "panel-geometry-changed":
+                case "panel-game-unverified": case "panel-not-visible": case "panel-selection-ui-visible": return reason;
                 default: return "unavailable";
             }
         }
@@ -926,12 +934,61 @@ namespace HexGuide.Desktop
                 string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), trace);
                 var snapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
                 if (snapshot.Count != 5 || Encoding.UTF8.GetByteCount(json) > 4096
-                    || ModelValue.Text(snapshot, "version") != "1.17.5" || ModelValue.Text(snapshot, "schemaVersion") != "2")
+                    || ModelValue.Text(snapshot, "version") != "1.17.12" || ModelValue.Text(snapshot, "schemaVersion") != "2")
                     throw new InvalidOperationException("The persisted selection diagnostic snapshot exceeded its schema or byte bound.");
                 if (json.Contains("PRIVATE-MARKER") || json.Contains("\"ids\"") || json.Contains("windowHandle")
                     || json.Contains("\"signature\"") || json.Contains("\"signatures\"") || json.Contains("\"delta\""))
                     throw new InvalidOperationException("Untrusted or private metadata entered the selection diagnostic snapshot.");
-                return 2;
+                foreach (string reason in new[] { "panel-context-invalid", "panel-evidence-invalid", "panel-glyph-identity-invalid", "panel-round-ambiguous" })
+                    if (PanelReason(new Dictionary<string, object> { { "panelSelection", new Dictionary<string, object> { { "reason", reason } } } }) != reason)
+                        throw new InvalidOperationException("A bounded panel rejection reason was hidden from diagnostics.");
+                if (PanelReason(new Dictionary<string, object> { { "panelSelection", new Dictionary<string, object> { { "reason", "PRIVATE-MARKER" } } } }) != "unavailable")
+                    throw new InvalidOperationException("Untrusted panel reason entered diagnostics.");
+                return 7;
+            }
+        }
+
+        private async Task RecognizeOnceAsync()
+        {
+            if (closing || localOrigin == null || recognitionRequesting) return;
+            if (confirmChanging || scanChanging)
+            {
+                sidebar.RecognitionRequestNotice = "正在更新本局记录，请稍后再识别。";
+                sidebar.Invalidate(); return;
+            }
+            recognitionRequesting = true;
+            sidebar.RecognitionRequestBusy = true;
+            sidebar.RecognitionRequestNotice = "正在识别，请保持三选一或六格栏可见…";
+            sidebar.Invalidate();
+            string game = ModelValue.Text(sidebar.Model, "gameId");
+            long epoch; ModelValue.Integer(sidebar.Model, "gameEpoch", out epoch);
+            long previousRequestId; ModelValue.Integer(ModelValue.Object(sidebar.Model, "manualRecognition"), "requestId", out previousRequestId);
+            try
+            {
+                // Keep the same panel watcher, polling and commit queue alive.
+                // This request does not confirm a choice or change automatic mode.
+                var result = await RequestModelAsync("api/recognize-once", "{}", 30000);
+                if (closing) return;
+                long currentEpoch; ModelValue.Integer(sidebar.Model, "gameEpoch", out currentEpoch);
+                long resultId, currentId;
+                ModelValue.Integer(ModelValue.Object(result, "manualRecognition"), "requestId", out resultId);
+                ModelValue.Integer(ModelValue.Object(sidebar.Model, "manualRecognition"), "requestId", out currentId);
+                if (resultId < currentId) { nextFetch = DateTime.MinValue; return; }
+                if (game == ModelValue.Text(sidebar.Model, "gameId") && epoch == currentEpoch)
+                    sidebar.RecognitionRequestNotice = ModelValue.Text(result, "message");
+                else sidebar.RecognitionRequestNotice = "对局已变化，请重新识别。";
+                nextFetch = DateTime.MinValue;
+                await FetchSidebarAsync();
+            }
+            catch
+            {
+                long currentId; ModelValue.Integer(ModelValue.Object(sidebar.Model, "manualRecognition"), "requestId", out currentId);
+                if (!closing && currentId <= previousRequestId + 1) sidebar.RecognitionRequestNotice = "本次识别未完成，请保持游戏画面可见后重试。";
+            }
+            finally
+            {
+                recognitionRequesting = false;
+                if (!closing) { sidebar.RecognitionRequestBusy = false; sidebar.Invalidate(); }
             }
         }
 
@@ -1231,7 +1288,7 @@ namespace HexGuide.Desktop
                 && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - at < 2500;
         }
 
-        private Task<Dictionary<string, object>> RequestModelAsync(string path, string body)
+        private Task<Dictionary<string, object>> RequestModelAsync(string path, string body, int timeout = 2000)
         {
             Uri endpoint = new Uri(localOrigin, path);
             string token = sessionToken;
@@ -1240,8 +1297,8 @@ namespace HexGuide.Desktop
             {
                 var request = (HttpWebRequest)WebRequest.Create(endpoint);
                 request.Proxy = null;
-                request.Timeout = 2000;
-                request.ReadWriteTimeout = 2000;
+                request.Timeout = timeout;
+                request.ReadWriteTimeout = timeout;
                 request.Headers["X-Hexguide-Session"] = token;
                 request.Headers["Origin"] = origin;
                 if (body != null)
@@ -1321,6 +1378,7 @@ namespace HexGuide.Desktop
     {
         internal string FontFamily = "system", Side = "left";
         internal int Scale = 100, Width = 324, Opacity = 100;
+        internal int IdleHideSeconds = SidebarIdleState.DefaultDelaySeconds;
         internal string[] Sections = new[] { "hero", "owned", "offers", "plan" };
         internal string FontName
         {
@@ -1336,6 +1394,10 @@ namespace HexGuide.Desktop
             result.Scale = BoundedInteger(settings, "scale", 100, 85, 130);
             result.Width = BoundedInteger(settings, "width", 324, 280, 460);
             result.Opacity = BoundedInteger(settings, "opacity", 100, 75, 100);
+            long delay;
+            if (ModelValue.Integer(settings, "idleHideSeconds", out delay)
+                && delay >= SidebarIdleState.MinimumDelaySeconds && delay <= SidebarIdleState.MaximumDelaySeconds)
+                result.IdleHideSeconds = (int)delay;
             ArrayList sections = ModelValue.Array(settings, "sections");
             if (sections.Count == 4)
             {
@@ -1373,7 +1435,8 @@ namespace HexGuide.Desktop
         private Dictionary<string, object> model = ModelValue.Failure("正在连接本地助手…");
         private readonly Color muted = Color.FromArgb(154, 171, 192);
         private readonly Color accent = Color.FromArgb(128, 222, 193);
-        private Rectangle hideButton, detailsButton, gameButton, viewport, scrollTrack, scrollThumb;
+        private Rectangle hideButton, detailsButton, gameButton, recognitionButton, viewport, scrollTrack, scrollThumb;
+        private bool pressedRecognition;
         private int scrollOffset, contentHeight;
         private readonly List<string> paintedSections = new List<string>();
         private string paintedNextItemId = "";
@@ -1387,8 +1450,8 @@ namespace HexGuide.Desktop
         private readonly ToolTip augmentHint = new ToolTip { ShowAlways = true, InitialDelay = 450, ReshowDelay = 100, AutoPopDelay = 15000 };
         private string activeAugmentHint = "";
         private bool activeHintIsHelp;
-        private const string SidebarHelp = "Ctrl + 左键：拖动侧栏\nAlt+Shift+H：收起或展开\n滚轮：查看侧栏中的其余内容\n打开详细：查看完整构筑和调整记录\n返回游戏：切回游戏窗口\n只读游戏，不替你点击或操作。";
-        private const string NextItemHelp = "根据本局英雄、已确认海克斯、\n敌方阵容与可读战绩推荐下一件装备。\n确认推荐装备已完整买出后，再推荐下一件。\n只买到组件不会推进；数据不足时会等待。\n任务装备仅在确认相关任务海克斯后显示，\n并列出需要完成的合成路线。";
+        private string SidebarHelp { get { return "Ctrl + 左键：拖动侧栏\nAlt+Shift+H：收起或展开\n鼠标离开" + appearance.IdleHideSeconds + "秒：淡化为边缘条；悬停恢复\n等待时间可在主窗口的界面设置中调整\n识别到当前三选一时自动展开\n滚轮：查看侧栏中的其余内容\n识别一次：保持游戏在前台，读三选一或已展开的六格栏。\n六格核对需要此前识别过的本轮候选；证据不足不会猜选。\n打开详细：查看完整构筑和调整记录\n返回游戏：切回游戏窗口\n只读游戏，不替你点击或操作。"; } }
+        private const string NextItemHelp = "根据本局英雄、已确认海克斯、\n敌方阵容与可读战绩推荐下一件装备。\n平时完整买出后才推进，组件不算完成。\n确认影响出装的海克斯后，会重新规划；\n若先完成当前目标，随后优先考虑强化装备。\n任务装备仅在确认相关任务海克斯后显示，\n并列出需要完成的合成路线。";
         private const string OffersHelp = "先在游戏内选择；未自动记录时，\n再点击对应候选卡片确认。\n金框为优先推荐，角标为推荐顺序。\n出现三选一卡片后会自动检查。\n未确认的旧轮会保留，可继续核对或补录。";
         private const string OwnedHelp = "这里显示本局已经记录的海克斯。\n自动识别未确认时，可点击候选卡片确认。\n标注为推定的记录仍有同图标歧义；\n可在“打开详细”中移除并改选。";
         private readonly RemoteIconCache buildIcons = new RemoteIconCache();
@@ -1398,11 +1461,23 @@ namespace HexGuide.Desktop
         private bool initialPlanHandled;
         private string initialPlanGame = "";
         private long sessionRevision = -1;
+        private long recognitionRequestId;
         private long pendingRevision = -1, pendingRevisionEpoch = -1;
         private Rectangle placementArea;
         private Point dragStartPointer, dragStartLocation;
         private bool dragging, consumeDragClick, customPosition, appearanceLoaded;
         private double horizontalPosition, verticalPosition = 0.5;
+        private readonly SidebarIdleState idleState = new SidebarIdleState();
+        private readonly Stopwatch idleClock = Stopwatch.StartNew();
+        private readonly Timer idleTimer;
+        private Rectangle expandedBounds;
+        private bool idleCompact, idleTargetCompact, idleAnimating, consumeIdleClick;
+        private double idleAnimationFrom, idleAnimationTo;
+        private long idleAnimationStart, choiceAttentionUntil;
+        private Rectangle idleRevealZone;
+        private long idleRevealAt = -1;
+        private const int IdleFadeMilliseconds = 180;
+        internal bool IsIdleCollapsed { get { return idleCompact || idleTargetCompact; } }
         internal Dictionary<string, object> Model
         {
             get { return model; }
@@ -1429,15 +1504,34 @@ namespace HexGuide.Desktop
                     sessionRevision = revision;
                 }
                 if (hasPendingRevision) { pendingRevision = nextPendingRevision; pendingRevisionEpoch = nextPendingEpoch; }
+                long previousRecognitionEpoch, nextRecognitionEpoch;
+                bool recognitionEpochChanged = ModelValue.Integer(model, "gameEpoch", out previousRecognitionEpoch)
+                    && ModelValue.Integer(value, "gameEpoch", out nextRecognitionEpoch) && previousRecognitionEpoch != nextRecognitionEpoch;
+                if (recognitionEpochChanged || value != null && value.ContainsKey("gameId") && ModelValue.Text(value, "gameId") != ModelValue.Text(model, "gameId"))
+                { recognitionRequestId = 0; RecognitionRequestNotice = ""; }
+                long incomingRequestId;
+                var incomingRequest = ModelValue.Object(value, "manualRecognition");
+                var previousRequest = ModelValue.Object(model, "manualRecognition");
+                if (ModelValue.Integer(incomingRequest, "requestId", out incomingRequestId))
+                {
+                    if (incomingRequestId > recognitionRequestId)
+                    { recognitionRequestId = incomingRequestId; RecognitionRequestNotice = ""; }
+                    else if (incomingRequestId < recognitionRequestId || previousRequest != null && !ModelValue.Boolean(previousRequest, "active") && ModelValue.Boolean(incomingRequest, "active"))
+                    {
+                        value = new Dictionary<string, object>(value);
+                        value["manualRecognition"] = previousRequest;
+                    }
+                }
                 int previousOwned = ModelValue.Array(model, "owned").Count;
                 bool previousModel = ModelValue.Object(model, "champion") != null;
                 string previousPhase = ModelValue.Text(model, "phase");
                 model = value;
+                choiceAttentionUntil = idleClock.ElapsedMilliseconds + SidebarOfferAttention.RemainingMilliseconds(value, DateTime.UtcNow);
                 int currentOwned = ModelValue.Array(value, "owned").Count;
                 string phase = ModelValue.Text(value, "phase"), game = ModelValue.Text(value, "gameId");
                 bool boundary = phase == "ChampSelect" || phase == "EndOfGame" || phase == "WaitingForStats";
                 bool newGame = game.Length > 0 && initialPlanGame.Length > 0 && game != initialPlanGame;
-                if (boundary && phase != previousPhase || newGame) { initialPlanHandled = false; initialPlanGame = ""; }
+                if (boundary && phase != previousPhase || newGame) { initialPlanHandled = false; initialPlanGame = ""; RecognitionRequestNotice = ""; }
                 if (game.Length > 0) initialPlanGame = game;
                 // A connection-only failure does not describe the current selection.
                 // Keep an expanded build open until a real session explicitly clears it.
@@ -1455,9 +1549,24 @@ namespace HexGuide.Desktop
                 // A transient connection error must not reset the user's last saved layout.
                 if (ModelValue.Object(value, "appearance") != null) ApplyAppearance(SidebarAppearance.FromModel(value));
                 else Invalidate();
+                if (Visible) PulseIdle();
             }
         }
         internal string Notice = "";
+        internal bool RecognitionRequestBusy;
+        internal string RecognitionRequestNotice = "";
+        private bool RecognitionBusy { get { return RecognitionRequestBusy || ModelValue.Boolean(ModelValue.Object(model, "manualRecognition"), "active"); } }
+        private string RecognitionMessage
+        {
+            get
+            {
+                var request = ModelValue.Object(model, "manualRecognition");
+                string message = ModelValue.Text(request, "message");
+                if (ModelValue.Text(request, "status") == "idle" && RecognitionRequestNotice.Length == 0) return "";
+                return ModelValue.Boolean(request, "active") && message.Length > 0 ? message
+                    : RecognitionRequestNotice.Length > 0 ? RecognitionRequestNotice : message;
+            }
+        }
         internal bool IsLoadingPreview { get { return ModelValue.Text(ModelValue.Object(model, "plan"), "stage") == "loading-preview"; } }
         private bool IsLoadingStage { get { return ModelValue.Text(model, "stage") == "loading" || IsLoadingPreview; } }
         private static bool TryGameTime(Dictionary<string, object> value, out double time)
@@ -1479,7 +1588,7 @@ namespace HexGuide.Desktop
                 && ModelValue.Text(enemy, "status") == "detected" && ModelValue.Text(enemy, "source") == "live-client"
                 && ModelValue.Array(enemy, "champions").Count > 0 && ModelValue.Array(plan, "buildItems").Count > 0;
         }
-        internal event EventHandler HideRequested, DetailsRequested, GameRequested;
+        internal event EventHandler HideRequested, DetailsRequested, GameRequested, RecognitionRequested;
         internal event Action<string> OfferConfirmed;
         internal event Action<string, string> PendingOfferConfirmed;
 
@@ -1653,6 +1762,8 @@ namespace HexGuide.Desktop
             Size = new Size(324, 720);
             AutoScaleMode = AutoScaleMode.Dpi;
             DoubleBuffered = true;
+            idleTimer = new Timer { Interval = 200 };
+            idleTimer.Tick += delegate { PulseIdle(); };
         }
         protected override bool ShowWithoutActivation { get { return true; } }
         protected override CreateParams CreateParams
@@ -1675,7 +1786,92 @@ namespace HexGuide.Desktop
             double x = customPosition ? horizontalPosition : appearance.Side == "left" ? 0 : 1;
             double y = customPosition ? verticalPosition : 0.5;
             Rectangle desired = new Rectangle(area.Left + (int)Math.Round(x * remainingX), area.Top + (int)Math.Round(y * remainingY), width, height);
+            expandedBounds = desired;
+            ApplyIdleBounds();
+        }
+        private bool CompactOnRight
+        {
+            get { return customPosition ? horizontalPosition > 0.5 : appearance.Side == "right"; }
+        }
+        private void ApplyIdleBounds()
+        {
+            if (dragging || expandedBounds.Width < 1 || expandedBounds.Height < 1) return;
+            int edge = Math.Max(1, (int)Math.Round(SidebarIdleGeometry.EdgeWidthDip * Math.Max(96, DeviceDpi) / 96.0));
+            Rectangle desired = idleCompact ? SidebarIdleGeometry.CompactBounds(expandedBounds, placementArea, CompactOnRight, edge) : expandedBounds;
             if (Bounds != desired) Bounds = desired;
+        }
+        internal void RevealFromIdle()
+        {
+            long now = idleClock.ElapsedMilliseconds;
+            idleState.Reveal(now);
+            SetIdlePresentation(false, now, Visible && IdleAnimationsEnabled());
+        }
+        private void PulseIdle()
+        {
+            if (IsDisposed || Disposing) return;
+            long now = idleClock.ElapsedMilliseconds;
+            bool pointerInside = Visible && Bounds.Contains(Cursor.Position);
+            bool busy = dragging || Capture || pressedRecognition || pressedOfferId != null || RecognitionBusy;
+            bool collapsed = idleState.Observe(now, Visible, pointerInside, busy, choiceAttentionUntil > now);
+            SetIdlePresentation(collapsed, now, Visible && IdleAnimationsEnabled());
+            AdvanceIdleAnimation(now);
+        }
+        private void SetIdlePresentation(bool compact, long now, bool animate)
+        {
+            double opacity = appearance.Opacity / 100.0 * (compact ? 0.55 : 1.0);
+            if (idleTargetCompact == compact && Math.Abs(idleAnimationTo - opacity) < 0.001) return;
+            idleTargetCompact = compact;
+            if (!compact)
+            {
+                if (idleCompact) { idleRevealZone = Bounds; idleRevealAt = now; }
+                idleCompact = false; ApplyIdleBounds();
+            }
+            ClearAugmentHint();
+            idleAnimationFrom = Opacity; idleAnimationTo = opacity; idleAnimationStart = now;
+            idleAnimating = animate && Math.Abs(idleAnimationFrom - opacity) > 0.001;
+            if (idleTimer != null) idleTimer.Interval = idleAnimating ? 16 : 200;
+            if (!idleAnimating) FinishIdleAnimation();
+        }
+        private void AdvanceIdleAnimation(long now)
+        {
+            if (!idleAnimating) return;
+            double progress = Math.Min(1.0, Math.Max(0.0, (now - idleAnimationStart) / (double)IdleFadeMilliseconds));
+            double eased = 1.0 - Math.Pow(1.0 - progress, 3);
+            Opacity = idleAnimationFrom + (idleAnimationTo - idleAnimationFrom) * eased;
+            if (progress >= 1.0) FinishIdleAnimation();
+        }
+        private static bool IdleAnimationsEnabled()
+        {
+            bool enabled;
+            // SPI_GETCLIENTAREAANIMATION reads Windows' motion preference.
+            return SystemParametersInfo(0x1042, 0, out enabled, 0) && enabled;
+        }
+        private void FinishIdleAnimation()
+        {
+            idleAnimating = false; idleCompact = idleTargetCompact;
+            Opacity = idleAnimationTo;
+            if (idleTimer != null) idleTimer.Interval = 200;
+            // Completing an expansion only changes opacity: preserve a valid
+            // mouse press that started on the restored controls during the fade.
+            if (idleCompact) ClearSidebarHitTargets();
+            ApplyIdleBounds(); Invalidate();
+        }
+        private void ClearSidebarHitTargets()
+        {
+            hideButton = detailsButton = gameButton = recognitionButton = viewport = scrollTrack = scrollThumb = buildToggle = Rectangle.Empty;
+            offerButtons.Clear(); offerPendingIds.Clear(); pendingOfferButtons.Clear(); augmentTargets.Clear(); helpTargets.Clear();
+            pressedOfferId = null; pressedPendingId = null; pressedRecognition = false;
+        }
+        private void DrawIdleStrip(Graphics graphics)
+        {
+            ClearSidebarHitTargets(); paintedSections.Clear(); paintedNextItemId = ""; nextItemTextAreas.Clear();
+            int middle = Width / 2, center = Height / 2;
+            using (var pen = new Pen(accent, 2))
+            {
+                int direction = CompactOnRight ? -1 : 1;
+                graphics.DrawLines(pen, new[] { new Point(middle - direction * 3, center - 58), new Point(middle + direction * 3, center - 52), new Point(middle - direction * 3, center - 46) });
+            }
+            using (var pen = new Pen(muted, 1)) graphics.DrawLine(pen, middle, center - 20, middle, center + 20);
         }
         private void BeginManualMove(Point pointer)
         {
@@ -1709,7 +1905,9 @@ namespace HexGuide.Desktop
             bool fontsChanged = appearance.FontFamily != next.FontFamily || appearance.Scale != next.Scale;
             bool sectionsChanged = string.Join(",", appearance.Sections) != string.Join(",", next.Sections);
             bool sideChanged = appearanceLoaded && appearance.Side != next.Side;
-            if (fontsChanged || sectionsChanged || sideChanged || appearance.Width != next.Width) ClearAugmentHint();
+            long now = idleClock.ElapsedMilliseconds;
+            bool delayChanged = idleState.SetDelaySeconds(next.IdleHideSeconds, now);
+            if (fontsChanged || sectionsChanged || sideChanged || delayChanged || appearance.Width != next.Width) ClearAugmentHint();
             appearance = next;
             appearanceLoaded = true;
             if (sideChanged)
@@ -1720,8 +1918,7 @@ namespace HexGuide.Desktop
             }
             if (fontsChanged) UpdateFonts();
             if (sectionsChanged) scrollOffset = 0;
-            double opacity = next.Opacity / 100.0;
-            if (Math.Abs(Opacity - opacity) > 0.001) Opacity = opacity;
+            SetIdlePresentation(delayChanged ? false : idleTargetCompact, now, false);
             Invalidate();
         }
         private void UpdateFonts()
@@ -1745,6 +1942,12 @@ namespace HexGuide.Desktop
         protected override void OnVisibleChanged(EventArgs e)
         {
             if (!Visible && augmentHint != null) ClearAugmentHint();
+            if (idleState != null && idleClock != null)
+            {
+                idleState.Reset(idleClock.ElapsedMilliseconds);
+                SetIdlePresentation(false, idleClock.ElapsedMilliseconds, false);
+            }
+            if (idleTimer != null) { if (Visible) idleTimer.Start(); else idleTimer.Stop(); }
             base.OnVisibleChanged(e);
         }
         protected override void OnResize(EventArgs e)
@@ -1757,9 +1960,19 @@ namespace HexGuide.Desktop
             base.OnPaint(e);
             Graphics g = e.Graphics;
             using (var border = new Pen(Color.FromArgb(55, 77, 97))) g.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
+            if (idleCompact) { DrawIdleStrip(g); return; }
             int x = 17, width = Math.Max(1, Width - 34), y = 16;
             helpTargets.Clear();
             DrawHelpHeading(g, "海克斯指南", headingFont, ForeColor, new Rectangle(x, y, width, S(29)), SidebarHelp, ClientRectangle); y += S(40);
+            recognitionButton = new Rectangle(x, y, width, S(29));
+            PaintButton(g, recognitionButton, RecognitionBusy ? "正在识别…" : "识别一次"); y += S(37);
+            string recognitionMessage = RecognitionMessage;
+            if (recognitionMessage.Length > 0)
+            {
+                int messageHeight = Math.Min(S(70), NextItemTextHeight(recognitionMessage, smallFont, width));
+                Write(g, recognitionMessage, smallFont, muted, new Rectangle(x, y, width, messageHeight));
+                y += messageHeight + S(8);
+            }
             viewport = new Rectangle(x, y, width, Math.Max(1, Height - S(82) - y));
             contentHeight = 0;
             foreach (string section in DisplaySections()) contentHeight += SectionHeight(section);
@@ -2192,7 +2405,7 @@ namespace HexGuide.Desktop
                 var pending = item as Dictionary<string, object>;
                 if (ModelValue.Boolean(pending, "active")) activePendingId = ModelValue.Text(pending, "pendingId");
             }
-            DrawHelpHeading(g, "三选一海克斯", normalFont, accent, new Rectangle(x, y, width, S(22)), OffersHelp, viewport); y += S(27);
+            DrawHelpHeading(g, OffersHeading(), normalFont, accent, new Rectangle(x, y, width, S(22)), OffersHelp, viewport); y += S(27);
             if (offers.Count == 0)
             {
                 var ocr = ModelValue.Object(Model, "ocr");
@@ -2238,7 +2451,7 @@ namespace HexGuide.Desktop
             foreach (var pending in OlderPendingOffers())
             {
                 string pendingId = ModelValue.Text(pending, "pendingId"), sequence = ModelValue.Text(pending, "sequence");
-                Write(g, "待确认 · 第 " + sequence + " 轮", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(29);
+                Write(g, "上一轮待确认 · 第 " + sequence + " 轮", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(29);
                 int index = 0;
                 foreach (object item in ModelValue.Array(pending, "offers"))
                 {
@@ -2256,6 +2469,18 @@ namespace HexGuide.Desktop
                 }
                 y += S(8);
             }
+        }
+        private string OffersHeading()
+        {
+            foreach (object item in ModelValue.Array(Model, "pendingOffers"))
+            {
+                var group = item as Dictionary<string, object>;
+                long sequence;
+                if (ModelValue.Boolean(group, "active") && ModelValue.Boolean(group, "previousRound")
+                    && ModelValue.Integer(group, "sequence", out sequence) && sequence > 0)
+                    return "上一轮待确认 · 第 " + sequence + " 轮";
+            }
+            return "三选一海克斯";
         }
         private List<Dictionary<string, object>> OlderPendingOffers()
         {
@@ -2310,7 +2535,15 @@ namespace HexGuide.Desktop
         }
         protected override void OnMouseDown(MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left) { pressedOfferId = null; pressedPendingId = null; }
+            if (IsIdleCollapsed) { consumeIdleClick = true; RevealFromIdle(); return; }
+            // MouseEnter normally expands before MouseDown is delivered. Keep
+            // that immediate click on the former strip from hitting a scrollbar
+            // or another control now occupying the same screen coordinates.
+            long sinceReveal = idleClock.ElapsedMilliseconds - idleRevealAt;
+            if (idleRevealAt >= 0 && sinceReveal >= 0 && sinceReveal <= 250
+                && idleRevealZone.Contains(PointToScreen(e.Location))) { consumeIdleClick = true; return; }
+            idleState.Reveal(idleClock.ElapsedMilliseconds);
+            if (e.Button == MouseButtons.Left) { pressedOfferId = null; pressedPendingId = null; pressedRecognition = false; }
             if (e.Button == MouseButtons.Left && (GetAsyncKeyState(0x11) & 0x8000) != 0)
             {
                 BeginManualMove(Cursor.Position);
@@ -2319,7 +2552,11 @@ namespace HexGuide.Desktop
             }
             consumeDragClick = false;
             base.OnMouseDown(e);
-            if (e.Button == MouseButtons.Left) OfferAt(e.Location, out pressedOfferId, out pressedPendingId);
+            if (e.Button == MouseButtons.Left)
+            {
+                pressedRecognition = recognitionButton.Contains(e.Location) && !RecognitionBusy;
+                OfferAt(e.Location, out pressedOfferId, out pressedPendingId);
+            }
         }
         private bool OfferAt(Point location, out string id, out string pendingId)
         {
@@ -2334,6 +2571,7 @@ namespace HexGuide.Desktop
         }
         protected override void OnMouseMove(MouseEventArgs e)
         {
+            if (IsIdleCollapsed) { RevealFromIdle(); return; }
             if (dragging)
             {
                 if ((GetAsyncKeyState(0x11) & 0x8000) == 0 || (Control.MouseButtons & MouseButtons.Left) == 0) EndManualMove();
@@ -2373,6 +2611,11 @@ namespace HexGuide.Desktop
             HideHoverHint();
             base.OnMouseLeave(e);
         }
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            RevealFromIdle();
+            base.OnMouseEnter(e);
+        }
         protected override void OnMouseCaptureChanged(EventArgs e)
         {
             if (dragging && !Capture) EndManualMove();
@@ -2380,6 +2623,9 @@ namespace HexGuide.Desktop
         }
         protected override void OnMouseUp(MouseEventArgs e)
         {
+            if (consumeIdleClick) { consumeIdleClick = false; idleRevealAt = -1; return; }
+            bool recognize = pressedRecognition;
+            pressedRecognition = false;
             string pressedId = pressedOfferId, pressedScope = pressedPendingId;
             if (e.Button == MouseButtons.Left) { pressedOfferId = null; pressedPendingId = null; }
             if (e.Button == MouseButtons.Left && (dragging || consumeDragClick))
@@ -2389,6 +2635,11 @@ namespace HexGuide.Desktop
             }
             base.OnMouseUp(e);
             if (e.Button != MouseButtons.Left) return;
+            if (recognitionButton.Contains(e.Location))
+            {
+                if (recognize && !RecognitionBusy && RecognitionRequested != null) RecognitionRequested(this, EventArgs.Empty);
+                return;
+            }
             if (buildToggle.Contains(e.Location)) { buildExpanded = !buildExpanded; scrollOffset = 0; Invalidate(); return; }
             if (scrollTrack.Contains(e.Location))
             {
@@ -2411,6 +2662,8 @@ namespace HexGuide.Desktop
         }
         protected override void OnMouseWheel(MouseEventArgs e)
         {
+            if (IsIdleCollapsed) { RevealFromIdle(); return; }
+            idleState.Reveal(idleClock.ElapsedMilliseconds);
             if (dragging) return;
             base.OnMouseWheel(e);
             ScrollTo(scrollOffset - Math.Sign(e.Delta) * S(52));
@@ -2426,7 +2679,7 @@ namespace HexGuide.Desktop
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { buildIcons.Dispose(); augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); foreach (Image image in augmentIcons.Values) image.Dispose(); augmentIcons.Clear(); }
+            if (disposing) { idleTimer.Stop(); idleTimer.Dispose(); buildIcons.Dispose(); augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); foreach (Image image in augmentIcons.Values) image.Dispose(); augmentIcons.Clear(); }
             base.Dispose(disposing);
         }
         private static Dictionary<string, object> CreateNextItemFixture()
@@ -2650,7 +2903,7 @@ namespace HexGuide.Desktop
                 window.GameRequested += delegate { actions++; };
                 foreach (var target in window.helpTargets)
                 {
-                    check(window.ClientRectangle.Contains(target.Key) && (target.Value == SidebarHelp || window.viewport.Contains(target.Key)), "Help escaped the visible heading.");
+                    check(window.ClientRectangle.Contains(target.Key) && (target.Value == window.SidebarHelp || window.viewport.Contains(target.Key)), "Help escaped the visible heading.");
                     var pointer = new Point(target.Key.Left + target.Key.Width / 2, target.Key.Top + target.Key.Height / 2);
                     window.OnMouseMove(new MouseEventArgs(MouseButtons.None, 0, pointer.X, pointer.Y, 0));
                     check(window.activeAugmentHint == target.Value && window.augmentHint.GetToolTip(window) == target.Value, "Hover did not bind the heading explanation.");
@@ -2707,6 +2960,179 @@ namespace HexGuide.Desktop
             }
             return checks;
         }
+        private static int ValidateManualRecognitionFixtures(string directory)
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool condition, string message) { Require(condition, message); checks++; };
+            foreach (int width in new int[] { 280, 324, 460 })
+            foreach (int scale in new int[] { 85, 100, 130 })
+            using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false;
+                window.ApplyAppearance(new SidebarAppearance { Width = width, Scale = scale });
+                window.Place(new Rectangle(0, 0, 1200, 900));
+                window.Model = CreateNextItemFixture();
+                using (var bitmap = RenderFixture(window)) { }
+                check(window.ClientRectangle.Contains(window.recognitionButton) && !window.recognitionButton.IntersectsWith(window.viewport), "Recognition button overlaps scroll content.");
+                int requests = 0, selections = 0;
+                window.RecognitionRequested += delegate { requests++; };
+                window.OfferConfirmed += delegate { selections++; };
+                Point center = new Point(window.recognitionButton.Left + window.recognitionButton.Width / 2, window.recognitionButton.Top + window.recognitionButton.Height / 2);
+                window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                check(requests == 0, "A release without a press started recognition.");
+                window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                check(requests == 1 && selections == 0, "Recognition triggered a selection or did not trigger once.");
+                window.RecognitionRequestBusy = true;
+                window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                check(requests == 1, "Recognition allowed a duplicate local request.");
+                window.RecognitionRequestBusy = false;
+                window.Model["manualRecognition"] = new Dictionary<string, object> { { "active", true }, { "message", "正在核对六格栏，请保持展开…" } };
+                window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                check(requests == 1, "Another UI request did not disable duplicate recognition.");
+                using (var bitmap = RenderFixture(window))
+                    if (width == 324 && scale == 100) bitmap.Save(Path.Combine(directory, "sidebar-manual-recognition.png"), System.Drawing.Imaging.ImageFormat.Png);
+                check(window.paintedNextItemId == "3135" && !window.Visible, "Recognition changed the next-item decision or activated the window.");
+                window.RecognitionRequestNotice = "旧请求未识别到";
+                var nextRequest = CreateNextItemFixture();
+                nextRequest["manualRecognition"] = new Dictionary<string, object> { { "requestId", 2L }, { "active", true }, { "message", "新请求正在核对" } };
+                window.Model = nextRequest;
+                check(window.RecognitionMessage == "新请求正在核对", "A local result hid a later request started in the full app.");
+                var finished = new Dictionary<string, object>(nextRequest);
+                finished["manualRecognition"] = new Dictionary<string, object> { { "requestId", 2L }, { "active", false }, { "message", "新请求已结束" } };
+                window.Model = finished;
+                window.Model = nextRequest;
+                check(!window.RecognitionBusy && window.RecognitionMessage == "新请求已结束", "An older poll restored a completed request to busy.");
+                window.RecognitionRequestNotice = "上一局已记录";
+                var reset = CreateNextItemFixture();
+                reset["gameEpoch"] = 3;
+                reset["manualRecognition"] = new Dictionary<string, object> { { "requestId", 2L }, { "active", false }, { "status", "idle" }, { "message", "" } };
+                window.Model = reset;
+                check(window.RecognitionMessage.Length == 0, "A same-ID game epoch retained the previous manual result.");
+            }
+            return checks;
+        }
+        private static int ValidateIdlePresentationFixtures(string directory)
+        {
+            int checks = SidebarIdleState.ValidateFixtures();
+            Action<bool, string> check = delegate(bool condition, string message) { Require(condition, message); checks++; };
+            foreach (string side in new[] { "left", "right" }) using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false;
+                window.ApplyAppearance(new SidebarAppearance { Side = side, Opacity = 75, IdleHideSeconds = 30 });
+                window.Model = CreateNextItemFixture(); window.Place(new Rectangle(0, 0, 1280, 720));
+                Rectangle expanded = window.Bounds;
+                using (var full = RenderFixture(window))
+                {
+                    check(!window.idleState.Observe(0, true, false, false, false), "Idle fixture collapsed immediately.");
+                    check(!window.idleState.Observe(29999, true, false, false, false), "Idle fixture collapsed before thirty seconds.");
+                    window.SetIdlePresentation(window.idleState.Observe(30000, true, false, false, false), 30000, false);
+                    int expectedEdge = (int)Math.Round(SidebarIdleGeometry.EdgeWidthDip * Math.Max(96, window.DeviceDpi) / 96.0);
+                    check(window.idleCompact && window.Width == expectedEdge && window.Height == expanded.Height, "Idle edge did not respect display scaling.");
+                    check(Math.Abs(window.Opacity - 0.75 * 0.55) < 0.002, "Idle opacity ignored the saved opacity.");
+                    check(side == "left" ? window.Left == 0 : window.Right == 1280, "Idle edge did not follow the configured side.");
+                    using (var strip = RenderFixture(window))
+                    using (var comparison = new Bitmap(full.Width + 55 + strip.Width, full.Height))
+                    using (var graphics = Graphics.FromImage(comparison))
+                    {
+                        graphics.Clear(Color.FromArgb(35, 43, 54)); graphics.DrawImageUnscaled(full, 0, 0); graphics.DrawImageUnscaled(strip, full.Width + 55, 0);
+                        comparison.Save(Path.Combine(directory, "sidebar-idle-" + side + ".png"), System.Drawing.Imaging.ImageFormat.Png);
+                    }
+                    check(window.offerButtons.Count == 0 && window.pendingOfferButtons.Count == 0 && window.recognitionButton.IsEmpty
+                        && window.hideButton.IsEmpty && window.helpTargets.Count == 0, "Collapsed strip retained clickable full-panel controls.");
+                    Rectangle compact = window.Bounds;
+                    window.Model = CreateNextItemFixture(); window.Place(new Rectangle(0, 0, 1280, 720));
+                    check(window.Bounds == compact && window.idleCompact, "Normal model or placement polling expanded the idle strip.");
+                    window.SetIdlePresentation(window.idleState.Observe(30001, true, true, false, false), 30001, false);
+                    check(window.Bounds == expanded && !window.IsIdleCollapsed && Math.Abs(window.Opacity - .75) < .002, "Hover did not restore the full position and opacity.");
+                    using (var restored = RenderFixture(window)) check(window.offerButtons.Count == 3, "Restored cards lost their hit targets.");
+                    window.customPosition = true; window.horizontalPosition = .7; window.verticalPosition = .2;
+                    window.Place(new Rectangle(0, 0, 1280, 720)); Rectangle custom = window.Bounds;
+                    window.SetIdlePresentation(true, 60002, false); window.SetIdlePresentation(false, 60003, false);
+                    check(window.Bounds == custom && window.customPosition && window.horizontalPosition == .7, "Idle compaction erased the custom expanded placement.");
+                    int actions = 0; window.HideRequested += delegate { actions++; }; window.RecognitionRequested += delegate { actions++; };
+                    window.OfferConfirmed += delegate { actions++; };
+                    window.SetIdlePresentation(true, 90003, false);
+                    window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, 4, 100, 0));
+                    window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, 4, 100, 0));
+                    check(actions == 0 && !window.IsIdleCollapsed, "Reveal click activated an unrelated full-panel action.");
+                    window.idleRevealAt = -1;
+                    window.SetIdlePresentation(true, 120000, true);
+                    check(window.idleAnimating && !window.idleCompact && window.Bounds == custom, "Fade start prematurely changed the expanded layout.");
+                    window.AdvanceIdleAnimation(120090);
+                    check(window.Opacity > .75 * .55 && window.Opacity < .75, "Fade did not interpolate the configured opacity.");
+                    window.SetIdlePresentation(true, 120100, true);
+                    check(window.idleAnimationStart == 120000, "Repeated polling restarted the same fade.");
+                    window.SetIdlePresentation(false, 120100, true); window.AdvanceIdleAnimation(120280);
+                    check(!window.idleAnimating && !window.idleCompact && window.Bounds == custom && Math.Abs(window.Opacity - .75) < .002,
+                        "Interrupted fade did not restore the original window.");
+                    window.SetIdlePresentation(true, 150000, true); window.AdvanceIdleAnimation(150180);
+                    check(window.idleCompact && !window.idleAnimating, "Completed fade did not leave the narrow strip.");
+                    window.SetIdlePresentation(false, 150181, false);
+                    check(!window.idleCompact && !window.idleAnimating && window.Bounds == custom, "Reduced-motion restoration animated or lost position.");
+                    foreach (bool recognize in new[] { false, true })
+                    {
+                        window.SetIdlePresentation(true, 180000, false);
+                        window.SetIdlePresentation(false, 180001, true);
+                        using (var restored = RenderFixture(window)) { }
+                        Rectangle target = window.recognitionButton;
+                        if (!recognize) foreach (var entry in window.offerButtons) { target = entry.Key; break; }
+                        Point point = new Point(target.Left + target.Width / 2, target.Top + target.Height / 2);
+                        window.idleRevealAt = -1;
+                        int before = actions;
+                        window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, point.X, point.Y, 0));
+                        check(window.idleAnimating && (recognize ? window.pressedRecognition : window.pressedOfferId != null), "A restored control could not be pressed during fade-in.");
+                        window.AdvanceIdleAnimation(180181);
+                        window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, point.X, point.Y, 0));
+                        check(actions == before + 1, "Completing fade-in lost a valid card or recognition press.");
+                    }
+                    check(!window.Visible && window.ShowWithoutActivation && !window.TopMost, "Idle fixtures activated a window.");
+                }
+            }
+            using (var configured = new SidebarWindow())
+            {
+                configured.remoteIcons = false;
+                foreach (int seconds in new[] { 5, 300, 10 })
+                {
+                    var settingsModel = CreateNextItemFixture();
+                    settingsModel["appearance"] = new Dictionary<string, object> { { "sidebar", new Dictionary<string, object> { { "idleHideSeconds", seconds } } } };
+                    configured.Model = settingsModel;
+                    check(configured.appearance.IdleHideSeconds == seconds && configured.idleState.DelayMilliseconds == seconds * 1000L,
+                        "A saved wait time did not reach the native idle timer.");
+                    check(configured.SidebarHelp.Contains("离开" + seconds + "秒"), "Sidebar help retained the previous wait time.");
+                    configured.idleState.Reset(1000000);
+                    configured.idleState.Observe(1000000, true, false, false, false);
+                    check(configured.idleState.Observe(1000000 + seconds * 1000L, true, false, false, false), "Configured native timer did not reach its deadline.");
+                    configured.Model = settingsModel;
+                    check(configured.idleState.Collapsed, "Repeated settings polling reset the native timer.");
+                }
+                var legacy = CreateNextItemFixture();
+                legacy["appearance"] = new Dictionary<string, object> { { "sidebar", new Dictionary<string, object> { { "opacity", 85 } } } };
+                configured.Model = legacy;
+                check(configured.appearance.IdleHideSeconds == 10 && configured.appearance.Opacity == 85, "Legacy settings lost the default delay or another preference.");
+                foreach (object invalid in new object[] { 4, 301, 10.5, "NaN", null })
+                {
+                    ModelValue.Object(ModelValue.Object(legacy, "appearance"), "sidebar")["idleHideSeconds"] = invalid;
+                    check(SidebarAppearance.FromModel(legacy).IdleHideSeconds == 10, "Invalid native timeout bypassed its fallback.");
+                }
+            }
+            DateTime now = DateTime.UtcNow;
+            var model = CreateNextItemFixture();
+            check(SidebarOfferAttention.RemainingMilliseconds(model, now) == 0, "Stored candidates incorrectly held attention.");
+            model["offerAttention"] = new Dictionary<string, object> { { "active", true }, { "pendingId", "current-round" },
+                { "capturedAt", now.ToString("o") }, { "expiresAt", now.AddSeconds(8).ToString("o") } };
+            check(SidebarOfferAttention.RemainingMilliseconds(model, now) == 8000, "Fresh current-card attention was ignored.");
+            model["life"] = new Dictionary<string, object> { { "status", "detected" }, { "isDead", true } };
+            check(SidebarOfferAttention.RemainingMilliseconds(model, now.AddSeconds(3)) == 5000, "Death blocked fresh card attention or polling renewed it.");
+            check(SidebarOfferAttention.RemainingMilliseconds(model, now.AddSeconds(8)) == 0, "Expired attention reopened the sidebar.");
+            check(SidebarOfferAttention.RemainingMilliseconds(model, now.AddSeconds(-2)) == 0, "Future attention reopened the sidebar.");
+            model["stage"] = "loading"; check(SidebarOfferAttention.RemainingMilliseconds(model, now) == 0, "Loading reused live-card attention.");
+            model["stage"] = "live"; ModelValue.Object(model, "connection")["status"] = "waiting";
+            check(SidebarOfferAttention.RemainingMilliseconds(model, now) == 0, "Connection failure reused live-card attention.");
+            return checks;
+        }
         internal static string RunSelfTest(string previewPath)
         {
             previewPath = Path.GetFullPath(previewPath);
@@ -2722,8 +3148,9 @@ namespace HexGuide.Desktop
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(previewPath, System.Drawing.Imaging.ImageFormat.Png); }
                 if (window.Visible) throw new InvalidOperationException("Off-screen test unexpectedly displayed a window.");
                 int passiveActivationChecks = ValidatePassiveActivationFixtures(window);
+                int idleHideChecks = ValidateIdlePresentationFixtures(Path.GetDirectoryName(previewPath));
                 int nextItemChecks = ValidateNextItemFixtures(Path.GetDirectoryName(previewPath));
-                int helpChecks = ValidateHelpFixtures(Path.GetDirectoryName(previewPath));
+                int helpChecks = ValidateHelpFixtures(Path.GetDirectoryName(previewPath)) + ValidateManualRecognitionFixtures(Path.GetDirectoryName(previewPath));
                 window.ExpandBuild();
                 string buildPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-build.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(buildPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
@@ -2754,7 +3181,7 @@ namespace HexGuide.Desktop
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + nextItemChecks + helpChecks + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + pendingOfferChecks + loadingPreviewChecks + buildStatisticsChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks + selectionChecks }, { "selectionChecks", selectionChecks }, { "helpChecks", helpChecks }, { "nextItemChecks", nextItemChecks }, { "pendingOfferChecks", pendingOfferChecks }, { "pendingPreviewPath", pendingPreviewPath }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "buildStatisticsChecks", buildStatisticsChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + idleHideChecks + nextItemChecks + helpChecks + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + pendingOfferChecks + loadingPreviewChecks + buildStatisticsChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks + selectionChecks }, { "selectionChecks", selectionChecks }, { "idleHideChecks", idleHideChecks }, { "helpChecks", helpChecks }, { "nextItemChecks", nextItemChecks }, { "pendingOfferChecks", pendingOfferChecks }, { "pendingPreviewPath", pendingPreviewPath }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "buildStatisticsChecks", buildStatisticsChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
             }
         }
         private static int ValidatePendingOfferFixtures(string previewPath)
@@ -2820,6 +3247,23 @@ namespace HexGuide.Desktop
                 check(ModelValue.Text(ModelValue.Array(window.Model, "offers")[1] as Dictionary<string, object>, "id") == "new-b", "A transport failure lost the pending revision watermark.");
                 window.ScrollTo(100);
                 check(window.offerButtons.Count == 0 && window.pendingOfferButtons.Count == 0, "Scrolling kept stale pending hit targets.");
+                var returnedOld = new Dictionary<string, object>(fixture);
+                returnedOld["sessionRevision"] = 5; returnedOld["pendingRevision"] = 3;
+                returnedOld["offers"] = older;
+                returnedOld["pendingOffers"] = new object[] {
+                    new Dictionary<string, object> { { "pendingId", "old-round" }, { "sequence", 1 }, { "active", true }, { "previousRound", true }, { "offers", older } }
+                };
+                foreach (int width in new int[] { 280, 324, 460 })
+                foreach (int scale in new int[] { 85, 100, 130 })
+                {
+                    window.ApplyAppearance(new SidebarAppearance { Width = width, Scale = scale, Sections = new string[] { "offers", "owned", "plan", "hero" } });
+                    window.Place(new Rectangle(0, 0, 1200, 900)); window.Model = returnedOld; window.ScrollTo(0);
+                    using (var bitmap = RenderFixture(window)) bitmap.Save(Path.Combine(Path.GetDirectoryName(previewPath), "sidebar-previous-round-" + width + "-" + scale + ".png"), System.Drawing.Imaging.ImageFormat.Png);
+                    check(window.OffersHeading() == "上一轮待确认 · 第 1 轮" && window.offerButtons.Count == 3, "Promoted older candidates lost their round label or confirmation cards.");
+                    foreach (var target in window.offerButtons)
+                        check(window.offerPendingIds[target.Key] == "old-round", "Promoted older confirmation used the newer round identity.");
+                    check(window.helpTargets.ContainsValue(OffersHelp), "Previous-round title clipped its help icon.");
+                }
                 fixture["pendingOffers"] = new object[0]; fixture["offers"] = new object[0]; fixture["sessionRevision"] = 5; fixture["pendingRevision"] = 3;
                 window.Model = fixture;
                 using (var bitmap = RenderFixture(window)) { }
@@ -3237,6 +3681,7 @@ namespace HexGuide.Desktop
         [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr handle, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
         [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
         [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
+        [DllImport("user32.dll", SetLastError = true)] private static extern bool SystemParametersInfo(uint action, uint parameter, [MarshalAs(UnmanagedType.Bool)] out bool value, uint flags);
     }
 
     internal static class ModelValue

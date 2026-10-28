@@ -232,6 +232,14 @@ namespace HexGuide.Desktop
 
         private static long Now() { return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); }
         private static bool ButtonDown() { return (GetAsyncKeyState(0x01) & 0x8000) != 0; }
+        // Only sampled after verifying the foreground game. These inputs can
+        // open an in-game overlay or divert release away from a card.
+        private static bool SelectionInterrupted()
+        {
+            foreach (int key in new[] { 0x02, 0x04, 0x1B, 0x09, 0x50 })
+                if ((GetAsyncKeyState(key) & 0x8000) != 0) return true;
+            return false;
+        }
 
         private void Poll()
         {
@@ -258,6 +266,8 @@ namespace HexGuide.Desktop
                     Suspend("expired", true);
                 if (observation != null && foreground != observation.Window) Suspend("focus-changed", true);
                 bool down = ButtonDown();
+                if ((down || decision.Pressed || decision.Pending) && SelectionInterrupted())
+                { Suspend("interaction-interrupted", true); return; }
                 bool edge = buttonKnown ? down != lastButtonDown : down;
                 buttonKnown = true;
                 if (edge)
@@ -283,7 +293,7 @@ namespace HexGuide.Desktop
                     if (decision.Pending) SetStatus("pending");
                 }
                 else lastButtonDown = down;
-                if (observation == null) return;
+                if (observation == null || edge) return;
                 if (now < nextFrameAt) return;
                 nextFrameAt = now + 65;
                 int[][] signatures; int titleMask;
@@ -294,8 +304,7 @@ namespace HexGuide.Desktop
                 if (decision.Ready) SetStatus("ready");
                 if (decision.FeedbackFrames > 0) SetStatus("feedback");
                 if (!decision.Complete) return;
-                var evidence = observation.Evidence(decision.SelectedIndex, decision.ClickedAt, now,
-                    decision.DismissedFrames, decision.FeedbackFrames);
+                var evidence = observation.Evidence(decision, now);
                 lastAttempt = DecisionDiagnostics("observed");
                 decision.Invalidate(now);
                 observation = null;
@@ -330,6 +339,8 @@ namespace HexGuide.Desktop
                 }
                 earlyHadFocus = true;
                 bool down = ButtonDown();
+                if ((down || early.HasInteraction) && SelectionInterrupted())
+                { CancelEarly("interaction-interrupted", now); earlyButtonKnown = false; return; }
                 if (!earlyButtonKnown)
                 {
                     earlyButtonKnown = true; earlyLastDown = down;
@@ -713,7 +724,7 @@ namespace HexGuide.Desktop
         {
             int checks = ScreenSelectionDecision.ValidateFixtures() + ValidateReferenceRefreshFixtures()
                 + CardTitleIdentity.ValidateFixtures() + ScreenSelectionDecision.ValidateTitleIdentityFixtures()
-                + EarlySelectionReplayFixtures.Run() + RecognitionTrace.ValidateFixtures();
+                + EarlySelectionReplayFixtures.Run() + RecognitionTrace.ValidateFixtures() + ScreenSelectionDecision.ValidateDirectFixtures();
             using (var watcher = new ScreenSelectionWatcher())
             {
                 watcher.RecordCaptureResult(true, "captured", Now());
@@ -1035,6 +1046,14 @@ namespace HexGuide.Desktop
                     { "stableFrames", stableFrames }, { "feedbackFrames", feedbackFrames } } }
             };
         }
+
+        internal Dictionary<string, object> Evidence(ScreenSelectionDecision decision, long observedAt)
+        {
+            var result = Evidence(decision.SelectedIndex, decision.ClickedAt, observedAt,
+                decision.DismissedFrames, decision.FeedbackFrames);
+            if (decision.DirectComplete) result["evidence"] = decision.DirectEvidence();
+            return result;
+        }
     }
 
     // Deterministic state machine, independent of all real input and capture.
@@ -1042,6 +1061,12 @@ namespace HexGuide.Desktop
     internal sealed class ScreenSelectionDecision
     {
         private int[][] preClick;
+        private int[][] downImage;
+        private long baselineFirstAt, baselineLastAt, directBaselineFirstAt, directBaselineLastAt;
+        private long directLastSampleAt, directFirstTransitionAt;
+        private int directFrames, directMaxGap;
+        private bool directEligible;
+        internal bool DirectComplete;
         private long invalidatedAt, pressedAt, lastFrameAt;
         private long witnessCapture, acceptedCapture;
         private string witnessIdentity;
@@ -1119,6 +1144,9 @@ namespace HexGuide.Desktop
             BaselineFrames = FeedbackFrames = DismissedFrames = 0;
             pressedColumn = SelectedIndex = -1; pressedAt = lastFrameAt = ClickedAt = 0;
             preClick = null; LastDelta = new double[3];
+            downImage = null; DirectComplete = directEligible = false;
+            baselineFirstAt = baselineLastAt = directBaselineFirstAt = directBaselineLastAt = 0;
+            directLastSampleAt = directFirstTransitionAt = 0; directFrames = directMaxGap = 0;
             referenceCapturedAt = lastObservedFrameAt = 0;
             metricsAvailable = false; maeFailureMask = closeFailureMask = frameGapMs = 0;
             closeCells = new int[3];
@@ -1170,6 +1198,14 @@ namespace HexGuide.Desktop
                 if (now - lastFrameAt > 180) { Reject("pointer-down-stale-frame", now); return; }
                 EndReady(now);
                 pressedColumn = column; pressedAt = now; Ready = false;
+                directBaselineFirstAt = baselineFirstAt; directBaselineLastAt = baselineLastAt;
+                directEligible = titleMode && titlesMatch && baselineFirstAt > 0
+                    && baselineFirstAt >= referenceCapturedAt && baselineLastAt - baselineFirstAt >= 40
+                    && now > baselineLastAt && now - baselineLastAt <= 180;
+                directLastSampleAt = baselineLastAt;
+                directMaxGap = (int)Math.Max(0, Math.Min(180, baselineLastAt - baselineFirstAt));
+                TrackDirectSample(now);
+                downImage = Clone(edgeFrame);
             }
             else
             {
@@ -1177,6 +1213,8 @@ namespace HexGuide.Desktop
                 if (now - pressedAt > 1500) { Reject("pointer-up-hold-timeout", now); return; }
                 if (now <= pressedAt) { Reject("pointer-up-time-backward", now); return; }
                 SelectedIndex = column; ClickedAt = now; Pending = true;
+                TrackDirectSample(now);
+                if (now - pressedAt > 500) directEligible = false;
             }
             // This is the frame captured at this actual button edge, not the
             // preceding timer frame. Release refresh also excludes held-hover FX.
@@ -1201,6 +1239,7 @@ namespace HexGuide.Desktop
             if (!Valid(baseline)) { Reject("frame-invalid-reference", now); return; }
             if (titleMode && (titleMask < 0 || titleMask > 7)) { Reject("frame-title-mask-invalid", now); return; }
             bool panelMatches = MeasurePanel(current, baseline);
+            if (pressedColumn >= 0) TrackDirectSample(now);
             if (!Pending)
             {
                 if (pressedColumn >= 0) { if (now - pressedAt > 1500) Reject("frame-hold-timeout", now); return; }
@@ -1211,11 +1250,17 @@ namespace HexGuide.Desktop
                     // the expensive two-OCR settling sequence.
                     EndReady(now); Ready = false; BaselineFrames = 0;
                     preClick = null; lastFrameAt = 0;
+                    baselineFirstAt = baselineLastAt = 0;
                     TitleIdentityPauses = Math.Min(1000000, TitleIdentityPauses + 1);
                     return;
                 }
                 if (!titleMode && !panelMatches) { Reject(PanelRejection("frame-preclick"), now); return; }
                 BaselineFrames = Math.Min(1000, BaselineFrames + 1);
+                if (titleMode)
+                {
+                    baselineFirstAt = baselineLastAt > 0 && now > baselineLastAt && now - baselineLastAt <= 180 ? baselineLastAt : 0;
+                    baselineLastAt = now;
+                }
                 if (!Ready && BaselineFrames >= 2) readySince = now;
                 Ready = BaselineFrames >= 2;
                 preClick = Clone(current); lastFrameAt = now;
@@ -1233,8 +1278,116 @@ namespace HexGuide.Desktop
             for (int index = 0; index < 3; index++)
                 gone &= Difference(current[index], dismissalReference[index]) >= 18 && CloseFraction(current[index], dismissalReference[index]) <= .45;
             DismissedFrames = gone ? Math.Min(1000, DismissedFrames + 1) : 0;
-            // A click followed only by disappearing cards is insufficient.
-            Complete = FeedbackFrames > 0 && DismissedFrames >= 3;
+            // Separate proof: an anchored physical card activation followed by
+            // a continuous all-card transition. Mask zero alone is NOT absence
+            // classification. Keep FX relative to release; compare this path
+            // to down because the cards may already have closed at release.
+            bool transitioned = titleMode && titleMask == 0 && downImage != null;
+            for (int index = 0; transitioned && index < 3; index++)
+                transitioned &= Difference(current[index], downImage[index]) >= 18
+                    && CloseFraction(current[index], downImage[index]) <= .45;
+            if (directEligible)
+            {
+                if (transitioned)
+                {
+                    if (directFirstTransitionAt == 0)
+                    {
+                        if (now - ClickedAt > 500) directEligible = false;
+                        else directFirstTransitionAt = now;
+                    }
+                    directFrames++;
+                }
+                else if (directFirstTransitionAt > 0 || now - ClickedAt > 500) directEligible = false;
+            }
+            DirectComplete = directEligible && directFrames >= 5 && now - directFirstTransitionAt >= 350;
+            Complete = FeedbackFrames > 0 && DismissedFrames >= 3 || DirectComplete;
+        }
+
+        private void TrackDirectSample(long now)
+        {
+            if (!directEligible) return;
+            long gap = now - directLastSampleAt;
+            if (gap <= 0 || gap > 180) directEligible = false;
+            else { directMaxGap = Math.Max(directMaxGap, (int)gap); directLastSampleAt = now; }
+        }
+
+        internal Dictionary<string, object> DirectEvidence()
+        {
+            return new Dictionary<string, object> {
+                { "version", 2 }, { "kind", "verified-click-transition" }, { "click", true },
+                { "titleIdentity", true }, { "cardsTransitioned", true },
+                { "baselineStartedAt", directBaselineFirstAt }, { "lastBaselineAt", directBaselineLastAt },
+                { "pressedAt", pressedAt }, { "firstTransitionAt", directFirstTransitionAt },
+                { "stableFrames", directFrames }, { "maxFrameGapMs", directMaxGap }
+            };
+        }
+
+        internal static int ValidateDirectFixtures()
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool value, string message) {
+                checks++; if (!value) throw new InvalidOperationException("Verified card transition: " + message);
+            };
+            var before = new int[3][]; var after = new int[3][];
+            for (int c = 0; c < 3; c++)
+            {
+                before[c] = new int[192]; after[c] = new int[192];
+                for (int i = 0; i < 192; i++) { before[c][i] = 25; after[c][i] = 100; }
+            }
+            Func<bool, ScreenSelectionDecision> clicked = delegate(bool closedAtRelease) {
+                var d = new ScreenSelectionDecision(); d.Arm(950);
+                d.FrameWithTitleIdentity(before, before, 1000, 7);
+                d.FrameWithTitleIdentity(before, before, 1070, 7);
+                d.PointerWithTitleIdentity(true, 1, true, 1100, before, before, true);
+                d.PointerWithTitleIdentity(false, 1, true, 1178, closedAtRelease ? after : before, before, !closedAtRelease);
+                return d;
+            };
+            foreach (bool closed in new[] { false, true })
+            {
+                var d = clicked(closed);
+                for (long at = 1240; at <= 1590; at += 70) d.FrameWithTitleIdentity(after, before, at, 0);
+                check(d.Complete && d.DirectComplete && d.FeedbackFrames == 0, "no-FX activation/release transition did not complete");
+                var proof = d.DirectEvidence();
+                check((long)proof["pressedAt"] == 1100 && (long)proof["firstTransitionAt"] == 1240
+                    && (int)proof["stableFrames"] == 6 && !proof.ContainsKey("uniqueFeedback"), "new proof manufactured FX or lost timing");
+            }
+            foreach (string fault in new[] { "duplicate", "backward", "gap", "title-return", "short", "late-onset", "body-present" })
+            {
+                var d = clicked(false);
+                d.FrameWithTitleIdentity(after, before, 1240, 0);
+                if (fault == "duplicate") d.FrameWithTitleIdentity(after, before, 1240, 0);
+                if (fault == "backward") d.FrameWithTitleIdentity(after, before, 1230, 0);
+                if (fault == "gap") d.FrameWithTitleIdentity(after, before, 1421, 0);
+                if (fault == "title-return") d.FrameWithTitleIdentity(after, before, 1310, 1);
+                if (fault == "short") d.FrameWithTitleIdentity(after, before, 1310, 0);
+                if (fault == "late-onset" || fault == "body-present")
+                {
+                    d = clicked(false);
+                    for (long at = 1240; at <= 1730; at += 70)
+                        d.FrameWithTitleIdentity(fault == "body-present" ? before : after, before, at, fault == "late-onset" ? 7 : 0);
+                }
+                for (long at = fault == "gap" ? 1491 : fault == "late-onset" || fault == "body-present" ? 1800 : 1380;
+                    at <= (fault == "short" ? 1520 : 2220); at += 70) d.FrameWithTitleIdentity(after, before, at, 0);
+                check(!d.Complete, "unsafe transition accepted: " + fault);
+            }
+            var tooFew = clicked(false);
+            foreach (long at in new long[] { 1240, 1360, 1480, 1590 }) tooFew.FrameWithTitleIdentity(after, before, at, 0);
+            check(!tooFew.Complete, "four frames spanning 350ms bypassed minimum independent count");
+            foreach (string fault in new[] { "unanchored", "baseline-gap", "baseline-duplicate", "down-gap", "up-gap", "long-hold", "wrong-release" })
+            {
+                var d = new ScreenSelectionDecision(); d.Arm(950);
+                if (fault == "unanchored") { d.Frame(before, before, 1000); d.Frame(before, before, 1070); }
+                else { d.FrameWithTitleIdentity(before, before, fault == "baseline-gap" ? 800 : 1000, 7);
+                    d.FrameWithTitleIdentity(before, before, fault == "baseline-duplicate" ? 1000 : 1070, 7); }
+                long down = fault == "down-gap" ? 1251 : 1100;
+                d.PointerWithTitleIdentity(true, 1, true, down, before, before, true);
+                if (fault == "long-hold") for (long at = 1170; at < 1601; at += 70) d.FrameWithTitleIdentity(before, before, at, 7);
+                long up = fault == "up-gap" ? 1281 : fault == "long-hold" ? 1601 : down + 78;
+                d.PointerWithTitleIdentity(false, fault == "wrong-release" ? 2 : 1, true, up, before, before, true);
+                for (long at = up + 70; at <= up + 490; at += 70) d.FrameWithTitleIdentity(after, before, at, 0);
+                check(!d.Complete, "invalid activation chain accepted: " + fault);
+            }
+            return checks;
         }
 
         private static long BoundedDuration(long now, long start, long maximum)

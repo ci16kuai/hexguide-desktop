@@ -19,12 +19,13 @@ async function folder(t) {
 function changed() {
   const settings = createDefaultAppearance();
   settings.main = {fontFamily:'simsun', scale:130, density:'compact', cardLayout:'list', panelSide:'right'};
-  settings.sidebar = {fontFamily:'yahei', scale:85, width:460, side:'right', opacity:75, sections:['offers','hero','plan','owned']};
+  settings.sidebar = {fontFamily:'yahei', scale:85, width:460, side:'right', opacity:75, sections:['offers','hero','plan','owned'], idleHideSeconds:45};
   return settings;
 }
 
 test('appearance schema accepts documented boundaries and rejects CSS, unknown keys, partial values and non-permutations', () => {
   assert.equal(createDefaultAppearance().sidebar.side, 'left', 'new sidebars default to the left edge');
+  assert.equal(createDefaultAppearance().sidebar.idleHideSeconds, 10, 'new sidebars wait ten seconds before idle hiding');
   const settings = changed();
   assert.equal(settings.sidebar.side, 'right', 'right-side selection remains supported during this run');
   assert.deepEqual(validateAppearance(settings), settings);
@@ -40,6 +41,9 @@ test('appearance schema accepts documented boundaries and rejects CSS, unknown k
     ['sidebar','fontFamily','anything'], ['sidebar','scale',NaN], ['sidebar','scale',Infinity],
     ['sidebar','width',279], ['sidebar','width',461], ['sidebar','width',324.5],
     ['sidebar','opacity',74], ['sidebar','opacity',101], ['sidebar','side','top'],
+    ['sidebar','idleHideSeconds',4], ['sidebar','idleHideSeconds',301], ['sidebar','idleHideSeconds',5.5],
+    ['sidebar','idleHideSeconds','10'], ['sidebar','idleHideSeconds',null], ['sidebar','idleHideSeconds',undefined],
+    ['sidebar','idleHideSeconds',NaN], ['sidebar','idleHideSeconds',Infinity], ['sidebar','idleHideSeconds',false],
     ['sidebar','sections',['hero','owned','offers']], ['sidebar','sections',['hero','owned','offers','offers']],
     ['sidebar','sections',['hero','owned','offers','unknown']], ['sidebar','sections','hero'],
   ]) {
@@ -50,11 +54,59 @@ test('appearance schema accepts documented boundaries and rejects CSS, unknown k
   const nestedExtra = createDefaultAppearance();
   nestedExtra.main.customCss = 'body{display:none}';
   invalid.push(nestedExtra);
+  const sidebarExtra = createDefaultAppearance();
+  sidebarExtra.sidebar.idleHideMs = 10000;
+  invalid.push(sidebarExtra);
   const partial = createDefaultAppearance();
   delete partial.sidebar.opacity;
   invalid.push(partial);
   invalid.push(JSON.parse(JSON.stringify(settings).replace('"fontFamily":"simsun"', '"fontFamily":"simsun","__proto__":{}')));
   for (const input of invalid) assert.throws(() => validateAppearance(input), TypeError);
+  for (const idleHideSeconds of [5, 300]) {
+    const boundary = changed();
+    boundary.sidebar.idleHideSeconds = idleHideSeconds;
+    assert.deepEqual(validateAppearance(boundary), boundary);
+  }
+});
+
+test('only exact valid legacy v1 appearance settings migrate with ten seconds while preserving every preference', () => {
+  const legacy = changed();
+  delete legacy.sidebar.idleHideSeconds;
+  const expected = changed();
+  expected.sidebar.idleHideSeconds = 10;
+  assert.deepEqual(validateAppearance(legacy), expected);
+  assert.equal(Object.hasOwn(legacy.sidebar, 'idleHideSeconds'), false, 'migration does not mutate the source');
+  for (const mutate of [
+    value => { value.schemaVersion = 2; },
+    value => { value.sidebar.width = 0; },
+    value => { delete value.sidebar.opacity; },
+    value => { value.sidebar.idleHideMs = 10000; },
+    value => { value.sidebar.sections = ['hero', 'hero', 'plan', 'owned']; },
+    value => { value.main.scale = '100'; },
+    value => { value.main.customCss = ''; },
+  ]) {
+    const malformed = structuredClone(legacy);
+    mutate(malformed);
+    assert.throws(() => validateAppearance(malformed), TypeError);
+  }
+});
+
+test('loading legacy appearance preserves custom preferences and writes the migrated field on the next save', async t => {
+  const directory = await folder(t);
+  const legacy = changed();
+  delete legacy.sidebar.idleHideSeconds;
+  const file = path.join(directory, 'appearance.json');
+  const original = JSON.stringify(legacy, null, 2) + '\n';
+  await writeFile(file, original);
+  const store = await new AppearanceStore({dataDirectory:directory}).load();
+  const expected = changed();
+  expected.sidebar.side = 'left';
+  expected.sidebar.idleHideSeconds = 10;
+  assert.deepEqual(store.get(), expected, 'startup docking is the only existing preference changed');
+  assert.equal(await readFile(file, 'utf8'), original, 'loading does not rewrite the old settings file');
+  await store.set(store.get());
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), expected);
+  assert.deepEqual((await new AppearanceStore({dataDirectory:directory}).load()).get(), expected);
 });
 
 test('saved appearance except startup docking survives restart independently from game selections, while corrupt or unsupported files use defaults', async t => {
@@ -164,6 +216,29 @@ test('appearance API retains local Host, Origin, session authentication, bounded
   assert.deepEqual(model.owned,[],'appearance edits never change game selections');
   assert.deepEqual(model.offers,[]);
   assert.deepEqual(JSON.parse((await request(local.port,'/api/appearance',{headers})).body),changed());
+  assert.equal(model.appearance.sidebar.idleHideSeconds,45,'native sidebar model receives the saved wait time');
+  for (const idleHideSeconds of [4, 301, 10.5, '10', null]) {
+    const invalid = changed();
+    invalid.sidebar.idleHideSeconds = idleHideSeconds;
+    assert.equal((await request(local.port,'/api/appearance',{headers,method:'POST',body:JSON.stringify(invalid)})).status,400);
+    assert.deepEqual(appearance.get(), changed(), 'invalid wait times do not reset any saved preferences');
+  }
+  const legacy = changed();
+  delete legacy.sidebar.idleHideSeconds;
+  const migrated = changed();
+  migrated.sidebar.idleHideSeconds = 10;
+  const migration = await request(local.port,'/api/appearance',{headers,method:'POST',body:JSON.stringify(legacy)});
+  assert.equal(migration.status,200);
+  assert.deepEqual(JSON.parse(migration.body),migrated);
+  assert.deepEqual(JSON.parse(await readFile(path.join(directory,'data','appearance.json'),'utf8')),migrated);
+  for (const idleHideSeconds of [5, 300]) {
+    const boundary = changed();
+    boundary.sidebar.idleHideSeconds = idleHideSeconds;
+    const saved = await request(local.port,'/api/appearance',{headers,method:'POST',body:JSON.stringify(boundary)});
+    assert.equal(saved.status,200);
+    assert.deepEqual(JSON.parse(saved.body),boundary);
+    assert.equal(JSON.parse((await request(local.port,'/api/sidebar',{headers})).body).appearance.sidebar.idleHideSeconds,idleHideSeconds);
+  }
   const noSettings = await createLocalServer({collector,staticDirectory:directory,token:'d'.repeat(64)});
   t.after(() => noSettings.close());
   assert.equal((await request(noSettings.port,'/api/appearance',{headers:{'X-Hexguide-Session':noSettings.token}})).status,503);

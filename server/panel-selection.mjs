@@ -24,7 +24,10 @@ const string = (value, max = 100) => typeof value === 'string' && value.length >
 const token = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
 const gameId = value => value === null || typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(value);
 const identifier = (value, max = 100) => string(value,max) && /^[A-Za-z0-9_./:-]+$/.test(value);
-const validIds = ids => Array.isArray(ids) && ids.length === 3 && Array.from(ids).every(id => identifier(id)) && new Set(ids).size === 3;
+// Catalog IDs and icon binding keys can contain punctuation. Keep their exact
+// bytes: the server's catalog/lease and template binding establish identity.
+const catalogKey = (value, max = 100) => string(value,max) && !/[\s\u0000-\u001f\u007f-\u009f]/u.test(value);
+const validIds = ids => Array.isArray(ids) && ids.length === 3 && Array.from(ids).every(id => catalogKey(id)) && new Set(ids).size === 3;
 const same = (left, right) => left.length === right.length && left.every((value,index) => value === right[index]);
 const checkedInteger = (value, fallback, min, max) => integer(value,min,max) ? value : fallback;
 
@@ -47,9 +50,9 @@ function contextValid(context) {
     && token(context.offerToken) && validIds(context.ids) && string(context.championId)
     && integer(context.offeredAt) && Array.isArray(context.offers) && context.offers.length === 3
     && Array.from(context.offers).every((offer,index) => record(offer) && offer.id === context.ids[index]
-      && identifier(offer.iconKey,400) && offer.kind === 'augment')
+      && catalogKey(offer.iconKey,400) && offer.kind === 'augment')
     && Array.isArray(context.owned) && context.owned.length <= 6
-    && Array.from(context.owned).every(augment => record(augment) && identifier(augment.id) && identifier(augment.iconKey,400))
+    && Array.from(context.owned).every(augment => record(augment) && catalogKey(augment.id) && catalogKey(augment.iconKey,400))
     && new Set(context.owned.map(augment => augment.id)).size === context.owned.length
     && (!('pendingUntilConfirmed' in context) || context.pendingUntilConfirmed === true && integer(context.evidenceNotBefore))
     && (context.pendingUntilConfirmed === true || !context.ids.some(id => context.owned.some(augment => augment.id === id)));

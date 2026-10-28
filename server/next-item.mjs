@@ -2,12 +2,14 @@ import {enrichData, getChampionTags} from '../dist/engine.js';
 import {selectBuildEvidence, mixBuildItemEvidence} from '../dist/build-evidence.js';
 import {describeEnemies, shortEquipmentEffect} from '../dist/adaptive.js';
 import {questRewardRule, hasItemQuest, buildItemQuestPlans, withItemQuestGuidance, questInventoryIds} from '../dist/item-acquisition.js';
+import {resolveAugmentItemIntents} from './augment-item-intents.mjs';
 
 // Product ranking weights, not measured win-rate gains. Keep this policy separate
 // from the full application's comparison plan and its list ordering.
-export const NEXT_ITEM_POLICY = Object.freeze({version:3, rawAgeMs:10000, enemyAgeMs:10000,
+export const NEXT_ITEM_POLICY = Object.freeze({version:4, rawAgeMs:10000, enemyAgeMs:10000,
   futureToleranceMs:5000, rankWeight:16, winRateWeight:50, nextRouteBonus:24,
-  referenceNextBonus:12, delayedItemPenalty:12, contextLimit:18, recipeLimit:6, minimumSamples:200});
+  referenceNextBonus:12, delayedItemPenalty:12, contextLimit:18, recipeLimit:6, minimumSamples:200,
+  investedRecipeRatio:.4, urgentDefenseBonus:12, replanMargin:8, mechanismBonus:18});
 const list = value => Array.isArray(value) ? value : [];
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
 const text = value => typeof value === 'string' ? value.replace(/<[^>]*>/g, '').trim() : '';
@@ -75,6 +77,13 @@ function inventoryOf(live, catalog) {
   const satisfied = new Set();
   for (const itemId of owned) for (const previous of ancestorIds(itemId, catalog)) satisfied.add(previous);
   return {rows, owned, satisfied, occupied:rows.filter(row => !has(row.definition, 'Trinket')).length};
+}
+
+// For ordering constraints only: evaluate what owning the proposed completed
+// item would block. This is never used as observed inventory/purchase proof.
+function inventoryAfter(itemId, inventory, catalog) {
+  return {...inventory, rows:[...inventory.rows,{id:itemId,definition:catalog.get(itemId)}],
+    owned:new Set([...inventory.owned,itemId]),satisfied:new Set([...inventory.satisfied,...ancestorIds(itemId,catalog)])};
 }
 
 function recipeProgress(itemId, inventory, catalog) {
@@ -210,8 +219,8 @@ function enemyFacts({champion, live, champions, itemsCatalog, catalog, now, load
 
 function adjustment(item, profile, facts) {
   const reasons = [], description = text(item.description);
-  let bonus = 0, threat = null;
-  if (facts.status !== 'detected') return {bonus,reasons};
+  let bonus = 0, defensiveBonus = 0, threat = null;
+  if (facts.status !== 'detected') return {bonus,defensiveBonus,reasons};
   // A holder-health proc (for example Heartsteel) is not enemy-health damage.
   const targetHealth = /(?:敌人|敌方|目标).{0,30}(?:当前|最大|额外)生命值/.test(description)
     && !/(?:你的|自身的|自己的).{0,8}(?:当前|最大)生命值.{0,12}(?:物理|魔法)伤害/.test(description);
@@ -229,12 +238,14 @@ function adjustment(item, profile, facts) {
     || profile.spell && stat(item,'FlatMagicDamageMod') || profile.tank && stat(item,'FlatHPPoolMod') || profile.support && allyUtility(item));
   if (armorFit && (facts.strongPhysical || facts.opponents >= 2 && physicalShare >= .65)) {
     bonus += facts.strongPhysical ? 16 : 6;
+    defensiveBonus += facts.strongPhysical ? 16 : 6;
     threat = facts.strongPhysical;
     reasons.push(facts.strongPhysical ? `从已读表现、等级与装备看，${facts.strongPhysical.name}的物理机制威胁值得兼顾；护甲同时保留适配的装备效果。`
       : '敌方可见机制与装备偏物理，兼顾护甲可补充当前路线的生存属性。');
   }
   if (magicFit && (facts.strongMagic || facts.opponents >= 2 && magicShare >= .65)) {
     bonus += facts.strongMagic ? 16 : 6;
+    defensiveBonus += facts.strongMagic ? 16 : 6;
     if (facts.strongMagic && (!threat || facts.strongMagic.weight > threat.weight)) threat = facts.strongMagic;
     reasons.push(facts.strongMagic ? `从已读表现、等级与装备看，${facts.strongMagic.name}的魔法机制威胁值得兼顾；此件兼有适配属性与魔抗。`
       : '敌方可见机制与装备偏魔法，兼顾魔抗可补充当前路线的生存属性。');
@@ -246,7 +257,7 @@ function adjustment(item, profile, facts) {
   if (facts.healing >= 2 && /重伤/.test(description) && !/被.{0,12}攻击/.test(description)) {
     bonus += 5; reasons.push('敌方有多个治疗或战斗续航来源；重伤仍需满足这件装备的伤害触发条件。');
   }
-  return {bonus:Math.min(NEXT_ITEM_POLICY.contextLimit,bonus),reasons,threatChampionId:threat?.championId || null};
+  return {bonus:Math.min(NEXT_ITEM_POLICY.contextLimit,bonus),defensiveBonus,reasons,threatChampionId:threat?.championId || null};
 }
 
 function fallbackScore(item, profile) {
@@ -286,8 +297,36 @@ function referenceOrders(entry, champion, patch, now) {
 const baseResult = (status, stage, message, evidence = {}) => ({status,stage,item:null,reasons:[],reason:'',evidenceLabel:'',message,
   evidence:{scope:'none',source:'',status:'unavailable',conditionAugmentId:null,sampleCount:null,modeWeights:{mayhem:0,aram:0,summonersRift:0},...evidence}});
 
+const confirmedIds = definitions => [...new Set(definitions.map(augment => augment.id).filter(value => typeof value === 'string'))].sort();
+const validAugmentBaseline = value => Array.isArray(value) && value.length <= 12
+  && value.every(id => typeof id === 'string' && id.length > 0 && id.length <= 160) && new Set(value).size === value.length;
+const usableCondition = selected => selected.status === 'ready' && selected.conditionAugmentId
+  && selected.items.some(item => item.sampleCount >= NEXT_ITEM_POLICY.minimumSamples);
+
+// Explicit equipment upgrades stay as an unsatisfied goal across every later
+// confirmation. Mechanism preferences are bounded ranking inputs, not invented
+// win rates and not a requirement to buy every item sharing a stat.
+function equipmentPriorities(definitions, catalog, inventory, profile, champion) {
+  return resolveAugmentItemIntents({owned:definitions,itemsCatalog:catalog}).flatMap(intent => {
+    const finished = intent.itemIds.filter(itemId => completed(catalog.get(itemId),catalog,champion));
+    if (intent.kind !== 'mechanism' && finished.some(itemId => inventory.satisfied.has(itemId))) return [];
+    const itemIds = finished.filter(itemId => compatible(itemId,catalog.get(itemId),inventory,profile,catalog,champion));
+    return itemIds.length ? [{...intent,itemIds}] : [];
+  });
+}
+function replanTrigger({definitions, augments, targetAugmentIds, priorities, selected}) {
+  if (!validAugmentBaseline(targetAugmentIds)) return false; // Conservative migration of existing purchases.
+  const previous = new Set(targetAugmentIds), current = new Set(confirmedIds(definitions));
+  const added = definitions.filter(augment => !previous.has(augment.id));
+  const removed = list(augments).filter(augment => previous.has(augment.id) && !current.has(augment.id));
+  return priorities.some(intent => added.some(augment => augment.id === intent.augmentId))
+    || added.some(augment => usableCondition(selected) && augment.id === selected.conditionAugmentId
+      || list(augment.constraints).some(value => ['noAttacks','noCrit'].includes(value)))
+    || removed.some(augment => /升级[：:]|装备|咒刃|攻击特效|暴击|转化|转换|无法|不能/.test(text(augment.name) + text(augment.description)));
+}
+
 /** Pure sidebar policy. Caller supplies confirmed definitions, never OCR offers. */
-export function buildNextItemRecommendation({champion, owned = [], route = 'auto', live = {}, augments = [], champions = [], itemsCatalog = {}, recommendationData = null, plan = null, targetItemId = null, now = Date.now()} = {}) {
+export function buildNextItemRecommendation({champion, owned = [], route = 'auto', live = {}, augments = [], champions = [], itemsCatalog = {}, recommendationData = null, plan = null, targetItemId = null, targetAugmentIds = null, now = Date.now()} = {}) {
   now = time(now);
   const loading = live.stage === 'loading';
   const stage = loading ? 'loading-preview' : 'live';
@@ -338,7 +377,10 @@ export function buildNextItemRecommendation({champion, owned = [], route = 'auto
     {scope:selected.scope,source:selected.source,status:'order-data-pending',mayhemStatus:selected.status,
       conditionAugmentId:selected.conditionAugmentId,orderStatus:'unavailable',orderReference:null}));
   profile = profileWithEvidence(profile,selected,orders,catalog);
-  if (unfinishedTarget && !compatible(unfinishedTarget,catalog.get(unfinishedTarget),inventory,profile,catalog,champion,true)) {
+  const priorities = equipmentPriorities(definitions,catalog,inventory,profile,champion);
+  const canReplan = !loading && replanTrigger({definitions,augments,targetAugmentIds,priorities,selected});
+  const targetCompatible = !unfinishedTarget || compatible(unfinishedTarget,catalog.get(unfinishedTarget),inventory,profile,catalog,champion,true);
+  if (unfinishedTarget && !targetCompatible && !canReplan) {
     return finish(baseResult('waiting',stage,'当前目标与已选海克斯或装备限制不兼容，暂不推进下一件；请核对当前路线与已选记录。',
       {status:'target-incompatible',conditionAugmentId:selected.conditionAugmentId}));
   }
@@ -348,7 +390,7 @@ export function buildNextItemRecommendation({champion, owned = [], route = 'auto
   let statistics = candidates.length > 0;
   // A consumed empirical catalogue represents completion, not permission to
   // reintroduce unrelated alternatives after the observed build is finished.
-  if (!activeQuest && !unfinishedTarget && !candidates.length && statisticRows.size && [...statisticRows.keys()].every(itemId => inventory.satisfied.has(itemId))) {
+  if (!activeQuest && !unfinishedTarget && !priorities.length && !candidates.length && statisticRows.size && [...statisticRows.keys()].every(itemId => inventory.satisfied.has(itemId))) {
     return finish(baseResult('complete',stage,'已持有所发布样本中的可继续装备，等待新的已选或装备资料。',
       {scope:selected.scope,source:selected.source,status:selected.status,conditionAugmentId:selected.conditionAugmentId}));
   }
@@ -364,9 +406,10 @@ export function buildNextItemRecommendation({champion, owned = [], route = 'auto
     if (candidates.length !== requiredIds.length) return finish(baseResult('waiting',stage,'当前任务前置受到装备或已选机制限制，等待核对后继续。',
       {status:'quest-ingredient-incompatible',conditionAugmentId:selected.conditionAugmentId}));
   }
+  if (!pursuingQuest) candidates = [...new Set([...candidates,...priorities.flatMap(intent => intent.itemIds)])];
   // A statistics refresh or newly confirmed condition can omit a still-valid
   // target. Retain its mechanism guidance without borrowing another item's stats.
-  if (unfinishedTarget && !candidates.includes(unfinishedTarget)) candidates.push(unfinishedTarget);
+  if (unfinishedTarget && targetCompatible && !candidates.includes(unfinishedTarget)) candidates.push(unfinishedTarget);
   const candidateSet = new Set(candidates);
   const routes = selected.builds.flatMap(build => {
     const order = build.route?.items;
@@ -422,18 +465,49 @@ export function buildNextItemRecommendation({champion, owned = [], route = 'auto
       : nextInRoute ? NEXT_ITEM_POLICY.nextRouteBonus : 0;
     const timingPenalty = preferredOrder?.next && !nextInReference && !nextInRoute && context.bonus < 8 && recipe.ratio < .5
       ? NEXT_ITEM_POLICY.delayedItemPenalty : 0;
-    return {...candidate,nextInRoute,nextInReference,routeBonus,timingPenalty,score:base + routeBonus + recipeBonus + context.bonus - timingPenalty};
+    const itemPriorities = priorities.filter(intent => intent.itemIds.includes(itemId));
+    const equipmentPriority = itemPriorities.some(intent => intent.kind !== 'mechanism');
+    const mechanismBonus = itemPriorities.some(intent => intent.kind === 'mechanism') ? NEXT_ITEM_POLICY.mechanismBonus : 0;
+    // Within an upgrade family, the hero's verified cores distinguish a bruiser
+    // spellblade from a caster/crit variant even when the exact cohort is absent.
+    const familyFit = equipmentPriority && orders.some(order => order.items.includes(itemId)) ? 8 : 0;
+    return {...candidate,nextInRoute,nextInReference,routeBonus,timingPenalty,itemPriorities,equipmentPriority,mechanismBonus,familyFit,
+      score:base + routeBonus + recipeBonus + context.bonus + mechanismBonus + familyFit - timingPenalty};
   });
   if (inventory.occupied >= 6) {
     rows = rows.filter(row => row.recipe.consumed > 0);
-    if (!rows.length || unfinishedTarget && !rows.some(row => row.itemId === unfinishedTarget)) return finish(baseResult('inventory-full',stage,
+    if (!rows.length || unfinishedTarget && !canReplan && !rows.some(row => row.itemId === unfinishedTarget)) return finish(baseResult('inventory-full',stage,
       unfinishedTarget ? '装备槽已满，当前目标没有可继续合成的已有组件；暂不推进下一件。' : '装备槽已满；当前没有可用已有组件直接推进的成装。'));
   }
-  rows.sort((a,b) => b.score-a.score || (b.observed?.sampleCount || 0)-(a.observed?.sampleCount || 0) || a.itemId.localeCompare(b.itemId));
-  const chosen = unfinishedTarget ? rows.find(row => row.itemId === unfinishedTarget) : rows[0];
+  rows.sort((a,b) => Number(b.equipmentPriority)-Number(a.equipmentPriority) || b.score-a.score
+    || (b.observed?.sampleCount || 0)-(a.observed?.sampleCount || 0) || a.itemId.localeCompare(b.itemId));
+  const retained = unfinishedTarget ? rows.find(row => row.itemId === unfinishedTarget) : null;
+  const proposed = rows[0];
+  const invested = retained?.recipe.ratio >= NEXT_ITEM_POLICY.investedRecipeRatio;
+  const urgent = retained?.context.defensiveBonus >= NEXT_ITEM_POLICY.urgentDefenseBonus
+    && retained.context.defensiveBonus > (proposed?.context.defensiveBonus || 0);
+  const improves = proposed && (!retained || proposed.equipmentPriority && !retained.equipmentPriority
+    || proposed.score >= retained.score + NEXT_ITEM_POLICY.replanMargin);
+  const afterRetained = retained ? inventoryAfter(retained.itemId,inventory,catalog) : null;
+  const blocksUpgrade = proposed?.equipmentPriority && retained && !retained.equipmentPriority
+    && !proposed.itemPriorities.some(intent => intent.kind !== 'mechanism' && intent.itemIds.some(next =>
+      compatible(next,catalog.get(next),afterRetained,profile,catalog,champion)));
+  // Finishing an exclusive sibling would make a deferred upgrade impossible.
+  // Reuse transferable components now instead of promising an illegal next step.
+  const replace = canReplan && improves && (blocksUpgrade || !invested && !urgent);
+  const chosen = unfinishedTarget ? replace ? proposed : retained : proposed;
   if (!chosen) return finish(baseResult('waiting',stage,'当前约束下暂无可靠的下一件成装。',
     {status:selected.status,conditionAugmentId:selected.conditionAugmentId}));
   const {item,itemId,observed,context,recipe} = chosen;
+  const afterChosen = inventoryAfter(itemId,inventory,catalog);
+  const followUp = rows.find(row => row.itemId !== itemId && row.equipmentPriority
+    && !row.itemPriorities.some(intent => intent.itemIds.includes(itemId))
+    && compatible(row.itemId,row.item,afterChosen,profile,catalog,champion));
+  const followUpItem = followUp ? {id:followUp.itemId,name:text(followUp.item.name).slice(0,100),augmentNames:
+    [...new Set(followUp.itemPriorities.filter(intent => intent.kind !== 'mechanism').map(intent => intent.augmentName))].slice(0,3)} : null;
+  const replanning = {status:unfinishedTarget && chosen.itemId !== unfinishedTarget ? 'changed'
+    : unfinishedTarget && canReplan && followUp ? 'deferred' : 'retained',
+    previousItemId:canReplan ? unfinishedTarget : null,reason:invested ? 'existing-components' : urgent ? 'immediate-defense' : canReplan ? 'confirmed-augment' : 'purchase-in-progress'};
   const conditionName = definitions.at(-1)?.name || '最近确认的海克斯';
   const basis = pursuingQuest ? `先完成已选「${activeQuest.augmentName || activeQuest.rewardName}」任务缺少的前置成装。`
     : observed ? selected.conditionAugmentId ? `沿用「${conditionName}」条件下的本英雄 Mayhem 装备样本${chosen.nextInRoute ? '与购买顺序' : ''}。`
@@ -447,15 +521,25 @@ export function buildNextItemRecommendation({champion, owned = [], route = 'auto
       : `已参考 OP.GG ${orderName} 核心装备序列，当前条件调整了下一件。`
     : pursuingQuest ? '当前按任务要求选择前置；没有普通 ARAM／峡谷的可核验顺序，不声称统计出装顺序。'
       : '普通 ARAM／召唤师峡谷的可核验核心装备顺序暂缺。';
-  const reasons = [`${basis} ${orderReason}`,context.reasons[0] || (recipe.consumed ? '已有组件可继续合成这件装备。' : '')].filter(Boolean).slice(0,2);
+  const augmentReason = chosen.itemPriorities[0]?.reason;
+  const reasons = [`${basis} ${orderReason}`,augmentReason || context.reasons[0] || (recipe.consumed ? '已有组件可继续合成这件装备。' : '')].filter(Boolean).slice(0,2);
+  if (followUpItem) reasons[1] = `${context.reasons[0] || (recipe.consumed ? '先完成已有组件的投入。' : '先完成当前目标。')}之后优先考虑「${followUpItem.name}」，发挥「${followUpItem.augmentNames.join('、')}」的装备强化。`;
   const scope = observed ? selected.scope : pursuingQuest ? 'confirmed-quest' : 'mechanism-fallback';
-  return finish({status:'ready',stage,item:{id:itemId,name:text(item.name).slice(0,100),icon:/^https:\/\//i.test(item.icon || '') ? item.icon : '',
+  // A conditional source can arrive after the selection. Do not consume that
+  // event while its relevant evidence is missing; retain the purchase meanwhile.
+  const pendingCondition = unfinishedTarget && validAugmentBaseline(targetAugmentIds) && !usableCondition(selected)
+    ? definitions.find(augment => augment.id === definitions.at(-1)?.id && !targetAugmentIds.includes(augment.id)
+      && /攻击力|法术强度|暴击|攻速|攻击速度|生命值|法力|急速|攻击特效|灼烧|装备|无法|不能/.test(text(augment.description))
+      && !resolveAugmentItemIntents({owned:[augment],itemsCatalog:catalog}).length) : null;
+  return finish({status:'ready',stage,purchasePlan:{evaluatedAugmentIds:confirmedIds(definitions).filter(id => id !== pendingCondition?.id)},followUpItem,
+    item:{id:itemId,name:text(item.name).slice(0,100),icon:/^https:\/\//i.test(item.icon || '') ? item.icon : '',
     effect:shortEquipmentEffect(item.description),totalGold:gold(item)}, reasons,reason:reasons.join(' '),
     evidenceLabel:(pursuingQuest ? '已选任务 · 前置成装' : observed ? selected.conditionAugmentId ? 'Mayhem 单海克斯条件样本' : 'Mayhem 英雄装备样本' : '机制建议 · 条件统计未就绪')
       + (preferredOrder ? ` · ${orderName}顺序` : ' · 顺序参考暂缺'),
-    message:(loading ? '入场后随已选海克斯、装备和敌方状态更新。' : '确认背包已拥有这件成装后，再推荐下一件；组件不算完成。')
+    message:(loading ? '入场后随已选海克斯、装备和敌方状态更新。' : '平时买齐成装再推进；确认影响出装的海克斯后，会结合英雄与已有装备重新规划。')
       + (preferredOrder ? '' : '普通 ARAM／峡谷核心装备顺序参考暂缺。'),
     evidence:{policyVersion:NEXT_ITEM_POLICY.version,itemRulesVersion:'16.21',affinitySource:profile.affinitySource,
+      replanning,augmentPriorities:priorities.map(intent => ({augmentId:intent.augmentId,kind:intent.kind,itemIds:intent.itemIds})),mechanismBonus:chosen.mechanismBonus,
       scope,source:observed ? selected.source : pursuingQuest ? 'confirmed-quest' : 'catalog-mechanisms',status:selected.status,
       ...(pursuingQuest ? {questAugmentId:activeQuest.augmentId} : {}),
       conditionAugmentId:selected.conditionAugmentId,conditionNote:observed ? selected.conditionNote || '' : '',

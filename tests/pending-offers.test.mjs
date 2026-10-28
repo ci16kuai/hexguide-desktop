@@ -75,3 +75,19 @@ test('runtime logical cycles do not persist and repeated older cards never promo
   const restored = new PendingOffers(); assert.equal(restored.restore(saved,() => true,[]),true);
   assert.equal(restored.latest.lastSeenOfferCycle,undefined);
 });
+
+test('saved logical progress validates its profile while legacy groups remain restorable without inferred progress', () => {
+  const book = new PendingOffers();
+  book.accept(['a','b','c'],{lifecycle:1,offerCycle:1,now:1000,
+    roundContext:{rule:'aram-mayhem-standard-v1',milestone:3,level:3}});
+  const saved = book.save();
+  for (const invalid of [null,{}, {rule:'unknown-profile',milestone:3,level:3},
+    {rule:'aram-mayhem-standard-v1',milestone:9,level:9}, {rule:'aram-mayhem-standard-v1',milestone:3,level:7},
+    {rule:'aram-mayhem-standard-v1',milestone:3,level:3,frameId:'unsafe'}]) {
+    const changed = structuredClone(saved); changed.entries[0].roundContext = invalid;
+    assert.equal(new PendingOffers().restore(changed,() => true,[]),false);
+  }
+  const legacy = structuredClone(saved); legacy.version = 1; delete legacy.entries[0].roundContext;
+  const restored = new PendingOffers(); assert.equal(restored.restore(legacy,() => true,[]),true);
+  assert.equal(restored.latest.roundContext,undefined);
+});

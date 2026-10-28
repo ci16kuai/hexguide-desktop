@@ -379,7 +379,7 @@ test('an older shared-glyph round uses its own candidates while newer cards stay
 });
 
 async function nextRound(h, ids) {
-  h.advance(1000); h.update({life:{status:'detected',isDead:true}}); h.sidebar.getModel();
+  h.advance(1000); h.update({level:7,life:{status:'detected',isDead:true}}); h.sidebar.getModel();
   h.advance(1000); h.update({life:{status:'detected',isDead:false}}); h.sidebar.getModel();
   h.setOffers(ids); await recognized(h);
   return h.sidebar.getModel();
@@ -392,10 +392,13 @@ test('newest round stays on the left, older unanswered rounds remain scoped, and
   const two = await nextRound(h,newerIds), newest = two.pendingOffers[1];
   assert.deepEqual(two.offers.map(offer => offer.id),newerIds);
   assert.deepEqual(two.pendingOffers.map(group => group.active),[false,true]);
+  assert.deepEqual(two.pendingOffers.map(group => group.previousRound),[true,false]);
   assert.equal(two.panelSelection.pendingId,oldest.pendingId,'panel checks unanswered rounds independently of left display');
   const confirmedNewer = await h.sidebar.confirmOffer({id:newerIds[2],pendingId:newest.pendingId,gameId:two.gameId,revision:two.sessionRevision});
   assert.deepEqual(confirmedNewer.offers.map(offer => offer.id),ordinaryIds);
   assert.deepEqual(confirmedNewer.pendingOffers.map(group => group.pendingId),[oldest.pendingId]);
+  assert.equal(confirmedNewer.pendingOffers[0].active,true,'older pending returns to the main cards');
+  assert.equal(confirmedNewer.pendingOffers[0].previousRound,true,'returning to the main cards must not relabel an old round as new');
   h.advance(400);
   const complete = await h.sidebar.observePanelEvidence(proof(h,confirmedNewer.panelSelection,[1]));
   assert.deepEqual(complete.plan.ownedIds,[ordinaryIds[1],newerIds[2]],'late older choice is inserted in its original round order');
@@ -535,7 +538,7 @@ test('pending rounds persist only catalog metadata and restore for manual confir
   const directory = await folder(t), h = fixture({dataDirectory:directory}); await h.sidebar.load(); await recognized(h);
   const before = h.sidebar.getModel(); await h.sidebar.stop();
   const saved = JSON.parse(await readFile(path.join(directory,'session.json'),'utf8'));
-  assert.deepEqual(Object.keys(saved.pendingOffers.entries[0]).sort(),['createdAt','ids','pendingId','sequence']);
+  assert.deepEqual(Object.keys(saved.pendingOffers.entries[0]).sort(),['createdAt','ids','pendingId','roundContext','sequence']);
   assert.ok(!JSON.stringify(saved).includes('windowHandle')); assert.ok(!JSON.stringify(saved).includes('identityAnchors'));
   const restored = await new BackgroundSidebar({collector:h.collector,data,itemsCatalog,dataDirectory:directory,now:h.now}).load();
   t.after(() => restored.stop()); const model = restored.getModel();

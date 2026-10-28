@@ -246,7 +246,7 @@ test('stored schedule diagnostics describe current window and actual count/durat
   const h = harness({dataDirectory:folder, scanner:async ({advance}) => { advance(1500); return noCards; }});
   await h.sidebar.pollOnce(); await h.sidebar.stop();
   const storedText = await readFile(path.join(folder, 'diagnostics', 'ocr-schedule.json'), 'utf8'), stored = JSON.parse(storedText);
-  assert.equal(stored.schemaVersion, 2); assert.equal(stored.appVersion, '1.17.5');
+  assert.equal(stored.schemaVersion, 2); assert.equal(stored.appVersion, '1.17.12');
   assert.equal(stored.scanCount, 1); assert.equal(stored.lastDurationMs, 1500);
   assert.equal(stored.mode, 'window'); assert.equal(stored.trigger, 'game-start'); assert.equal(stored.windowId, 1);
   assert.ok(stored.windowRemainingMs > 0); assert.ok(Buffer.byteLength(storedText) < 2048);

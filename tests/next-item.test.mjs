@@ -110,6 +110,164 @@ test('retained targets use fresh evidence without inventing statistics when a ne
   assert.equal(result.evidence.winRate,null);
 });
 
+const upgrade = id => data.augments.find(augment => augment.id === id);
+const replanOptions = (championId='Zaahen', augmentId='game_2140') => options(championId,{
+  owned:[upgrade(augmentId)], targetItemId:'6333', targetAugmentIds:[],
+  recommendationData:source(championId,[row(6333,.60),row(3078,.59),row(3074,.58)],[6333,3078,3074])
+});
+
+test('new confirmed equipment upgrades can replan an unstarted target across champions', () => {
+  for (const championId of ['Zaahen','MasterYi','Fiora','Riven']) {
+    const result=recommend(replanOptions(championId));
+    assert.equal(result.item?.id,'3074',championId);
+    assert.equal(result.evidence.replanning.status,'changed');
+    assert.deepEqual(result.purchasePlan.evaluatedAugmentIds,['game_2140']);
+    assert.equal(result.purchaseProgress.status,'building','replanning is not a fabricated purchase');
+  }
+});
+
+test('a substantial existing recipe finishes first, then its deferred upgrade wins even without item statistics', () => {
+  const input=replanOptions(); input.live.items=inventory([3133,2019]);
+  let result=recommend(input);
+  assert.equal(result.item?.id,'6333');
+  assert.equal(result.followUpItem?.id,'3074');
+  input.targetAugmentIds=result.purchasePlan.evaluatedAugmentIds;
+  input.live.items=inventory([6333]);
+  input.recommendationData=source('Zaahen',[row(3078,.61),row(3053,.59),row(6333,.60)],[6333,3078,3053]);
+  input.recommendationData.ordinaryAram=reference('aram',['6333','3078','3053'],{championId:'Zaahen'});
+  input.recommendationData.referenceStatus='ready';
+  result=recommend(input);
+  assert.equal(result.item?.id,'3074');
+  assert.equal(result.evidence.sampleCount,null,'do not borrow other item statistics');
+  assert.equal(result.purchaseProgress.status,'completed');
+});
+
+test('a visible urgent physical threat can retain Death Dance, but the upgrade stays next', () => {
+  const input=replanOptions(); input.live.teams.enemies=[fedJinx()];
+  const result=recommend(input);
+  assert.equal(result.item?.id,'6333'); assert.equal(result.followUpItem?.id,'3074');
+  assert.equal(result.evidence.replanning.status,'deferred');
+});
+
+test('the same owned set, legacy targets and non-equipment confirmations do not unlock an unfinished purchase', () => {
+  const input=replanOptions(); input.targetAugmentIds=['game_2140'];
+  assert.equal(recommend(input).item?.id,'6333');
+  delete input.targetAugmentIds;
+  assert.equal(recommend(input).item?.id,'6333','legacy migration retains current purchase');
+  input.targetAugmentIds=[]; input.owned=[{id:'plain-gold',name:'金币',description:'获得500金币。'}];
+  assert.equal(recommend(input).item?.id,'6333');
+});
+
+test('Sheen upgrade chooses a completed spellblade for the hero, and Sheen itself is not completion', () => {
+  for (const [championId,expected,order] of [
+    ['Zaahen','3078',[6333,3078,3053]],['Ahri','3100',[3157,3100,3089]],['Sion','6662',[3068,6662,3084]]
+  ]) {
+    const input=options(championId,{owned:[upgrade('upgrade_sheen')],
+      recommendationData:source(championId,order.map(id=>row(id)),order)});
+    input.live.items=inventory([3057]);
+    const result=recommend(input);
+    assert.equal(result.item?.id,expected,championId);
+    input.live.items=inventory([expected]);
+    assert.notEqual(recommend(input).item?.id,expected);
+    assert.equal(recommend(input).evidence.augmentPriorities?.length,0,'completed family satisfies the upgrade');
+  }
+});
+
+test('an already fulfilled upgrade never forces a duplicate or a conflicting Hydra', () => {
+  const input=replanOptions(); input.live.items=inventory([3074]);
+  assert.equal(recommend(input).item?.id,'6333');
+  input.live.items=inventory([3748]);
+  const result=recommend(input);
+  assert.equal(result.item?.id,'6333'); assert.equal(result.followUpItem,null);
+});
+
+test('replanning does not fire from unconfirmed offers or stale inventory, and ordinary ticks lock the new target', () => {
+  const input=replanOptions(); input.owned=[]; input.live.offers=[upgrade('game_2140')];
+  assert.equal(recommend(input).item?.id,'6333');
+  input.owned=[upgrade('game_2140')]; input.live.observedAt=stamp(-10001);
+  assert.equal(recommend(input).purchasePlan,undefined);
+  input.live.observedAt=stamp(0);
+  let result=recommend(input); assert.equal(result.item?.id,'3074');
+  input.targetItemId=result.item.id; input.targetAugmentIds=result.purchasePlan.evaluatedAugmentIds;
+  input.live.teams.enemies=[fedJinx()]; input.live.items=inventory([1036]);
+  result=recommend(input); assert.equal(result.item?.id,'3074');
+});
+
+test('all confirmed upgrades persist as priorities when a later unrelated augment is confirmed', () => {
+  const input=replanOptions(); input.targetItemId=null;
+  input.owned.push({id:'latest-gold',name:'金币奖励',description:'获得500金币。'});
+  assert.equal(recommend(input).item?.id,'3074');
+});
+
+test('new Hydra upgrade reuses components instead of finishing an exclusive sibling and promising the impossible', () => {
+  const input=replanOptions(); input.targetItemId='3748'; input.live.items=inventory([3077,2021]);
+  let result=recommend(input);
+  assert.equal(result.item?.id,'3074'); assert.equal(result.followUpItem,null);
+  delete input.targetAugmentIds;
+  result=recommend(input);
+  assert.equal(result.item?.id,'3748','legacy commitment stays conservative');
+  assert.equal(result.followUpItem,null,'never promise an exclusive purchase after the current item');
+});
+
+test('gifted completed equipment satisfies its upgrade without buying another copy', () => {
+  const input=options('Lulu',{owned:[upgrade('upgrade_mikaels_blessing')],
+    recommendationData:source('Lulu',[row(3222),row(6617),row(3504)],[3222,6617,3504])});
+  input.live.items=inventory([3222]);
+  const result=recommend(input);
+  assert.notEqual(result.item?.id,'3222'); assert.equal(result.evidence.augmentPriorities?.length,0);
+});
+
+test('trusted newly confirmed condition evidence can replan beyond named equipment upgrades', () => {
+  const augment={id:'condition-replan',gameDataId:7009,name:'已确认的机制变化',description:'获得30攻击力。'};
+  const input=options('MasterYi',{owned:[augment],augments:[augment],targetItemId:'3153',targetAugmentIds:[],
+    recommendationData:source('MasterYi',yiRows(),null,[{id:7009,rows:[row(6333,.6)],order:null}])});
+  const result=recommend(input);
+  assert.equal(result.item?.id,'6333'); assert.equal(result.evidence.conditionAugmentId,augment.id);
+});
+
+test('a real gold-only confirmation with missing cohort cannot release a target when the enemy changes', () => {
+  const input=replanOptions('Zaahen','donation'); input.targetItemId='3078'; input.live.teams.enemies=[fedJinx()];
+  assert.equal(recommend(input).item?.id,'3078');
+});
+
+test('offensive anti-health bonuses do not masquerade as immediate defensive urgency', () => {
+  const input=replanOptions('MasterYi'); input.targetItemId='3153';
+  input.live.teams.enemies=['Ornn','Sion','Chogath','DrMundo'].map(id=>enemy(id,[3084]));
+  assert.equal(recommend(input).item?.id,'3074');
+});
+
+for (const status of ['missing','stale','small-sample']) test(`a ${status} conditional cohort can replan once its real samples arrive`, () => {
+  const augment={id:'later-condition',gameDataId:7009,name:'已确认机制',description:'获得30攻击力。'};
+  const input=options('MasterYi',{owned:[augment],augments:[augment],targetItemId:'3153',targetAugmentIds:[],
+    recommendationData:source('MasterYi',yiRows(),null,status === 'small-sample' ? [{id:7009,rows:[row(6333,.6,10)],order:null}] : [])});
+  if (status === 'stale') input.recommendationData.mayhemStatus='stale';
+  const pending=recommend(input);
+  assert.equal(pending.item?.id,'3153'); assert.deepEqual(pending.purchasePlan.evaluatedAugmentIds,[]);
+  input.targetAugmentIds=pending.purchasePlan.evaluatedAugmentIds;
+  input.recommendationData=source('MasterYi',yiRows(),null,[{id:7009,rows:[row(6333,.6)],order:null}]);
+  input.recommendationData.ordinaryAram=reference('aram',['3153','3124','6333']); input.recommendationData.referenceStatus='ready';
+  const result=recommend(input);
+  assert.equal(result.item?.id,'6333'); assert.deepEqual(result.purchasePlan.evaluatedAugmentIds,[augment.id]);
+});
+
+test('every catalog hero uses the same upgrade replanning path and preserves the new purchase across component ticks', () => {
+  const upgrades=data.augments.filter(a=>/^(?:升级|强化)[:：]/.test(a.name) && a.id!=='snowball_upgrade');
+  for (const champion of data.champions) for (const augment of upgrades) {
+    const input=options(champion.id,{owned:[augment],recommendationData:source(champion.id,
+      [row(3153),row(3089),row(3084)],[3153,3089,3084])});
+    const first=recommend(input);
+    assert.equal(first.status,'ready',`${champion.id}/${augment.id}`);
+    const definition=itemsCatalog.data[first.item.id];
+    assert.equal(definition.gold.purchasable,true);
+    assert.equal(definition.maps['12'],true);
+    input.targetItemId=first.item.id; input.targetAugmentIds=first.purchasePlan.evaluatedAugmentIds;
+    input.live.items=inventory(definition.from || []);
+    const held=recommend(input);
+    assert.equal(held.item?.id,first.item.id,`${champion.id}/${augment.id}: components do not complete target`);
+    assert.equal(held.purchaseProgress.status,'building');
+  }
+});
+
 test('a refreshed statistical damage affinity cannot hide a still-purchasable committed item', () => {
   const input=options('Katarina',{recommendationData:source('Katarina',[row(3153,.60),row(6333,.59),row(3072,.58)],[3153,6333,3072])});
   input.recommendationData.ordinaryAram=reference('aram',['3115','4633','3089'],{championId:'Katarina'});

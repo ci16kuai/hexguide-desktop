@@ -27,6 +27,29 @@ const proof=(observation,clickedAt=initial+100,observedAt=initial+500)=>({provid
   gameId:observation.gameId,gameEpoch:observation.gameEpoch,revision:observation.revision,ids:[...observation.ids],selectedIndex:1,
   capturedAt:observation.capturedAt,clickedAt,observedAt,evidence:{click:true,uniqueFeedback:true,cardsDismissed:true,stableFrames:3,feedbackFrames:1}});
 
+test('anchored no-FX transition commits through the unified session after OCR closes, and manual correction wins',async()=>{
+  for(const manual of [false,true]) {
+    const {sidebar,advance,miss}=setup(); await sidebar.scan(); const original=sidebar.getSelectionObservation();
+    const value={...proof(original,initial+378,initial+790),evidence:{version:2,kind:'verified-click-transition',click:true,
+      titleIdentity:true,cardsTransitioned:true,baselineStartedAt:initial+200,lastBaselineAt:initial+270,
+      pressedAt:initial+300,firstTransitionAt:initial+440,stableFrames:6,maxFrameGapMs:78}};
+    advance(600); await miss();
+    if(manual) await sidebar.confirmOffer({gameId:original.gameId,revision:original.revision,
+      offerToken:original.offerToken,id:ids[2]});
+    advance(200);
+    if(manual) {
+      await assert.rejects(sidebar.observeSelectionEvidence(value),SessionConflictError);
+      assert.deepEqual(sidebar.getModel().owned.map(row=>row.id),[ids[2]]);
+    } else {
+      const model=await sidebar.observeSelectionEvidence(value);
+      assert.deepEqual(model.owned.map(row=>row.id),[ids[1]]);
+      assert.equal(model.pendingOffers.length,0);
+      assert.match(model.plan.summary,/1 个已确认海克斯/);
+      await assert.rejects(sidebar.observeSelectionEvidence(value),SessionConflictError);
+    }
+  }
+});
+
 test('a concurrent OCR miss lets the earlier click finish FX confirmation without arming another click',async()=>{
   const {sidebar,advance}=setup();
   await sidebar.scan();const original=sidebar.getSelectionObservation();

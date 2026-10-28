@@ -14,6 +14,12 @@ const sameIds = (left, right) => validIds(left) && validIds(right) && left.every
 const validGameId = value => value === null || typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(value);
 const validTime = value => integer(value, 0, Number.MAX_SAFE_INTEGER);
 const validToken = token => typeof token === 'string' && /^[a-f0-9]{32}$/.test(token);
+const transitionKeys = ['version','kind','click','titleIdentity','cardsTransitioned','baselineStartedAt','lastBaselineAt','pressedAt','firstTransitionAt','stableFrames','maxFrameGapMs'];
+const transitionShape = value => exactKeys(value, transitionKeys) && value.version === 2
+  && value.kind === 'verified-click-transition'
+  && ['click','titleIdentity','cardsTransitioned'].every(key => typeof value[key] === 'boolean')
+  && ['baselineStartedAt','lastBaselineAt','pressedAt','firstTransitionAt'].every(key => validTime(value[key]))
+  && integer(value.stableFrames,0,1000) && integer(value.maxFrameGapMs,0,2500);
 
 function sanitizeTitleAnchors(value, regions) {
   if (!exactKeys(value, ['version','algorithm','frameId','pass','cards']) || value.version !== 1
@@ -127,8 +133,10 @@ export class SelectionObserver {
     this.maxAge = Math.min(SELECTION_MAX_AGE, Math.max(1, maxAge));
     this.observation = null;
     this.captureTimes = [];
+    this.anchorCaptureTimes = [];
     this.resultLease = null;
     this.resultCaptureTimes = [];
+    this.resultAnchorCaptureTimes = [];
     this.fxContinuation = null;
     this.invalidatedAt = -Infinity;
     this.hardInvalidatedAt = -Infinity;
@@ -136,7 +144,9 @@ export class SelectionObserver {
 
   invalidate() {
     this.observation = null; this.captureTimes = [];
+    this.anchorCaptureTimes = [];
     this.resultLease = null; this.resultCaptureTimes = [];
+    this.resultAnchorCaptureTimes = [];
     this.fxContinuation = null;
     this.invalidatedAt = Math.max(this.invalidatedAt, this.now());
     this.hardInvalidatedAt = Math.max(this.hardInvalidatedAt, this.now());
@@ -145,6 +155,7 @@ export class SelectionObserver {
   pruneCaptures() {
     const now = this.now();
     this.captureTimes = this.captureTimes.filter(time => time > this.invalidatedAt && time <= now + 1000 && now - time <= this.maxAge).slice(-8);
+    this.anchorCaptureTimes = this.anchorCaptureTimes.filter(time => this.captureTimes.includes(time));
   }
 
   arm({offerToken, ids, capture, ...context}) {
@@ -163,20 +174,27 @@ export class SelectionObserver {
       || !sameIds(continuation.ids, ids) || !sameGeometry(continuation.capture, geometry))) this.fxContinuation = null;
     const previous = this.observation;
     if (!previous || !contextMatches(previous, context) || previous.offerToken !== offerToken
-      || !sameIds(previous.ids, ids) || !sameGeometry(previous.capture, geometry)) this.captureTimes = [];
+      || !sameIds(previous.ids, ids) || !sameGeometry(previous.capture, geometry)) {
+      this.captureTimes = []; this.anchorCaptureTimes = [];
+    }
     // A fresh OCR result must not invalidate a click animation already being
     // observed against an earlier valid frame of this exact offer and geometry.
     this.captureTimes = [...new Set([...this.captureTimes, capturedAt])].sort((left, right) => left - right);
+    if (checked.identityAnchors) this.anchorCaptureTimes = [...new Set([...this.anchorCaptureTimes,capturedAt])];
     this.pruneCaptures();
     this.observation = {status:'armed', provider:'screen', experimental:true, offerToken,
       gameId:context.gameId, gameEpoch:context.gameEpoch, revision:context.revision,
       ids:[...ids], capturedAt, capture:geometry};
     const lease = this.resultLease;
     if (!lease || !contextMatches(lease, context) || lease.offerToken !== offerToken
-      || !sameIds(lease.ids, ids) || !sameGeometry(lease.capture, geometry)) this.resultCaptureTimes = [];
+      || !sameIds(lease.ids, ids) || !sameGeometry(lease.capture, geometry)) {
+      this.resultCaptureTimes = []; this.resultAnchorCaptureTimes = [];
+    }
     this.resultCaptureTimes = [...new Set([...this.resultCaptureTimes, capturedAt])]
       .filter(time => time <= this.now() + 1000 && this.now() - time <= this.maxAge)
       .sort((left, right) => left - right).slice(-8);
+    if (checked.identityAnchors) this.resultAnchorCaptureTimes = [...new Set([...this.resultAnchorCaptureTimes,capturedAt])];
+    this.resultAnchorCaptureTimes = this.resultAnchorCaptureTimes.filter(time => this.resultCaptureTimes.includes(time));
     this.resultLease = {...this.observation, status:'leased', suspendedAt:null, expiresAt:capturedAt + this.maxAge};
   }
 
@@ -198,6 +216,7 @@ export class SelectionObserver {
     if (lease.status !== 'leased') return lease;
     this.observation = null;
     this.captureTimes = [];
+    this.anchorCaptureTimes = [];
     this.invalidatedAt = Math.max(this.invalidatedAt, this.now());
     if (this.resultLease.suspendedAt === null) {
       this.resultLease.suspendedAt = this.now();
@@ -209,6 +228,7 @@ export class SelectionObserver {
     // itself still must finish within 2.5 seconds of both click and suspension.
     if (!this.fxContinuation || this.now() > this.fxContinuation.expiresAt) {
       this.fxContinuation = {observation:structuredClone(this.resultLease), captureTimes:[...this.resultCaptureTimes],
+        anchorCaptureTimes:[...this.resultAnchorCaptureTimes],
         expiresAt:Math.min(this.resultLease.expiresAt, this.resultLease.suspendedAt + 2500 + 5000)};
     }
     return this.getResultLease(context, eligible);
@@ -223,6 +243,7 @@ export class SelectionObserver {
       ids:[], capturedAt:null, capture:null, suspendedAt:null, expiresAt:null};
     this.resultCaptureTimes = this.resultCaptureTimes
       .filter(time => time <= this.now() + 1000 && this.now() - time <= this.maxAge).slice(-8);
+    this.resultAnchorCaptureTimes = this.resultAnchorCaptureTimes.filter(time => this.resultCaptureTimes.includes(time));
     return structuredClone(this.resultLease);
   }
 
@@ -284,15 +305,16 @@ export class SelectionObserver {
   consume(value, context, eligible = true) {
     const keys = ['provider','offerToken','gameId','gameEpoch','revision','ids','selectedIndex','capturedAt','clickedAt','observedAt','evidence'];
     const evidenceKeys = ['click','uniqueFeedback','cardsDismissed','stableFrames','feedbackFrames'];
+    const transition = transitionShape(value?.evidence);
+    const fxShape = exactKeys(value?.evidence, evidenceKeys)
+      && ['click','uniqueFeedback','cardsDismissed'].every(key => typeof value.evidence[key] === 'boolean')
+      && integer(value.evidence.stableFrames,0,1000) && integer(value.evidence.feedbackFrames,0,1000);
     if (!exactKeys(value, keys) || value.provider !== 'screen' || !validToken(value.offerToken)
       || !validGameId(value.gameId) || !integer(value.gameEpoch, 0, Number.MAX_SAFE_INTEGER)
       || !integer(value.revision, 0, Number.MAX_SAFE_INTEGER) || !validIds(value.ids)
       || !integer(value.selectedIndex, 0, 2) || !validTime(value.capturedAt)
       || !validTime(value.clickedAt) || !validTime(value.observedAt)
-      || !exactKeys(value.evidence, evidenceKeys)
-      || ['click','uniqueFeedback','cardsDismissed'].some(key => typeof value.evidence[key] !== 'boolean')
-      || !integer(value.evidence.stableFrames, 0, 1000)
-      || !integer(value.evidence.feedbackFrames, 0, 1000)) {
+      || !transition && !fxShape) {
       throw new SelectionValidationError('Invalid selection observation.');
     }
     let observation = this.get(context, eligible);
@@ -300,6 +322,7 @@ export class SelectionObserver {
       && value.offerToken === candidate.offerToken && sameIds(value.ids, candidate.ids) && times.includes(value.capturedAt);
     const active = observation.status === 'armed' && matches(observation, this.captureTimes);
     let suspendedAt = null;
+    let anchorQualified = this.anchorCaptureTimes.includes(value.capturedAt);
     if (!active) {
       const continuation = this.fxContinuation;
       if (!continuation || this.now() > continuation.expiresAt
@@ -310,6 +333,7 @@ export class SelectionObserver {
       }
       observation = continuation.observation;
       suspendedAt = observation.suspendedAt;
+      anchorQualified = continuation.anchorCaptureTimes.includes(value.capturedAt);
     }
     if (observation.status !== 'armed' && observation.status !== 'leased') {
       throw new SelectionConflictError('The observed selection is no longer current.');
@@ -317,8 +341,21 @@ export class SelectionObserver {
     // Consume even insufficient evidence for this context: it must be captured
     // again, rather than allowing an uncertain animation to be retried as proof.
     this.invalidate();
-    if (!value.evidence.click || !value.evidence.uniqueFeedback || !value.evidence.cardsDismissed
-      || value.evidence.stableFrames < 3 || value.evidence.feedbackFrames < 1
+    const proof = value.evidence;
+    const complete = transition ? anchorQualified && proof.click && proof.titleIdentity && proof.cardsTransitioned
+      && proof.baselineStartedAt >= value.capturedAt
+      && proof.lastBaselineAt - proof.baselineStartedAt >= 40 && proof.lastBaselineAt - proof.baselineStartedAt <= 180
+      && proof.pressedAt > proof.lastBaselineAt && proof.pressedAt - proof.lastBaselineAt <= 180
+      && value.clickedAt > proof.pressedAt && value.clickedAt - proof.pressedAt <= 500
+      && proof.firstTransitionAt >= value.clickedAt && proof.firstTransitionAt - value.clickedAt <= 500
+      && value.observedAt - proof.firstTransitionAt >= 350
+      && proof.stableFrames >= 5 && proof.maxFrameGapMs > 0 && proof.maxFrameGapMs <= 180
+      && proof.maxFrameGapMs >= proof.lastBaselineAt - proof.baselineStartedAt
+      && proof.maxFrameGapMs >= proof.pressedAt - proof.lastBaselineAt
+      && value.observedAt - proof.firstTransitionAt <= (proof.stableFrames - 1) * proof.maxFrameGapMs
+      && proof.stableFrames <= value.observedAt - proof.firstTransitionAt + 1
+      : proof.click && proof.uniqueFeedback && proof.cardsDismissed && proof.stableFrames >= 3 && proof.feedbackFrames >= 1;
+    if (!complete
       || value.clickedAt < value.capturedAt || value.observedAt < value.clickedAt
       || value.observedAt - value.clickedAt > 2500 || value.observedAt > this.now() + 1000
       || this.now() - value.observedAt > 5000

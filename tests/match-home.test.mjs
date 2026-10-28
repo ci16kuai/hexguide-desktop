@@ -112,6 +112,20 @@ test('new offers update home without taking navigation away from reference pages
   assert.equal(app.node('#home-compare').scrolls,0,'automatic detection does not move the viewport');
 });
 
+test('an older pending round keeps its label and confirmation identity when promoted to the main cards',async()=>{
+  const app=await appHarness();
+  const ids=active.slice(0,3).map(a=>String(a.id));
+  app.offers(ids,{pendingId:'new-round',gameId:'fixture-game',revision:4,sequence:2,previousRound:false});
+  assert.match(app.html(),/<h2>本轮三选一<\/h2>/);
+  app.offers(ids,{pendingId:'old-round',gameId:'fixture-game',revision:5,sequence:1,previousRound:true});
+  assert.match(app.html(),/<h2>上一轮待确认 · 第 1 轮<\/h2>/);
+  assert.match(app.html(),/data-pending-id="old-round"/);
+  assert.match(app.html(),/这是之前保留的候选/);
+  app.offers(ids,{pendingId:'future-round',gameId:'fixture-game',revision:6,sequence:3,previousRound:false,forceRerank:true});
+  assert.match(app.html(),/<h2>本轮三选一<\/h2>/);
+  assert.doesNotMatch(app.html(),/上一轮待确认/);
+});
+
 test('sidebar selection expands the build without changing reference navigation or scrolling',async()=>{
   const app=await appHarness('#stats');
   app.offers(active.slice(0,3).map(a=>String(a.id)));

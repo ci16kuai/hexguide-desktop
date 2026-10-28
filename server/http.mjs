@@ -36,7 +36,7 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
     let pathname;
     try { pathname = decodeURIComponent(new URL(request.url, `http://${expectedHost}`).pathname); }
     catch { return send(response, 400, {error:'Invalid URL.'}); }
-    const writeRequest = ['/api/ocr', '/api/session', '/api/session/confirm', '/api/session/reset', '/api/sidebar/ocr', '/api/sidebar/selection', '/api/sidebar/panel', '/api/sidebar/life', '/api/appearance', '/api/layout'].includes(pathname) && request.method === 'POST';
+    const writeRequest = ['/api/ocr', '/api/recognize-once', '/api/session', '/api/session/confirm', '/api/session/reset', '/api/sidebar/ocr', '/api/sidebar/selection', '/api/sidebar/panel', '/api/sidebar/life', '/api/appearance', '/api/layout'].includes(pathname) && request.method === 'POST';
     if (!writeRequest && (!['GET', 'HEAD'].includes(request.method) || request.headers['transfer-encoding'] || Number(request.headers['content-length'] || 0) !== 0)) {
       request.resume();
       return send(response, 405, {error:'Only bodyless GET and HEAD requests are permitted.'});
@@ -75,6 +75,12 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
           try { return send(response, 200, sidebar ? await sidebar.scan() : scanner ? await scanner() : {status:'unavailable',message:'屏幕识别不可用，可手动选择。',proposals:[]}); }
           catch { return send(response, 200, {status:'unavailable',message:'本次识别未完成，可手动选择。',proposals:[]}); }
         }
+        if (pathname === '/api/recognize-once') {
+          if (Object.keys(parsed).length) return send(response, 400, {error:'One-time recognition takes no input.'});
+          if (typeof sidebar?.recognizeOnce !== 'function') return send(response, 503, {error:'One-time recognition is unavailable.'});
+          try { return send(response, 200, await sidebar.recognizeOnce()); }
+          catch { return send(response, 503, {error:'One-time recognition could not be completed.'}); }
+        }
         if (!sidebar) return send(response, 503, {error:'Shared session is unavailable.'});
         if (pathname === '/api/sidebar/selection' && typeof sidebar.observeSelectionEvidence !== 'function') return send(response, 503, {error:'Selection observation is unavailable.'});
         if (pathname === '/api/sidebar/panel' && typeof sidebar.observePanelEvidence !== 'function') return send(response, 503, {error:'Panel observation is unavailable.'});
@@ -94,7 +100,7 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
           return send(response, conflict ? 409 : error instanceof SessionValidationError ? 400 : 500, {error:conflict ? 'The current assistant session has changed.' : error instanceof SessionValidationError ? 'Invalid assistant state.' : 'Assistant state could not be saved.', ...(conflict ? {session:sidebar.getSession()} : {})});
         }
       }
-      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.17.5', localOnly:true});
+      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.17.12', localOnly:true});
       if (pathname === '/api/live') return send(response, 200, collector.getSnapshot());
       if (pathname === '/api/sidebar') {
         if (!sidebar) return send(response, 503, {error:'Sidebar is unavailable.'});

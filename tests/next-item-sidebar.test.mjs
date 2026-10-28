@@ -43,6 +43,7 @@ test('compact recommendation is additive and preserves the full application plan
   for(const [key,value] of Object.entries(full)) assert.deepEqual(model.plan[key],value,key);
   assert.ok(Array.isArray(model.plan.buildItems));
   assert.equal(Object.hasOwn(s.sidebar.recognitionSnapshot(s.collector.getSnapshot()),'nextItem'),false);
+  assert.equal(Object.hasOwn(model.nextItem,'purchasePlan'),false,'internal evaluated IDs are not a second public session');
 });
 
 test('only confirmed selections alter condition evidence and route/context follows each revision',async t=>{
@@ -171,10 +172,11 @@ test('purchase intent restores in the same game; malformed or component targets 
   t.after(async()=>{await s.sidebar.stop();await rm(directory,{recursive:true,force:true});});
   s.sidebar.getModel(); await s.sidebar.persistTail;
   const saved=JSON.parse(await readFile(path.join(directory,'session.json'),'utf8'));
-  assert.deepEqual(saved.purchaseTarget,{championId:'MasterYi',itemId:'3153'});
+  assert.deepEqual(saved.purchaseTarget,{championId:'MasterYi',itemId:'3153',ownedAugmentIds:[]});
   promoteArmor(s);
   const restore=async()=>new BackgroundSidebar({collector:s.collector,data,itemsCatalog,dataDirectory:directory,recommendationRepository:s.repository,now:s.now}).load();
   const restored=await restore();
+  assert.deepEqual(restored.purchaseTarget.ownedAugmentIds,[]);
   assert.equal(restored.getModel().nextItem.item.id,'3153'); await restored.stop();
   const original=s.collector.getSnapshot();
   s.update({stage:'loading',phase:'GameStart',championSource:'loading-screen',teams:{...original.teams,source:'loading-roster'}});
@@ -189,6 +191,79 @@ test('purchase intent restores in the same game; malformed or component targets 
     const invalid=await restore();
     assert.equal(invalid.purchaseTarget,null); await invalid.stop();
   }
+  for (const metadata of [undefined,null,{},['unknown'],[choice.id,choice.id],Array(13).fill(choice.id),[1]]) {
+    const target={championId:'MasterYi',itemId:'3153',...(metadata === undefined ? {} : {ownedAugmentIds:metadata})};
+    await writeFile(path.join(directory,'session.json'),JSON.stringify({...saved,owned:[choice.id],purchaseTarget:target}));
+    const legacy=await restore();
+    assert.deepEqual(legacy.purchaseTarget,{championId:'MasterYi',itemId:'3153'},'unknown context preserves the valid purchase target without unlocking');
+    assert.equal(legacy.getModel().nextItem.item.id,'3153');
+    assert.deepEqual(legacy.purchaseTarget.ownedAugmentIds,[choice.id],'a fresh evaluated decision migrates legacy context');
+    await legacy.stop();
+  }
+  const historicalIds=[eligible[1].id,choice.id].sort().reverse();
+  await writeFile(path.join(directory,'session.json'),JSON.stringify({...saved,owned:[],
+    purchaseTarget:{...saved.purchaseTarget,ownedAugmentIds:historicalIds}}));
+  const corrected=await restore();
+  assert.deepEqual(corrected.purchaseTarget.ownedAugmentIds,[...historicalIds].sort(),
+    'a prior evaluated context may contain now-removed choices so a correction remains detectable');
+  await corrected.stop();
+});
+
+test('purchase context tracks confirmed selections, not candidate refreshes or repeated observations',async t=>{
+  const s=setup(t);
+  s.sidebar.getModel();
+  assert.deepEqual(s.sidebar.purchaseTarget.ownedAugmentIds,[]);
+  s.sidebar.pendingOffers.accept(eligible.slice(0,3).map(a=>a.id),{lifecycle:1,offerCycle:1,captureRevision:1,now:s.now()});
+  s.sidebar.getModel();
+  assert.deepEqual(s.sidebar.purchaseTarget.ownedAugmentIds,[]);
+  await s.sidebar.setSession({owned:[choice.id],route:'auto'});
+  assert.deepEqual(s.sidebar.purchaseTarget.ownedAugmentIds,[],'confirmation is not consumed before a fresh purchase decision');
+  s.sidebar.getModel();
+  assert.deepEqual(s.sidebar.purchaseTarget.ownedAugmentIds,[choice.id]);
+  const committed=s.sidebar.purchaseTarget;
+  s.sidebar.getModel();
+  assert.equal(s.sidebar.purchaseTarget,committed,'same evaluated choice does not rewrite the purchase plan every tick');
+  await s.sidebar.setSession({owned:[],route:'auto'});
+  s.sidebar.getModel();
+  assert.deepEqual(s.sidebar.purchaseTarget.ownedAugmentIds,[],'manual corrections replace the evaluated context');
+});
+
+test('stale inventory and missing reference data do not consume a confirmed-augment replan',async t=>{
+  const s=setup(t);
+  s.sidebar.getModel();
+  s.advance(10001);
+  await s.sidebar.setSession({owned:[choice.id],route:'auto'});
+  assert.equal(s.sidebar.getModel().nextItem.status,'stale');
+  assert.deepEqual(s.sidebar.purchaseTarget.ownedAugmentIds,[]);
+  s.update({observedAt:new Date(s.now()).toISOString()});
+  s.recommendationData.referenceStatus='missing';
+  assert.equal(s.sidebar.getModel().nextItem.status,'waiting');
+  assert.deepEqual(s.sidebar.purchaseTarget.ownedAugmentIds,[]);
+  s.recommendationData.referenceStatus='ready';
+  s.sidebar.getModel();
+  assert.deepEqual(s.sidebar.purchaseTarget.ownedAugmentIds,[choice.id]);
+  s.update({gameId:'new-context-game',gameTime:10});
+  s.sidebar.getModel();
+  assert.deepEqual(s.sidebar.purchaseTarget.ownedAugmentIds,[],'new game cannot inherit prior confirmed augment context');
+});
+
+test('evaluated context persists even when a confirmation retains the same item',async t=>{
+  const root=process.env.HEXGUIDE_TEST_WORK || path.resolve('H:/Chatgpt/work/2026-10-28/hexguide-augment-build-replan/test-work');
+  await mkdir(root,{recursive:true});
+  const directory=await mkdtemp(path.join(root,'context-'));
+  const s=setup(t,directory);
+  t.after(async()=>{await s.sidebar.stop();await rm(directory,{recursive:true,force:true});});
+  const first=s.sidebar.getModel().nextItem.item.id;
+  await s.sidebar.setSession({owned:[choice.id],route:'auto'});
+  assert.equal(s.sidebar.getModel().nextItem.item.id,first);
+  await s.sidebar.persistTail;
+  const saved=JSON.parse(await readFile(path.join(directory,'session.json'),'utf8'));
+  assert.deepEqual(saved.purchaseTarget.ownedAugmentIds,[choice.id]);
+  const restored=await new BackgroundSidebar({collector:s.collector,data,itemsCatalog,dataDirectory:directory,recommendationRepository:s.repository,now:s.now}).load();
+  t.after(()=>restored.stop());
+  assert.deepEqual(restored.purchaseTarget.ownedAugmentIds,[choice.id]);
+  assert.equal(restored.getModel().nextItem.item.id,first);
+  assert.deepEqual(restored.purchaseTarget.ownedAugmentIds,[choice.id]);
 });
 
 test('confirmed quest routing uses the shared session and preserves purchase completion across every ingredient',async t=>{

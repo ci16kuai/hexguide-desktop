@@ -29,7 +29,7 @@ export class OcrScheduleDiagnostics {
     const mode = MODES.has(value.mode) ? value.mode : 'inactive';
     const snapshot = {
       schemaVersion:2,
-      appVersion:'1.17.5',
+      appVersion:'1.17.12',
       updatedAtUtc:new Date(timestamp(this.now())).toISOString(),
       mode,
       due:value.due === true,
