@@ -5,7 +5,7 @@ import path from 'node:path';
 import {OcrScheduleDiagnostics} from '../server/ocr-schedule-diagnostics.mjs';
 import {OCR_SCHEDULE_MODES} from '../server/ocr-schedule.mjs';
 
-const WORK = 'H:/Chatgpt/work/2026-10-25/hexguide-ocr-scheduling/diagnostics-tests';
+const WORK = process.env.HEXGUIDE_TEST_WORK || 'H:/Chatgpt/work/2026-10-25/hexguide-ocr-scheduling/diagnostics-tests';
 const TIME = Date.parse('2026-10-25T06:00:00Z');
 const FILE = 'diagnostics/ocr-schedule.json';
 const entry = (extra = {}) => ({mode:'window', due:true, intervalMs:500, nextInMs:0,

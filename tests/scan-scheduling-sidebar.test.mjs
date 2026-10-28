@@ -240,7 +240,7 @@ test('confirmation during a follow-up OCR task prevents its late cards from publ
 });
 
 test('stored schedule diagnostics describe current window and actual count/duration without identity', async t => {
-  const root = 'H:\\Chatgpt\\work\\2026-10-25\\hexguide-scan-efficiency';
+  const root = process.env.HEXGUIDE_TEST_WORK || 'H:\\Chatgpt\\work\\2026-10-25\\hexguide-scan-efficiency';
   await mkdir(root, {recursive:true}); const folder = await mkdtemp(path.join(root, 'integration-'));
   t.after(() => rm(folder, {recursive:true, force:true}));
   const h = harness({dataDirectory:folder, scanner:async ({advance}) => { advance(1500); return noCards; }});

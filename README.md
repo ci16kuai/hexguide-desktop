@@ -262,6 +262,16 @@
 
 ## 开发与构建
 
+GitHub Actions 工作流 [Windows tests and build](https://github.com/ci16kuai/hexguide-desktop/actions/workflows/windows.yml) 会在推送到 `codex/desktop-app`／`main`、创建或更新 Pull Request，以及手动运行时执行。它使用 GitHub 托管的 Windows 2022 和 Node.js 24，先跑完整离线验证，再构建 Windows x64 安装包和便携 ZIP。
+
+在成功运行的 **Artifacts** 中下载 `HexGuide-windows-x64-…`，内含安装包、便携版和 SHA-256 校验值，保留 14 天；诊断日志与合成侧栏预览保留 7 天。构建没有代码签名，也不会自动发布 Release、安装软件或操作游戏。OCR 语言依赖项是否可用以测试日志为准；离线通过不等于真实对局验收。工作流仅有读取仓库权限，不需要额外配置 Secret。
+
+本地复现 CI（使用新的、仓库外的空工作目录）：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1 -NodePath "C:\path\to\node.exe" -WorkPath "H:\Chatgpt\work\hexguide-ci-new-run"
+```
+
 Windows 完整离线验证使用统一入口（Node 测试、独立构建、原生选择、单实例、侧栏离屏预览）：
 
 ```powershell
@@ -285,7 +295,7 @@ Windows 便携版构建：
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -NodePath "C:\path\to\node.exe" -Package
 ```
 
-脚本从官方 NuGet 下载固定 WebView2 SDK，并校验 SHA-256；使用 Windows .NET Framework 编译器，复制 Node.js 与应用资源，生成便携软件和 ZIP。缓存可用 `-CachePath` 指定；ZIP 可用 `-ArchivePath` 指定。打包排除用户缓存、日志和凭据。运行时二进制不进入 Git，构建脚本与源码保存在私有仓库。
+脚本从官方 NuGet 下载固定 WebView2 SDK，并校验 SHA-256；使用 Windows .NET Framework 编译器，复制 Node.js 与应用资源，生成便携软件和 ZIP。缓存可用 `-CachePath` 指定；ZIP 可用 `-ArchivePath` 指定。打包排除用户缓存、日志和凭据。运行时二进制不进入 Git，构建脚本与源码保存在仓库中。
 
 安装版构建（需先构建独立暂存目录）：
 
@@ -304,4 +314,4 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-native-sele
 
 目录：`dist/` 界面和资料；`server/` 本地采集与接口；`native/` Windows 窗口和 OCR；`tests/` 实时状态和安全检查；`scripts/` 更新与打包。海克斯数据更新见 [README-data.md](README-data.md)，装备更新运行 `node scripts/update-items.mjs`。
 
-公开资料网站：[海克斯指南](https://hexguide-aram-20261023.robustacorn1025.chatgpt.site)。桌面源码私有保存于 [ci16kuai/hexguide-desktop](https://github.com/ci16kuai/hexguide-desktop)。
+公开资料网站：[海克斯指南](https://hexguide-aram-20261023.robustacorn1025.chatgpt.site)。桌面源码：[ci16kuai/hexguide-desktop](https://github.com/ci16kuai/hexguide-desktop)。

@@ -14,7 +14,7 @@ const observed = ['big_shot','final_form','en_passant'];
 const rerolled = ['goliath','final_form','king_me'];
 
 async function fixture(t, {level = 3} = {}) {
-  const root = 'H:\\Chatgpt\\work\\2026-10-28\\hexguide-pending-recovery';
+  const root = process.env.HEXGUIDE_TEST_WORK || 'H:\\Chatgpt\\work\\2026-10-28\\hexguide-pending-recovery';
   await mkdir(root,{recursive:true});
   const directory = await mkdtemp(path.join(root,'isolated-round-'));
   let now = Date.parse('2026-10-28T15:28:00Z'), ids = [...first], deferred = false, release = null;

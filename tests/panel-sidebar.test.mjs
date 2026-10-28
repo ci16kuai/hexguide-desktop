@@ -119,7 +119,7 @@ function proof(h, scope, matching = [0]) {
 }
 
 async function folder(t) {
-  const root = 'H:\\Chatgpt\\work\\2026-10-25\\hexguide-panel-sidebar-tests';
+  const root = process.env.HEXGUIDE_TEST_WORK || 'H:\\Chatgpt\\work\\2026-10-25\\hexguide-panel-sidebar-tests';
   await mkdir(root,{recursive:true});
   const directory = await mkdtemp(path.join(root,'panel-'));
   t.after(async () => {

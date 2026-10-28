@@ -49,7 +49,7 @@ test('unavailable, empty, unknown, stale or loading observations never infer act
 });
 
 test('manual correction wins over later source snapshots and persists across helper restarts',async t=>{
-  const base=path.resolve('H:/Chatgpt/work/2026-10-25/hexguide-build-policy/state-tests');await mkdir(base,{recursive:true});
+  const base=path.resolve(process.env.HEXGUIDE_TEST_WORK || 'H:/Chatgpt/work/2026-10-25/hexguide-build-policy/state-tests');await mkdir(base,{recursive:true});
   const directory=await mkdtemp(path.join(base,'case-'));
   t.after(async()=>{const resolved=path.resolve(directory);assert.ok(resolved.startsWith(base+path.sep));await rm(resolved,{recursive:true,force:true});});
   const h=setup({dataDirectory:directory});await h.sidebar.load();

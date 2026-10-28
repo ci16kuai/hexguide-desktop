@@ -8,7 +8,7 @@ const TIME = Date.parse('2026-10-25T04:00:00Z');
 const HEROES = [{id:'Ahri',key:103}, {id:'Annie',key:1}, {id:'Jinx',key:222}, {id:'Ashe',key:22}];
 const AUGMENTS = [{id:'alpha', gameDataId:101}, {id:'beta', gameDataId:102}, {id:'gamma',gameDataId:103}];
 const CACHE_NAME = 'recommendation-cache-v1.json';
-const WORK = 'H:/Chatgpt/work/2026-10-25/hexguide-build-policy/repository-tests';
+const WORK = process.env.HEXGUIDE_TEST_WORK || 'H:/Chatgpt/work/2026-10-25/hexguide-build-policy/repository-tests';
 const clone = value => structuredClone(value);
 const metrics = (extra = {}) => ({sampleCount:1000, winRate:0.55, pickRate:0.25, ...extra});
 function snapshot(id = 103, fetchedAt = TIME) {

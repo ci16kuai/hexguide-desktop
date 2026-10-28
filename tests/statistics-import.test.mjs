@@ -82,7 +82,7 @@ test('bundled snapshot covers all heroes with coherent totals and 303 separately
 });
 
 test('failed offline source verification preserves the previously published statistics file', async () => {
-  const scratchRoot = path.resolve('H:/Chatgpt/work/2026-10-23/hexguide-desktop/statistics-import-tests');
+  const scratchRoot = path.resolve(process.env.HEXGUIDE_TEST_WORK || 'H:/Chatgpt/work/2026-10-23/hexguide-desktop/statistics-import-tests');
   await fs.mkdir(scratchRoot, { recursive: true });
   const scratch = await fs.mkdtemp(path.join(scratchRoot, 'case-'));
   const output = path.join(scratch, 'statistics.json');
