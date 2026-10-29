@@ -50,24 +50,37 @@ export function equipmentCards(advice,itemsCatalog){
 
 // This page only browses statistics and equipment catalog entries.
 export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args),conditionalClient}={}){
-  let index=null,itemsCatalog={},loading=false,error='',loaded=false;
+  let index=null,itemsCatalog={},loading=false,error='',loaded=false,generation=0,itemsPromise=null;
   const conditional=conditionalClient||createConditionalStatisticsClient({fetcher});
   const observations=new Map();
   const state={query:'',sort:'winRate',championId:'',augmentQuery:'',rarity:'all',includeLowSample:false,includeUnavailable:false,expanded:''};
   const champion=()=>index?.championById.get(String(state.championId));
   const rows=()=>getAugmentRows(index,state.championId,{query:state.augmentQuery,rarity:state.rarity,includeLowSample:state.includeLowSample,includeUnavailable:state.includeUnavailable});
+  function loadItems(){
+    if(!itemsPromise)itemsPromise=Promise.resolve().then(()=>fetcher('./items.json')).then(async response=>{if(response.ok)itemsCatalog=await response.json();}).catch(()=>{});
+    return itemsPromise;
+  }
 
   async function load(){
     if(loading||loaded)return;
+    const started=generation;
     loading=true;error='';
     try{
       const response=await fetcher('./statistics.json',{cache:'no-store'});
       if(!response.ok)throw Error(`统计资料请求失败（${response.status}）`);
-      index=createStatistics(await response.json(),catalog);
-      try{const items=await fetcher('./items.json');if(items.ok)itemsCatalog=await items.json();}catch{}
+      const next=createStatistics(await response.json(),catalog);
+      if(started!==generation)return;
+      index=next;
+      await loadItems();
       loaded=true;
-    }catch(cause){error=cause?.message||'未能读取统计资料';}
+    }catch(cause){if(started===generation)error=cause?.message||'未能读取统计资料';}
     finally{loading=false;redraw();}
+  }
+  function replaceSnapshot(snapshot){
+    const next=createStatistics(snapshot,catalog);
+    generation++;
+    index=next;loaded=true;error='';
+    redraw();
   }
   function provenance(){
     const meta=index.meta||{},source=meta.sourceName||meta.source?.name||'AramHex',sourceUrl=meta.sourceUrl||meta.source?.url||'https://aramhex.com/';
@@ -139,7 +152,7 @@ export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args),
     if(!index)return '<div class="stats-empty" role="status"><h1>正在读取英雄胜率</h1><p>首次打开需要载入统计快照…</p></div>';
     return state.championId?detail():list();
   }
-  function html(){if(!loaded&&!loading&&!error)load();return `<div id="statistics-root" class="statistics-page" ${target('stats-content','英雄胜率统计内容',true)}>${content()}</div>`;}
+  function html(){if(!loaded&&!loading&&!error)load();if(loaded&&!itemsPromise)void loadItems().then(redraw);return `<div id="statistics-root" class="statistics-page" ${target('stats-content','英雄胜率统计内容',true)}>${content()}</div>`;}
   function redraw(){
     const root=document.getElementById('statistics-root');if(!root)return;
     replacePreservingFocus(root,()=>{root.innerHTML=content();});
@@ -166,5 +179,5 @@ export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args),
     else return;
     redraw();
   });
-  return Object.freeze({html});
+  return Object.freeze({html,replaceSnapshot});
 }

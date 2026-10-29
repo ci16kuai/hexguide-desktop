@@ -16,7 +16,7 @@ async function statisticsHarness(){
   const response=new Promise(resolve=>{complete=resolve;});
   const view=createStatisticsView({catalog,fetcher:async url=>url==='./statistics.json'?response:{ok:true,json:async()=>({data:{}})}});
   root.innerHTML=view.html();
-  return {doc,root,listeners,async complete(){complete({ok:true,json:async()=>snapshot});await settle();await settle();}};
+  return {doc,root,listeners,view,async complete(){complete({ok:true,json:async()=>snapshot});await settle();await settle();}};
 }
 
 test('statistics asynchronous data redraw never focuses a background, hidden, or unrelated control',async()=>{
@@ -53,5 +53,62 @@ test('statistics search redraw preserves the caret without scrolling',async()=>{
     assert.deepEqual(next.focusOptions,{preventScroll:true});
     assert.deepEqual([next.selectionStart,next.selectionEnd],[1,1]);
     assert.match(root.innerHTML,/value="阿"/);
+  }finally{if(previous===undefined)delete globalThis.document;else globalThis.document=previous;}
+});
+
+test('statistics hot replacement retains search, sort and focus and rejects invalid snapshots without discarding data',async()=>{
+  const previous=globalThis.document;
+  try{
+    const {doc,root,listeners,view,complete}=await statisticsHarness();
+    await complete();
+    listeners.input({target:{id:'stats-champion-search',value:'阿'}});
+    listeners.change({target:{id:'stats-champion-sort',value:'games'}});
+    const old=focusElement(doc,{id:'stats-champion-search',type:'search',value:'阿',selectionStart:1,selectionEnd:1});
+    const next=focusElement(doc,{id:'stats-champion-search',type:'search',selectionStart:0,selectionEnd:0});
+    root.replaceChildren(old);root.nextChildren=[next];doc.activeElement=old;
+    const replacement=structuredClone(snapshot);replacement.champions[0].wins=65;
+    view.replaceSnapshot(replacement);
+    assert.match(root.innerHTML,/65\.00%/);
+    assert.match(root.innerHTML,/value="阿"/);
+    assert.match(root.innerHTML,/<option value="games" selected>/);
+    assert.equal(next.focuses,1);
+    assert.deepEqual([next.selectionStart,next.selectionEnd],[1,1]);
+    assert.deepEqual(next.focusOptions,{preventScroll:true});
+    assert.throws(()=>view.replaceSnapshot({schemaVersion:99}),TypeError);
+    assert.match(view.html(),/65\.00%/);
+    assert.match(view.html(),/value="阿"/);
+  }finally{if(previous===undefined)delete globalThis.document;else globalThis.document=previous;}
+});
+
+test('a replaced snapshot cannot be overwritten by a delayed initial statistics response',async()=>{
+  const previous=globalThis.document;
+  try{
+    const {root,view,complete}=await statisticsHarness();
+    const replacement=structuredClone(snapshot);replacement.champions[0].wins=70;
+    view.replaceSnapshot(replacement);
+    await complete();
+    assert.match(root.innerHTML,/70\.00%/);
+    assert.doesNotMatch(root.innerHTML,/50\.00%/);
+  }finally{if(previous===undefined)delete globalThis.document;else globalThis.document=previous;}
+});
+
+test('a statistics refresh keeps the chosen champion and all detail filters',async()=>{
+  const previous=globalThis.document;
+  try{
+    const {root,listeners,view,complete}=await statisticsHarness();await complete();root.scrollIntoView=()=>{};
+    const button={dataset:{statsAction:'champion',statsId:'Ahri'},closest:()=>root};
+    listeners.click({target:{closest:()=>button}});
+    listeners.input({target:{id:'stats-augment-search',value:'闪电'}});
+    listeners.change({target:{id:'stats-rarity',value:'gold'}});
+    listeners.change({target:{id:'stats-low-sample',checked:true}});
+    listeners.change({target:{id:'stats-unavailable',checked:true}});
+    const replacement=structuredClone(snapshot);replacement.champions[0].wins=75;
+    view.replaceSnapshot(replacement);
+    assert.match(root.innerHTML,/返回全部英雄/);
+    assert.match(root.innerHTML,/75\.00%/);
+    assert.match(root.innerHTML,/value="闪电"/);
+    assert.match(root.innerHTML,/<option value="gold" selected>/);
+    assert.match(root.innerHTML,/id="stats-low-sample" type="checkbox" checked/);
+    assert.match(root.innerHTML,/id="stats-unavailable" type="checkbox" checked/);
   }finally{if(previous===undefined)delete globalThis.document;else globalThis.document=previous;}
 });

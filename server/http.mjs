@@ -17,7 +17,7 @@ function equalToken(received, expected) {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-export async function createLocalServer({collector, scanner, sidebar, appearance, layout, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
+export async function createLocalServer({collector, scanner, sidebar, appearance, layout, statistics, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
   if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
   const root = await realpath(staticDirectory);
   let expectedHost;
@@ -100,7 +100,7 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
           return send(response, conflict ? 409 : error instanceof SessionValidationError ? 400 : 500, {error:conflict ? 'The current assistant session has changed.' : error instanceof SessionValidationError ? 'Invalid assistant state.' : 'Assistant state could not be saved.', ...(conflict ? {session:sidebar.getSession()} : {})});
         }
       }
-      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.17.12', localOnly:true});
+      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.17.13', localOnly:true});
       if (pathname === '/api/live') return send(response, 200, collector.getSnapshot());
       if (pathname === '/api/sidebar') {
         if (!sidebar) return send(response, 503, {error:'Sidebar is unavailable.'});
@@ -116,7 +116,15 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
       }
       if (pathname === '/api/appearance') return appearance ? send(response, 200, appearance.get()) : send(response, 503, {error:'Appearance settings are unavailable.'});
       if (pathname === '/api/layout') return layout ? send(response, 200, layout.get()) : send(response, 503, {error:'Interface layout settings are unavailable.'});
+      if (pathname === '/api/statistics/status') return statistics ? send(response, 200, statistics.getStatus()) : send(response, 503, {error:'Statistics updates are unavailable.'});
       return send(response, 404, {error:'Unknown endpoint.'});
+    }
+    if (pathname === '/statistics.json' && statistics) {
+      try {
+        const content = JSON.stringify(statistics.getSnapshot());
+        response.writeHead(200, {'Content-Type':MIME['.json'], 'Cache-Control':'no-store', 'Content-Length':Buffer.byteLength(content)});
+        return response.end(request.method === 'HEAD' ? undefined : content);
+      } catch { return send(response, 503, {error:'Statistics are unavailable.'}); }
     }
     try {
       if (pathname.includes('\0') || pathname.includes('\\') || pathname.split('/').some(part => part.startsWith('.'))) return send(response, 404, {error:'File not found.'});

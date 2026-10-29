@@ -251,7 +251,7 @@ function localStatistics(snapshot, championIds, augmentCatalog, patch) {
   const meta = snapshot?.meta;
   if (snapshot?.schemaVersion !== 1 || meta?.mode !== 'aram-mayhem' || meta?.patch !== patch
     || typeof meta.cohortId !== 'string' || !meta.cohortId || meta.source?.name !== 'AramHex'
-    || meta.source?.url !== 'https://github.com/czgreat/aramhex-data' || !Array.isArray(snapshot.champions)) return result;
+    || meta.source?.url !== 'https://github.com/czgreat/aramhex-data' || !Array.isArray(snapshot.champions)) return null;
   const seen = new Set();
   for (const hero of snapshot.champions) {
     const id = hero?.championId;
@@ -304,7 +304,7 @@ async function boundedFetch(url, options) {
 /** No background refresh: only ensure(currentChampion) can make a request. */
 export class RecommendationRepository {
   #entries = new Map(); #failures = new Map(); #referenceFailures = new Map(); #pending = new Map(); #static;
-  #mayhemPending = new Set(); #referencePending = new Set();
+  #mayhemPending = new Set(); #referencePending = new Set(); #catalog;
   #ids = new Map(); #numbers = new Map(); #loadPromise; #writeTail = Promise.resolve();
   #client; #referenceClient; #referenceClientPromise; #now; #patch; #file; #closed = false; #storageStatus;
   constructor({dataDirectory, statisticsSnapshot, champions = [], augments = [], client, referenceClient, now = Date.now, patch = '16.21'} = {}) {
@@ -321,9 +321,14 @@ export class RecommendationRepository {
       if (champion.key != null && Number(champion.key) !== numeric) continue;
       this.#ids.set(champion.id, numeric); this.#numbers.set(String(numeric), champion.id);
     }
-    const catalog = new Map(augments.filter(row => SLUG.test(row?.id) && row.recommendable !== false
-      && !row.isInternalTemplate && !row.retiredPatch && (!row.availability || row.availability === 'current')).map(row => [row.id, row]));
-    this.#static = localStatistics(statisticsSnapshot, this.#ids, catalog, patch);
+    this.#catalog = new Map(augments.filter(row => SLUG.test(row?.id) && row.recommendable !== false
+      && !row.isInternalTemplate && !row.retiredPatch && (!row.availability || row.availability === 'current')).map(row => [row.id, {...row}]));
+    this.#static = localStatistics(statisticsSnapshot, this.#ids, this.#catalog, patch) ?? new Map();
+  }
+  replaceStatistics(snapshot) {
+    const next = localStatistics(snapshot, this.#ids, this.#catalog, this.#patch);
+    if (!next?.size) throw new TypeError('Invalid replacement statistics snapshot.');
+    this.#static = next;
   }
   #time() { return integer(this.#now(), 1); }
   #resolve(value) { return typeof value === 'string' && this.#ids.has(value) ? value : this.#numbers.get(String(value)) ?? null; }

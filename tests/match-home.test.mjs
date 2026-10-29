@@ -263,7 +263,7 @@ const rankingCatalog={...catalog,combos:[],augments:[
   {id:'fixture_vamp',name:'测试全能吸血',rarity:'silver',description:'获得10%全能吸血。',availability:'current',recommendable:true},
   {id:'fixture_crit',name:'测试技能暴击',rarity:'gold',description:'你的技能可以造成暴击。',availability:'current',recommendable:true}
 ]};
-const rankingStatistics={meta:{mode:'aram-mayhem',patch:'16.21',cohortId:'fixture',lowSampleThreshold:200,source:{name:'Fixture'}},champions:[{championId:'Ahri',cohortId:'fixture',augments:rankingCatalog.augments.map((augment,index)=>({augmentId:augment.id,cohortId:'fixture',games:1000,wins:[520,900,700][index],lowSample:false,provisional:false}))}]};
+const rankingStatistics={schemaVersion:1,meta:{mode:'aram-mayhem',patch:'16.21',cohortId:'fixture',lowSampleThreshold:200,source:{name:'Fixture'}},champions:[{championId:'Ahri',cohortId:'fixture',augments:rankingCatalog.augments.map((augment,index)=>({augmentId:augment.id,cohortId:'fixture',games:1000,wins:[520,900,700][index],lowSample:false,provisional:false}))}]};
 
 test('shared policy ranks library, champion and comparison views by actual statistics while home keeps game order',async()=>{
   const app=await appHarness('#live',{catalog:rankingCatalog,statistics:rankingStatistics});

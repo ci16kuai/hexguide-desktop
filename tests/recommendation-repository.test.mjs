@@ -112,6 +112,30 @@ test('static rates use exact wins/games; low samples are retained but not compar
   assert.ok(Object.isFrozen(rows));
 });
 
+test('replacing static statistics swaps complete maps while retaining prior observations and provider caches', async () => {
+  let calls=0;
+  const repo=repository({client:{async load(){calls++;return snapshot();}},referenceClient:{async load(){return reference();}}});
+  await repo.ensure('Ahri');
+  const before=repo.get('Ahri');
+  const replacement=statistics();
+  replacement.champions[0].augments=[{...replacement.champions[0].augments[0],wins:4200}];
+  repo.replaceStatistics(replacement);
+  replacement.champions[0].augments[0].wins=1;
+  const after=repo.get('Ahri');
+  assert.equal(after.augmentStatistics.alpha.winRate,0.7);
+  assert.equal(after.augmentStatistics.beta,undefined,'omitted rows are removed from the new map');
+  assert.equal(before.augmentStatistics.alpha.winRate,0.6,'a held old result stays immutable');
+  assert.equal(before.augmentStatistics.beta.winRate,0.9);
+  assert.strictEqual(after.snapshot,before.snapshot,'conditional champion cache is preserved');
+  assert.strictEqual(after.ordinaryAram,before.ordinaryAram,'reference cache is preserved');
+  await repo.ensure('Ahri');assert.equal(calls,1);
+  for(const invalid of [null,{...statistics(),meta:{...statistics().meta,patch:'16.20'}},{...statistics(),champions:[]}]){
+    assert.throws(()=>repo.replaceStatistics(invalid),TypeError);
+    assert.strictEqual(repo.get('Ahri').augmentStatistics,after.augmentStatistics,'failed replacements retain the accepted map');
+  }
+  await repo.close();
+});
+
 test('static cohorts, patches, mode, identity, exclusion and repeated IDs fail closed', () => {
   for (const change of [
     s=>s.meta.patch='16.20', s=>s.meta.mode='aram', s=>s.champions[0].cohortId='another',

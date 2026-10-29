@@ -55,7 +55,7 @@ test('pair explanations, suitability and direct ranking apply ultimate constrain
   }
 });
 
-test('real bundled top-six statistics cannot reintroduce disabled ultimates for Fiddlesticks Karthus or Kennen', async () => {
+test('real bundled statistics cannot reintroduce disabled ultimates for Fiddlesticks Karthus or Kennen', async () => {
   const repository = new RecommendationRepository({champions:data.champions, augments:data.augments, statisticsSnapshot});
   try {
     for (const [championId, forbiddenId] of [['Fiddlesticks','final_form'], ['Karthus','ultimate_revolution'], ['Kennen','final_form']]) {
@@ -63,7 +63,9 @@ test('real bundled top-six statistics cannot reintroduce disabled ultimates for 
       const recommendationData = repository.get(championId);
       const options = {champion, augments:data.augments, champions:data.champions, itemsCatalog, recommendationData,
         live:{phase:'InProgress', stage:'live', championId, connection:{status:'connected'}, mode:{known:true,isMayhem:true}}};
-      const baseline = buildLivePlan({...options, owned:[]});
+      // New snapshots legitimately change the full-catalog top six. Keep this
+      // regression about eligibility, using real statistics in a fixed slate.
+      const baseline = buildLivePlan({...options, augments:[byId(forbiddenId), byId('skilled_sniper'), byId('spin_to_win')], owned:[]});
       assert.equal(baseline.nextAugments.find(row => row.id === forbiddenId)?.rankingEvidence.trusted, true, championId);
       const restricted = buildLivePlan({...options, owned:[disabled]});
       assert.ok(restricted.nextAugments.length > 0);
