@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.Net;
@@ -1430,7 +1431,7 @@ namespace HexGuide.Desktop
         // stacking policy without entering either managed activation path.
         private const int PassiveWindowStyles = 0x00000008 | 0x00000080 | 0x08000000; // TOPMOST | TOOLWINDOW | NOACTIVATE
         private const uint PassiveShowFlags = 0x0010 | 0x0200 | 0x0040; // NOACTIVATE | NOOWNERZORDER | SHOWWINDOW
-        private Font headingFont, normalFont, smallFont;
+        private Font headingFont, normalFont, smallFont, decisionFont, offerNameFont;
         private SidebarAppearance appearance = new SidebarAppearance();
         private Dictionary<string, object> model = ModelValue.Failure("正在连接本地助手…");
         private readonly Color muted = Color.FromArgb(154, 171, 192);
@@ -1452,8 +1453,9 @@ namespace HexGuide.Desktop
         private bool activeHintIsHelp;
         private string SidebarHelp { get { return "Ctrl + 左键：拖动侧栏\nAlt+Shift+H：收起或展开\n鼠标离开" + appearance.IdleHideSeconds + "秒：淡化为边缘条；悬停恢复\n等待时间可在主窗口的界面设置中调整\n识别到当前三选一时自动展开\n滚轮：查看侧栏中的其余内容\n识别一次：保持游戏在前台，读三选一或已展开的六格栏。\n六格核对需要此前识别过的本轮候选；证据不足不会猜选。\n打开详细：查看完整构筑和调整记录\n返回游戏：切回游戏窗口\n只读游戏，不替你点击或操作。"; } }
         private const string NextItemHelp = "根据本局英雄、已确认海克斯、\n敌方阵容与可读战绩推荐下一件装备。\n平时完整买出后才推进，组件不算完成。\n确认影响出装的海克斯后，会重新规划；\n若先完成当前目标，随后优先考虑强化装备。\n任务装备仅在确认相关任务海克斯后显示，\n并列出需要完成的合成路线。";
-        private const string OffersHelp = "先在游戏内选择；未自动记录时，\n再点击对应候选卡片确认。\n金框为优先推荐，角标为推荐顺序。\n出现三选一卡片后会自动检查。\n未确认的旧轮会保留，可继续核对或补录。";
-        private const string OwnedHelp = "这里显示本局已经记录的海克斯。\n自动识别未确认时，可点击候选卡片确认。\n标注为推定的记录仍有同图标歧义；\n可在“打开详细”中移除并改选。";
+        private const string OffersHelp = "先在游戏内选择；未自动记录时，\n再点对应的“确认”按钮。\n卡片左右位置与游戏一致；\n“首选”和金框表示优先推荐，不表示已选。\n悬停卡片可查看名称与品质。\n出现三选一卡片后会自动检查。\n未确认的旧轮会保留，可继续核对或补录。";
+        private const string OfferRecordInstruction = "游戏里选完，再记录";
+        private const string OwnedHelp = "这里显示本局已经记录的海克斯。\n自动识别未确认时，可点“确认”。\n标注为推定的记录仍有同图标歧义；\n可在“打开详细”中移除并改选。";
         private readonly RemoteIconCache buildIcons = new RemoteIconCache();
         private readonly Dictionary<string, Image> augmentIcons = new Dictionary<string, Image>();
         private Rectangle buildToggle;
@@ -1715,7 +1717,7 @@ namespace HexGuide.Desktop
             var recommendation = CurrentNextItem();
             if (ModelValue.Text(recommendation, "status") != "ready") return S(33) + NextItemTextHeight(NextItemMessage(recommendation), smallFont, width) + S(18);
             var item = ModelValue.Object(recommendation, "item");
-            int heading = Math.Max(S(44), NextItemTextHeight(ModelValue.Text(item, "name"), normalFont, width - S(52)));
+            int heading = Math.Max(S(44), NextItemTextHeight(ModelValue.Text(item, "name"), decisionFont, width - S(52)));
             string effect = ModelValue.Text(item, "effect"), reasons = NextItemReasons(recommendation), evidence = ModelValue.Text(recommendation, "evidenceLabel");
             return S(33) + heading + S(8) + NextItemTextHeight(effect, smallFont, width)
                 + (reasons.Length > 0 ? S(7) + NextItemTextHeight(reasons, smallFont, width) : 0)
@@ -1741,8 +1743,8 @@ namespace HexGuide.Desktop
             var item = ModelValue.Object(recommendation, "item");
             paintedNextItemId = ModelValue.Text(item, "id");
             DrawBuildIcon(g, ModelValue.Text(item, "icon"), new Rectangle(x, y, S(42), S(42)));
-            int heading = Math.Max(S(44), NextItemTextHeight(ModelValue.Text(item, "name"), normalFont, width - S(52))), nameY = y;
-            DrawNextItemText(g, ModelValue.Text(item, "name"), normalFont, ForeColor, x + S(52), ref nameY, width - S(52)); y += heading + S(8);
+            int heading = Math.Max(S(44), NextItemTextHeight(ModelValue.Text(item, "name"), decisionFont, width - S(52))), nameY = y;
+            DrawNextItemText(g, ModelValue.Text(item, "name"), decisionFont, ForeColor, x + S(52), ref nameY, width - S(52)); y += heading + S(8);
             DrawNextItemText(g, ModelValue.Text(item, "effect"), smallFont, muted, x, ref y, width);
             string reasons = NextItemReasons(recommendation), evidence = ModelValue.Text(recommendation, "evidenceLabel");
             if (reasons.Length > 0) { y += S(7); DrawNextItemText(g, reasons, smallFont, accent, x, ref y, width); }
@@ -1923,15 +1925,19 @@ namespace HexGuide.Desktop
         }
         private void UpdateFonts()
         {
-            Font oldHeading = headingFont, oldNormal = normalFont, oldSmall = smallFont;
+            Font oldHeading = headingFont, oldNormal = normalFont, oldSmall = smallFont, oldDecision = decisionFont, oldOfferName = offerNameFont;
             float scale = appearance.Scale / 100F;
-            headingFont = new Font(appearance.FontName, 14F * scale, FontStyle.Bold);
+            headingFont = new Font(appearance.FontName, 10.5F * scale, FontStyle.Bold);
             normalFont = new Font(appearance.FontName, 9F * scale);
             smallFont = new Font(appearance.FontName, 8F * scale);
+            decisionFont = new Font(appearance.FontName, 11F * scale, FontStyle.Bold);
+            offerNameFont = new Font(appearance.FontName, 9.5F * scale, FontStyle.Bold);
             Font = normalFont;
             if (oldHeading != null) oldHeading.Dispose();
             if (oldNormal != null) oldNormal.Dispose();
             if (oldSmall != null) oldSmall.Dispose();
+            if (oldDecision != null) oldDecision.Dispose();
+            if (oldOfferName != null) oldOfferName.Dispose();
         }
         private int S(int value) { return Math.Max(1, (int)Math.Round(value * appearance.Scale / 100.0)); }
         internal void ShowPassive()
@@ -1963,7 +1969,7 @@ namespace HexGuide.Desktop
             if (idleCompact) { DrawIdleStrip(g); return; }
             int x = 17, width = Math.Max(1, Width - 34), y = 16;
             helpTargets.Clear();
-            DrawHelpHeading(g, "海克斯指南", headingFont, ForeColor, new Rectangle(x, y, width, S(29)), SidebarHelp, ClientRectangle); y += S(40);
+            DrawHelpHeading(g, "海克斯指南", headingFont, ForeColor, new Rectangle(x, y, width, S(24)), SidebarHelp, ClientRectangle); y += S(32);
             recognitionButton = new Rectangle(x, y, width, S(29));
             PaintButton(g, recognitionButton, RecognitionBusy ? "正在识别…" : "识别一次"); y += S(37);
             string recognitionMessage = RecognitionMessage;
@@ -2014,7 +2020,7 @@ namespace HexGuide.Desktop
         private int SectionHeight(string section)
         {
             if (section == "nextItem") return NextItemHeight(Math.Max(1, Width - 34));
-            if (section == "hero") return S(29) + NextItemTextHeight(HeroStatus(), smallFont, Math.Max(1, Width - 34)) + S(18);
+            if (section == "hero") return S(25) + NextItemTextHeight(HeroStatus(), smallFont, Math.Max(1, Width - 34)) + S(14);
             if (section == "owned")
             {
                 int count = Math.Min(12, ModelValue.Array(Model, "owned").Count);
@@ -2023,9 +2029,20 @@ namespace HexGuide.Desktop
             }
             if (section == "offers")
             {
-                int count = Math.Min(3, ModelValue.Array(Model, "offers").Count);
-                int height = S(27) + (count == 0 ? EmptyOffersHeight(Math.Max(1, Width - 34)) : S(123) + S(8));
-                foreach (var pending in OlderPendingOffers()) height += S(29) + Math.Min(3, ModelValue.Array(pending, "offers").Count) * S(37) + S(8);
+                int width = Math.Max(1, Width - 34), count = Math.Min(3, ModelValue.Array(Model, "offers").Count);
+                var older = OlderPendingOffers();
+                int height = S(27) + (count > 0 || older.Count > 0 ? RecordInstructionHeight(width) : 0)
+                    + (count == 0 ? EmptyOffersHeight(width) : CreateOfferCardLayout(width).CardHeight + S(14));
+                foreach (var pending in older)
+                {
+                    height += S(29) + S(8);
+                    int index = 0;
+                    foreach (object entry in ModelValue.Array(pending, "offers"))
+                    {
+                        if (index++ >= 3) break;
+                        height += PendingOfferRowHeight(entry as Dictionary<string, object>, width) + S(6);
+                    }
+                }
                 return height;
             }
             if (!buildExpanded) return S(126);
@@ -2233,31 +2250,81 @@ namespace HexGuide.Desktop
             using (var pen = new Pen(color, Math.Max(1, S(1))))
                 g.DrawRectangle(pen, rectangle.Left, rectangle.Top, Math.Max(1, rectangle.Width - 1), Math.Max(1, rectangle.Height - 1));
         }
-        private Font FitOfferNameFont(Graphics g, string name, Rectangle area)
+        private struct OfferCardLayout
         {
-            float minimum = Math.Min(smallFont.SizeInPoints, 6.5F * appearance.Scale / 100F);
-            for (float size = smallFont.SizeInPoints; ; size = Math.Max(minimum, size - 0.25F))
-            {
-                var font = new Font(smallFont.FontFamily, size, smallFont.Style, GraphicsUnit.Point);
-                if (OfferNameFits(g, name, font, area) || size <= minimum) return font;
-                font.Dispose();
-            }
+            internal int CellWidth, IconSize, NameTop, NameHeight, ButtonTop, ButtonHeight, CardHeight;
         }
-        private static bool OfferNameFits(Graphics g, string name, Font font, Rectangle area)
+        private const TextFormatFlags OfferNameTextFlags = TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix;
+        private int OfferTextHeight(string name, int width, int maximumLines)
         {
-            var flags = TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix;
-            Size measured = TextRenderer.MeasureText(g, name, font, new Size(Math.Max(1, area.Width), int.MaxValue), flags);
-            int lineHeight = TextRenderer.MeasureText(g, "中", font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Height;
-            return measured.Height <= Math.Min(area.Height, lineHeight * 2);
+            int lineHeight = TextRenderer.MeasureText("中", offerNameFont, Size.Empty, OfferNameTextFlags).Height;
+            int measured = TextRenderer.MeasureText(name, offerNameFont, new Size(Math.Max(1, width), int.MaxValue), OfferNameTextFlags).Height;
+            return Math.Min(Math.Max(lineHeight, measured), lineHeight * maximumLines);
+        }
+        private OfferCardLayout CreateOfferCardLayout(int width)
+        {
+            var layout = new OfferCardLayout();
+            layout.CellWidth = Math.Max(1, (width - S(6) * 2) / 3);
+            layout.IconSize = Math.Min(S(38), Math.Max(1, layout.CellWidth - S(12)));
+            layout.NameTop = S(23) + layout.IconSize + S(6);
+            // Grow every card in this row together. Names keep the user's font
+            // and scale instead of shrinking independently into tiny type.
+            layout.NameHeight = OfferTextHeight("海克斯\n名称", layout.CellWidth - S(6), 3);
+            int index = 0;
+            foreach (object entry in ModelValue.Array(Model, "offers"))
+            {
+                if (index++ >= 3) break;
+                layout.NameHeight = Math.Max(layout.NameHeight,
+                    OfferTextHeight(ModelValue.Text(entry as Dictionary<string, object>, "name"), layout.CellWidth - S(6), 3));
+            }
+            layout.ButtonTop = layout.NameTop + layout.NameHeight + S(8);
+            layout.ButtonHeight = S(27);
+            layout.CardHeight = layout.ButtonTop + layout.ButtonHeight + S(5);
+            return layout;
+        }
+        private static string OfferRankLabel(string rank)
+        {
+            return rank == "1" ? "首选" : rank == "2" ? "推荐 2" : rank == "3" ? "推荐 3" : "";
+        }
+        private int RecordInstructionHeight(int width)
+        {
+            return NextItemTextHeight(OfferRecordInstruction, smallFont, width) + S(8);
+        }
+        private int PendingRecordButtonWidth { get { return S(68); } }
+        private int PendingOfferRowHeight(Dictionary<string, object> offer, int width)
+        {
+            int nameWidth = Math.Max(1, width - S(33) - PendingRecordButtonWidth - S(8));
+            return Math.Max(S(36), OfferTextHeight(ModelValue.Text(offer, "name"), nameWidth, 2) + S(6));
+        }
+        private void RegisterOfferHint(Rectangle rectangle, Dictionary<string, object> offer)
+        {
+            Rectangle visible = Rectangle.Intersect(viewport, rectangle);
+            if (visible.Width > 0 && visible.Height > 0) augmentTargets[visible] = offer;
         }
         private void DrawOfferName(Graphics g, string name, Rectangle area)
         {
-            using (var font = FitOfferNameFont(g, name, area))
-            {
-                int lineHeight = TextRenderer.MeasureText(g, "中", font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Height;
-                area.Height = Math.Min(area.Height, lineHeight * 2);
-                TextRenderer.DrawText(g, name, font, area, ForeColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
-            }
+            TextRenderer.DrawText(g, name, offerNameFont, area, ForeColor,
+                OfferNameTextFlags | TextFormatFlags.HorizontalCenter | TextFormatFlags.Top
+                | TextFormatFlags.EndEllipsis | TextFormatFlags.PreserveGraphicsClipping);
+        }
+        private RectangleF HelpCircleBounds(Rectangle target)
+        {
+            int diameter = S(14);
+            return new RectangleF(target.Left + (target.Width - diameter) / 2F,
+                target.Top + (target.Height - diameter) / 2F, diameter, diameter);
+        }
+        private GraphicsPath CreateHelpGlyph(RectangleF circle)
+        {
+            var path = new GraphicsPath();
+            using (var format = StringFormat.GenericTypographic)
+                path.AddString("?", smallFont.FontFamily, (int)smallFont.Style, 100F, PointF.Empty, format);
+            RectangleF ink = path.GetBounds();
+            float scale = Math.Min(circle.Width * 0.5F / ink.Width, circle.Height * 0.65F / ink.Height);
+            // Center the visible outline, independent of font padding/baseline.
+            using (var transform = new Matrix(scale, 0, 0, scale,
+                circle.Left + circle.Width / 2F - (ink.Left + ink.Width / 2F) * scale,
+                circle.Top + circle.Height / 2F - (ink.Top + ink.Height / 2F) * scale)) path.Transform(transform);
+            return path;
         }
         private void DrawHelpHeading(Graphics g, string title, Font font, Color color, Rectangle area, string help, Rectangle clip)
         {
@@ -2269,10 +2336,16 @@ namespace HexGuide.Desktop
             var target = new Rectangle(titleArea.Right + gap, area.Top + (area.Height - size) / 2, size, size);
             // Partially clipped icons must not leave invisible hover targets.
             if (!clip.Contains(target) || !ClientRectangle.Contains(target)) return;
-            var circle = Rectangle.Inflate(target, -S(2), -S(2));
-            using (var pen = new Pen(muted)) g.DrawEllipse(pen, circle);
-            TextRenderer.DrawText(g, "?", smallFont, target, muted,
-                flags | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.PreserveGraphicsClipping);
+            RectangleF circle = HelpCircleBounds(target);
+            var state = g.Save();
+            try
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                using (var pen = new Pen(muted)) g.DrawEllipse(pen, circle);
+                using (var glyph = CreateHelpGlyph(circle))
+                using (var brush = new SolidBrush(muted)) g.FillPath(brush, glyph);
+            }
+            finally { g.Restore(state); }
             helpTargets[target] = help;
         }
         private void HideHoverHint()
@@ -2342,7 +2415,7 @@ namespace HexGuide.Desktop
             string connection = ModelValue.Text(ModelValue.Object(Model, "connection"), "message");
             if (connection.Length > 0) help += "\n\n当前状态：\n" + WrapHintText(connection);
             DrawHelpHeading(g, hero + (level.Length > 0 && level != "0" ? "  ·  " + level + " 级" : ""), headingFont, accent,
-                new Rectangle(x, y, width, S(27)), help, viewport); y += S(29);
+                new Rectangle(x, y, width, S(23)), help, viewport); y += S(25);
             string status = HeroStatus();
             Write(g, status, smallFont, muted, new Rectangle(x, y, width, NextItemTextHeight(status, smallFont, width)));
         }
@@ -2400,12 +2473,24 @@ namespace HexGuide.Desktop
             bool canConfirm = ModelValue.GameId(Model, out confirmationGame)
                 && ModelValue.Integer(Model, "sessionRevision", out confirmationRevision) && confirmationRevision >= 0;
             string activePendingId = "";
+            bool previousRound = false;
             foreach (object item in ModelValue.Array(Model, "pendingOffers"))
             {
                 var pending = item as Dictionary<string, object>;
-                if (ModelValue.Boolean(pending, "active")) activePendingId = ModelValue.Text(pending, "pendingId");
+                if (ModelValue.Boolean(pending, "active"))
+                {
+                    activePendingId = ModelValue.Text(pending, "pendingId");
+                    previousRound = ModelValue.Boolean(pending, "previousRound");
+                }
             }
+            var older = OlderPendingOffers();
             DrawHelpHeading(g, OffersHeading(), normalFont, accent, new Rectangle(x, y, width, S(22)), OffersHelp, viewport); y += S(27);
+            if (offers.Count > 0 || older.Count > 0)
+            {
+                Write(g, OfferRecordInstruction, smallFont, muted,
+                    new Rectangle(x, y, width, NextItemTextHeight(OfferRecordInstruction, smallFont, width)));
+                y += RecordInstructionHeight(width);
+            }
             if (offers.Count == 0)
             {
                 var ocr = ModelValue.Object(Model, "ocr");
@@ -2417,38 +2502,47 @@ namespace HexGuide.Desktop
             }
             else
             {
-                int index = 0, gap = S(6), cellWidth = Math.Max(1, (width - gap * 2) / 3), cardHeight = S(117);
+                int index = 0, gap = S(6);
+                OfferCardLayout layout = CreateOfferCardLayout(width);
                 foreach (object item in offers)
                 {
                     if (index >= 3) break;
                     var offer = item as Dictionary<string, object>;
-                    int cardX = x + index * (cellWidth + gap);
-                    Rectangle card = new Rectangle(cardX, y, cellWidth, cardHeight);
+                    int cardX = x + index * (layout.CellWidth + gap);
+                    Rectangle card = new Rectangle(cardX, y, layout.CellWidth, layout.CardHeight);
                     using (var brush = new SolidBrush(Color.FromArgb(23, 36, 48))) g.FillRectangle(brush, card);
                     string rank = ModelValue.Text(offer, "rank");
                     DrawOfferFrame(g, card, rank);
-                    int iconSize = Math.Min(S(44), Math.Max(1, cellWidth - S(12)));
-                    Rectangle icon = new Rectangle(cardX + (cellWidth - iconSize) / 2, y + S(6), iconSize, iconSize);
+                    Rectangle icon = new Rectangle(cardX + (layout.CellWidth - layout.IconSize) / 2, y + S(23), layout.IconSize, layout.IconSize);
                     // Candidate statistics are not a sidebar column or tooltip.
                     // The full application retains the complete ranking evidence.
                     var displayOffer = new Dictionary<string, object>(offer);
                     displayOffer.Remove("reason"); displayOffer.Remove("rankingEvidence"); displayOffer.Remove("summary");
                     DrawAugmentIcon(g, displayOffer, icon);
-                    Write(g, rank, smallFont, accent, new Rectangle(cardX + S(5), y + S(3), S(15), S(18)));
-                    DrawOfferName(g, ModelValue.Text(offer, "name"), new Rectangle(cardX + S(3), y + S(54), Math.Max(1, cellWidth - S(6)), S(33)));
-                    PaintButton(g, new Rectangle(cardX + S(3), y + S(91), Math.Max(1, cellWidth - S(6)), S(21)), "确认");
+                    TextRenderer.DrawText(g, OfferRankLabel(rank), smallFont,
+                        new Rectangle(cardX + S(3), y + S(3), Math.Max(1, layout.CellWidth - S(6)), S(18)),
+                        rank == "1" ? Color.FromArgb(216, 181, 101) : muted,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding
+                        | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
+                    DrawOfferName(g, ModelValue.Text(offer, "name"),
+                        new Rectangle(cardX + S(3), y + layout.NameTop, Math.Max(1, layout.CellWidth - S(6)), layout.NameHeight));
+                    Rectangle recordButton = new Rectangle(cardX + S(3), y + layout.ButtonTop,
+                        Math.Max(1, layout.CellWidth - S(6)), layout.ButtonHeight);
+                    PaintRecordButton(g, recordButton, previousRound ? "补记已选" : "确认", canConfirm && viewport.Contains(recordButton));
+                    RegisterOfferHint(new Rectangle(cardX, y, layout.CellWidth, Math.Max(1, layout.ButtonTop - S(2))), displayOffer);
                     string offerId = ModelValue.Text(offer, "id");
-                    Rectangle visibleCard = Rectangle.Intersect(viewport, card);
-                    if (canConfirm && visibleCard.Width > 0 && visibleCard.Height > 0 && offerId.Length > 0)
+                    // A partially visible button is not an action. This excludes
+                    // the card's icon, name, rank and any clipped button edge.
+                    if (canConfirm && viewport.Contains(recordButton) && offerId.Length > 0)
                     {
-                        offerButtons[visibleCard] = offerId;
-                        if (activePendingId.Length > 0) offerPendingIds[visibleCard] = activePendingId;
+                        offerButtons[recordButton] = offerId;
+                        if (activePendingId.Length > 0) offerPendingIds[recordButton] = activePendingId;
                     }
                     index++;
                 }
-                y += S(123) + S(8);
+                y += layout.CardHeight + S(14);
             }
-            foreach (var pending in OlderPendingOffers())
+            foreach (var pending in older)
             {
                 string pendingId = ModelValue.Text(pending, "pendingId"), sequence = ModelValue.Text(pending, "sequence");
                 Write(g, "上一轮待确认 · 第 " + sequence + " 轮", normalFont, accent, new Rectangle(x, y, width, S(23))); y += S(29);
@@ -2457,15 +2551,19 @@ namespace HexGuide.Desktop
                 {
                     if (index++ >= 3) break;
                     var offer = item as Dictionary<string, object>;
-                    Rectangle row = new Rectangle(x, y, width, S(31));
+                    int rowHeight = PendingOfferRowHeight(offer, width);
                     DrawAugmentIcon(g, offer, new Rectangle(x, y + S(2), S(27), S(27)));
-                    Write(g, ModelValue.Text(offer, "name"), smallFont, ForeColor, new Rectangle(x + S(33), y + S(4), Math.Max(1, width - S(85)), S(26)));
-                    PaintButton(g, new Rectangle(x + width - S(47), y, S(47), S(31)), "确认");
-                    Rectangle visible = Rectangle.Intersect(viewport, row);
+                    TextRenderer.DrawText(g, ModelValue.Text(offer, "name"), offerNameFont,
+                        new Rectangle(x + S(33), y + S(3), Math.Max(1, width - S(33) - PendingRecordButtonWidth - S(8)), rowHeight - S(6)), ForeColor,
+                        OfferNameTextFlags | TextFormatFlags.Left | TextFormatFlags.Top
+                        | TextFormatFlags.EndEllipsis | TextFormatFlags.PreserveGraphicsClipping);
+                    Rectangle recordButton = new Rectangle(x + width - PendingRecordButtonWidth, y + (rowHeight - S(31)) / 2, PendingRecordButtonWidth, S(31));
+                    PaintRecordButton(g, recordButton, "补记已选", canConfirm && viewport.Contains(recordButton));
+                    RegisterOfferHint(new Rectangle(x, y, Math.Max(1, width - PendingRecordButtonWidth - S(4)), rowHeight), offer);
                     string id = ModelValue.Text(offer, "id");
-                    if (canConfirm && visible.Width > 0 && visible.Height > 0 && pendingId.Length > 0 && id.Length > 0)
-                        pendingOfferButtons[visible] = new KeyValuePair<string, string>(id, pendingId);
-                    y += S(37);
+                    if (canConfirm && viewport.Contains(recordButton) && pendingId.Length > 0 && id.Length > 0)
+                        pendingOfferButtons[recordButton] = new KeyValuePair<string, string>(id, pendingId);
+                    y += rowHeight + S(6);
                 }
                 y += S(8);
             }
@@ -2532,6 +2630,13 @@ namespace HexGuide.Desktop
         {
             using (var brush = new SolidBrush(Color.FromArgb(35, 56, 69))) graphics.FillRectangle(brush, rectangle);
             TextRenderer.DrawText(graphics, title, smallFont, rectangle, ForeColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        }
+        private void PaintRecordButton(Graphics graphics, Rectangle rectangle, string title, bool enabled)
+        {
+            using (var brush = new SolidBrush(Color.FromArgb(35, 56, 69))) graphics.FillRectangle(brush, rectangle);
+            TextRenderer.DrawText(graphics, title, normalFont, rectangle, enabled ? ForeColor : muted,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix
+                | TextFormatFlags.NoPadding | TextFormatFlags.PreserveGraphicsClipping);
         }
         protected override void OnMouseDown(MouseEventArgs e)
         {
@@ -2679,7 +2784,7 @@ namespace HexGuide.Desktop
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { idleTimer.Stop(); idleTimer.Dispose(); buildIcons.Dispose(); augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); foreach (Image image in augmentIcons.Values) image.Dispose(); augmentIcons.Clear(); }
+            if (disposing) { idleTimer.Stop(); idleTimer.Dispose(); buildIcons.Dispose(); augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); decisionFont.Dispose(); offerNameFont.Dispose(); foreach (Image image in augmentIcons.Values) image.Dispose(); augmentIcons.Clear(); }
             base.Dispose(disposing);
         }
         private static Dictionary<string, object> CreateNextItemFixture()
@@ -2904,6 +3009,16 @@ namespace HexGuide.Desktop
                 foreach (var target in window.helpTargets)
                 {
                     check(window.ClientRectangle.Contains(target.Key) && (target.Value == window.SidebarHelp || window.viewport.Contains(target.Key)), "Help escaped the visible heading.");
+                    RectangleF circle = window.HelpCircleBounds(target.Key);
+                    check(target.Key.Width == window.S(20) && target.Key.Height == window.S(20)
+                        && circle.Width == window.S(14) && circle.Height == window.S(14), "Help refinement changed its hover target or lost its compact circle.");
+                    using (var glyph = window.CreateHelpGlyph(circle))
+                    {
+                        RectangleF ink = glyph.GetBounds();
+                        check(circle.Contains(ink) && Math.Abs(ink.Left + ink.Width / 2F - circle.Left - circle.Width / 2F) < 0.01F
+                            && Math.Abs(ink.Top + ink.Height / 2F - circle.Top - circle.Height / 2F) < 0.01F,
+                            "Help question glyph is clipped or not centered in its circle.");
+                    }
                     var pointer = new Point(target.Key.Left + target.Key.Width / 2, target.Key.Top + target.Key.Height / 2);
                     window.OnMouseMove(new MouseEventArgs(MouseButtons.None, 0, pointer.X, pointer.Y, 0));
                     check(window.activeAugmentHint == target.Value && window.augmentHint.GetToolTip(window) == target.Value, "Hover did not bind the heading explanation.");
@@ -3161,7 +3276,8 @@ namespace HexGuide.Desktop
                 string statusPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-recognition-status.png");
                 int liveStateChecks = ValidateLiveStateFixtures(window, statusPreviewPath);
                 string pendingPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-pending.png");
-                int pendingOfferChecks = ValidatePendingOfferFixtures(pendingPreviewPath);
+                int pendingOfferChecks = ValidatePendingOfferFixtures(pendingPreviewPath)
+                    + ValidateOfferPresentationFixtures(Path.GetDirectoryName(previewPath));
                 string loadingPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-loading.png");
                 int loadingPreviewChecks = ValidateLoadingPreviewFixtures(window, loadingPreviewPath);
                 int buildStatisticsChecks = ValidateBuildStatisticsFixtures(window);
@@ -3183,6 +3299,134 @@ namespace HexGuide.Desktop
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
                 return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + idleHideChecks + nextItemChecks + helpChecks + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + pendingOfferChecks + loadingPreviewChecks + buildStatisticsChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks + selectionChecks }, { "selectionChecks", selectionChecks }, { "idleHideChecks", idleHideChecks }, { "helpChecks", helpChecks }, { "nextItemChecks", nextItemChecks }, { "pendingOfferChecks", pendingOfferChecks }, { "pendingPreviewPath", pendingPreviewPath }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "buildStatisticsChecks", buildStatisticsChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
             }
+        }
+        private static int ValidateOfferPresentationFixtures(string directory)
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool condition, string message) { Require(condition, message); checks++; };
+            check(OfferRankLabel("1") == "首选" && OfferRankLabel("2") == "推荐 2"
+                && OfferRankLabel("3") == "推荐 3" && OfferRankLabel("") == "", "Recommendation labels are ambiguous or invent a rank.");
+            foreach (int width in new int[] { 280, 324, 460 })
+            foreach (int scale in new int[] { 85, 100, 103, 130 })
+            using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false;
+                window.ApplyAppearance(new SidebarAppearance { Width = width, Scale = scale, FontFamily = "yahei", Side = "right" });
+                window.Place(new Rectangle(0, 0, 1200, 900));
+                var fixture = CreateNextItemFixture(); window.Model = fixture;
+                int recorded = 0; string selected = "";
+                window.OfferConfirmed += delegate(string id) { recorded++; selected = id; };
+                using (var bitmap = RenderFixture(window))
+                {
+                    if (width == 324 && scale == 103) bitmap.Save(Path.Combine(directory, "sidebar-recording-324-103.png"), System.Drawing.Imaging.ImageFormat.Png);
+                    Rectangle presentationViewport = window.viewport;
+                    check(Math.Abs(window.offerNameFont.SizeInPoints - 9.5F * scale / 100F) < 0.01
+                        && window.decisionFont.Size > window.headingFont.Size, "Decision typography lost its readable role or the user's scale.");
+                    var buttons = new List<KeyValuePair<Rectangle, string>>(window.offerButtons);
+                    buttons.Sort(delegate(KeyValuePair<Rectangle, string> first, KeyValuePair<Rectangle, string> second) { return first.Key.Left.CompareTo(second.Key.Left); });
+                    check(buttons.Count == 3, "The visible candidate row lost record buttons at " + width + "/" + scale);
+                    ArrayList offers = ModelValue.Array(fixture, "offers");
+                    for (int index = 0; index < buttons.Count; index++)
+                    {
+                        var button = buttons[index]; var offer = offers[index] as Dictionary<string, object>;
+                        check(button.Value == ModelValue.Text(offer, "id") && presentationViewport.Contains(button.Key)
+                            && button.Key.Height == window.S(27), "Recommendation ranking reordered a game position or enlarged its action area.");
+                        Point body = new Point(button.Key.Left + button.Key.Width / 2, button.Key.Top - window.S(12));
+                        int before = recorded;
+                        window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, body.X, body.Y, 0));
+                        window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, body.X, body.Y, 0));
+                        check(recorded == before, "Candidate information recorded a choice without its explicit button.");
+                        window.UpdateHoverHint(body);
+                        check(window.activeAugmentHint.Contains(ModelValue.Text(offer, "name")), "The readable card body lost its full-name tooltip.");
+                        var center = new Point(button.Key.Left + button.Key.Width / 2, button.Key.Top + button.Key.Height / 2);
+                        window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                        window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
+                        check(recorded == before + 1 && selected == button.Value, "Explicit recording failed or targeted the wrong game position.");
+                    }
+                    // Clip exactly one pixel from the bottom of the button row.
+                    // Visible fragments must not remain active hit targets.
+                    Rectangle firstButton = buttons[0].Key;
+                    int originalHeight = window.Height;
+                    window.Height = firstButton.Bottom + window.S(82) - 1;
+                    using (var clipped = RenderFixture(window))
+                        check(window.offerButtons.Count == 0, "A bottom-clipped record button remained clickable.");
+                    int beforeClippedClick = recorded;
+                    Point fragment = new Point(firstButton.Left + firstButton.Width / 2, firstButton.Top + 1);
+                    window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, fragment.X, fragment.Y, 0));
+                    window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, fragment.X, fragment.Y, 0));
+                    check(recorded == beforeClippedClick, "A clipped record-button fragment recorded a choice.");
+                    window.Height = originalHeight;
+                }
+                var longNameOffer = ModelValue.Array(fixture, "offers")[1] as Dictionary<string, object>;
+                longNameOffer["name"] = "升级：需要完整核对的超长海克斯名称与特殊效果";
+                window.Model = fixture; window.ScrollTo(0);
+                using (var bitmap = RenderFixture(window))
+                {
+                    Rectangle longNameViewport = window.viewport;
+                    OfferCardLayout layout = window.CreateOfferCardLayout(longNameViewport.Width);
+                    int lineHeight = TextRenderer.MeasureText("中", window.offerNameFont, Size.Empty,
+                        TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Height;
+                    check(layout.NameHeight <= lineHeight * 3 && Math.Abs(window.offerNameFont.Size - 9.5F * scale / 100F) < 0.01,
+                        "An unusually long name shrank the font or grew an unbounded card.");
+                    bool fullNameAvailable = false;
+                    foreach (var target in window.augmentTargets)
+                        if (ModelValue.Text(target.Value, "id") == ModelValue.Text(longNameOffer, "id")
+                            && ModelValue.Text(target.Value, "name") == ModelValue.Text(longNameOffer, "name")) fullNameAvailable = true;
+                    check(fullNameAvailable, "The truncated long name has no full-name information target.");
+                }
+                check(!window.Visible && window.ShowWithoutActivation && !window.TopMost, "Presentation fixtures activated a game overlay.");
+            }
+            using (var window = new SidebarWindow())
+            {
+                window.remoteIcons = false;
+                window.ApplyAppearance(new SidebarAppearance { Width = 280, Scale = 130, FontFamily = "yahei", Side = "right",
+                    Sections = new string[] { "offers", "owned", "plan", "hero" } });
+                window.Place(new Rectangle(0, 0, 1200, 900));
+                var offer = new Dictionary<string, object> { { "id", "weight-hit" }, { "name", "重量级打击手" }, { "rarity", "gold" } };
+                var fixture = CreateNextItemFixture();
+                fixture["offers"] = new object[0];
+                fixture["pendingOffers"] = new object[] {
+                    new Dictionary<string, object> { { "pendingId", "six-character-name" }, { "sequence", 1 }, { "active", false }, { "offers", new object[] { offer } } }
+                };
+                window.Model = fixture;
+                using (var bitmap = RenderFixture(window))
+                {
+                    bitmap.Save(Path.Combine(directory, "sidebar-pending-long-name-280-130.png"), System.Drawing.Imaging.ImageFormat.Png);
+                    check(window.pendingOfferButtons.Count == 1, "The narrow pending-name fixture lost its fully visible record button.");
+                    Rectangle nameViewport = window.viewport;
+                    Rectangle button = new List<Rectangle>(window.pendingOfferButtons.Keys)[0];
+                    int rowHeight = window.PendingOfferRowHeight(offer, nameViewport.Width);
+                    int rowTop = button.Top - (rowHeight - window.S(31)) / 2;
+                    var nameArea = new Rectangle(nameViewport.Left + window.S(33), rowTop + window.S(3),
+                        nameViewport.Width - window.S(33) - window.PendingRecordButtonWidth - window.S(8), rowHeight - window.S(6));
+                    var expectedFlags = TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix
+                        | TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.PreserveGraphicsClipping;
+                    Size fullName = TextRenderer.MeasureText("重量级打击手", window.offerNameFont, new Size(nameArea.Width, int.MaxValue), expectedFlags);
+                    check(nameViewport.Contains(nameArea) && fullName.Height <= nameArea.Height,
+                        "A real six-character pending name exceeds its measured row.");
+                    // Compare the actual painted row with its full, untruncated text.
+                    // Default glyph padding previously wrapped this name to a clipped second line.
+                    using (var expected = new Bitmap(bitmap))
+                    {
+                        using (Graphics graphics = Graphics.FromImage(expected))
+                        using (var background = new SolidBrush(window.BackColor))
+                        {
+                            graphics.FillRectangle(background, nameArea);
+                            TextRenderer.DrawText(graphics, "重量级打击手", window.offerNameFont, nameArea, window.ForeColor, expectedFlags);
+                        }
+                        // Control and bitmap DCs can shade ClearType edges differently.
+                        // Compare glyph footprints so padding, wrapping and ellipsis regressions
+                        // still fail without depending on PNG metadata or antialias colors.
+                        bool glyphsMatch = true;
+                        int backgroundPixel = window.BackColor.ToArgb();
+                        for (int y = nameArea.Top; y < nameArea.Bottom; y++)
+                        for (int x = nameArea.Left; x < nameArea.Right; x++)
+                            if ((bitmap.GetPixel(x, y).ToArgb() != backgroundPixel) != (expected.GetPixel(x, y).ToArgb() != backgroundPixel)) glyphsMatch = false;
+                        check(glyphsMatch, "The rendered pending name differs from its full text or uses mismatched measurement padding.");
+                    }
+                }
+            }
+            return checks;
         }
         private static int ValidatePendingOfferFixtures(string previewPath)
         {
@@ -3220,6 +3464,11 @@ namespace HexGuide.Desktop
                 window.PendingOfferConfirmed += delegate(string id, string pendingId) { selected = id; selectedPending = pendingId; };
                 foreach (var target in window.pendingOfferButtons)
                 {
+                    selected = ""; selectedPending = "";
+                    Point body = new Point(pendingViewport.Left + window.S(40), target.Key.Top + target.Key.Height / 2);
+                    window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, body.X, body.Y, 0));
+                    window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, body.X, body.Y, 0));
+                    check(selected.Length == 0 && selectedPending.Length == 0, "An older row's information area recorded a selection.");
                     Point center = new Point(target.Key.Left + target.Key.Width / 2, target.Key.Top + target.Key.Height / 2);
                     window.OnMouseDown(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
                     window.OnMouseUp(new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0));
@@ -3357,7 +3606,16 @@ namespace HexGuide.Desktop
                 window.ScrollTo(window.contentHeight);
                 check(window.offerButtons.Count == 0 && window.augmentTargets.Count == 0, "Scrolling kept stale icon hit targets before repaint.");
                 using (var after = RenderFixture(window))
-                    foreach (var target in window.augmentTargets) check(FixtureContains(window.viewport, target.Key), "Scrolled owned icons escaped the viewport.");
+                {
+                    var visibleOwned = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var target in window.augmentTargets)
+                    {
+                        check(FixtureContains(window.viewport, target.Key), "Scrolled owned icons escaped the viewport.");
+                        visibleOwned.Add(ModelValue.Text(target.Value, "id"));
+                    }
+                    foreach (Dictionary<string, object> augment in owned)
+                        check(visibleOwned.Contains(ModelValue.Text(augment, "id")), "Larger candidate names made an owned augment unreachable by scrolling.");
+                }
                 check(!window.Visible && window.ShowWithoutActivation && window.activeAugmentHint.Length == 0, "Icon fixtures displayed or activated a real window or tooltip.");
                 // One source URL may legitimately serve different qualities. Test
                 // opaque detail, partial alpha, and a transparent hole in its art.
@@ -3578,7 +3836,9 @@ namespace HexGuide.Desktop
             Rectangle monitor = new Rectangle(-1920, -100, 1920, 1080);
             window.Place(monitor);
             Require(window.Width == 280 && window.Left == monitor.Left && window.Top == monitor.Top + (monitor.Height - window.Height) / 2 && monitor.Contains(window.Bounds), "Left/center multi-monitor placement failed.");
-            Require(Math.Abs(window.Opacity - 0.75) < 0.001 && Math.Abs(window.headingFont.Size - 18.2F) < 0.01, "Sidebar font or opacity did not update.");
+            Require(Math.Abs(window.Opacity - 0.75) < 0.001 && Math.Abs(window.headingFont.Size - 13.65F) < 0.01
+                && Math.Abs(window.decisionFont.Size - 14.3F) < 0.01 && Math.Abs(window.offerNameFont.Size - 12.35F) < 0.01,
+                "Sidebar font roles or opacity did not follow the saved scale.");
             using (var bitmap = new Bitmap(window.Width, window.Height)) window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
             Require(string.Join(",", window.paintedSections.ToArray()) == "nextItem,offers,owned,hero" && string.Join(",", window.appearance.Sections) == "plan,offers,owned,hero", "Compact projection changed the saved section order.");
             window.Height = 400;

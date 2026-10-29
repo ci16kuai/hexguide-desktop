@@ -12,7 +12,8 @@ export function focusElement(doc,attributes={}){
     contains(target){return this===target||this.children.some(child=>child.contains(target));},
     querySelectorAll(selector){
       const matches=child=>selector==='[id]'?Boolean(child.id):selector==='[data-live-action]'?Boolean(child.dataset.liveAction)
-        :selector==='[data-action]'?Boolean(child.dataset.action):selector==='[data-stats-action]'?Boolean(child.dataset.statsAction):false;
+        :selector==='[data-action]'?Boolean(child.dataset.action):selector==='[data-stats-action]'?Boolean(child.dataset.statsAction)
+        :selector==='[data-disclosure-key]'?Boolean(child.dataset.disclosureKey):false;
       return this.children.flatMap(child=>[...(matches(child)?[child]:[]),...child.querySelectorAll(selector)]);
     },
     replaceChildren(...children){

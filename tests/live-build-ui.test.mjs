@@ -47,6 +47,43 @@ test('expanded build renders observed enemies, actual item icons, short effects 
   assert.match(h.html(),/id="live-build-details" class="live-build-details" hidden/);
 });
 
+test('collapsed build exposes existing equipment references only while its real match context is usable',async()=>{
+  const h=await controllerHarness({}, {expanded:false});
+  const preview=()=>h.html().slice(h.html().indexOf('<div class="live-build-preview"'),h.html().indexOf('<div class="plan-context"'));
+  assert.match(h.html(),/id="live-build-details" class="live-build-details" hidden/);
+  assert.match(preview(),/当前出装参考/);
+  assert.match(preview(),/class="live-item-icon"[^>]+3165\.png/);
+  assert.equal((preview().match(/class="live-item-icon"/g)||[]).length,2);
+  assert.doesNotMatch(preview(),/下一件|下一轮/,'existing build order is not presented as an authoritative next purchase');
+  await h.click('pause');
+  assert.match(preview(),/同步已暂停/);
+  assert.doesNotMatch(preview(),/live-item-icon/);
+  await h.click('pause');
+  assert.match(preview(),/live-item-icon/);
+  await h.update({connection:{status:'waiting'}});
+  assert.match(preview(),/等待连接真实对局/);
+  assert.doesNotMatch(preview(),/live-item-icon/);
+  await h.click('sample');
+  assert.match(preview(),/演示预览不作为本局装备建议/);
+  assert.doesNotMatch(preview(),/live-item-icon/);
+});
+
+test('secondary tools keep their chosen expansion through automatic polls',async()=>{
+  const h=await controllerHarness();
+  assert.match(h.html(),/data-action="focus-session"/);
+  const statsTag=()=>h.html().match(/<dl id="live-observed-stats"[^>]+>/)[0];
+  assert.match(statsTag(),/ hidden /);
+  await h.click('tools-toggle');
+  assert.doesNotMatch(statsTag(),/ hidden /);
+  assert.match(h.html(),/data-live-action="tools-toggle" aria-expanded="true"/);
+  await h.update({gameTime:662});
+  assert.doesNotMatch(statsTag(),/ hidden /);
+  assert.match(h.html(),/data-live-action="ocr-scan"/);
+  await h.click('tools-toggle');
+  await h.update({gameTime:664});
+  assert.match(statsTag(),/ hidden /);
+});
+
 test('live build replaces opponent items and recommendations on the next poll and drops stale rosters',async()=>{
   const h=await controllerHarness();
   await h.update({teams:{status:'detected',ownTeam:'ORDER',allies:[],enemies:[{championId:'Garen',level:12,items:[{id:3065,count:1}]}],observedAt:new Date().toISOString()}});
@@ -78,7 +115,7 @@ test('loading preview opens once per game with equipment only, hiding all augmen
   assert.equal(h.isLoading(),true);
   assert.equal(h.stageChanges,1);
   assert.doesNotMatch(details,/live-build-current|0 级|等级未知|尚未读取到装备/);
-  assert.doesNotMatch(html,/data-ui-id="live-owned-button"|data-ui-id="live-ocr-scan"/);
+  assert.doesNotMatch(html,/data-ui-id="live-owned-button"|data-ui-id="live-ocr-scan"|data-action="focus-session"/);
   assert.match(html,/<dt>等级<\/dt><dd>—<\/dd>/);
   assert.match(html,/<dt>游戏时间<\/dt><dd>—<\/dd>/);
   await h.click('build-toggle');

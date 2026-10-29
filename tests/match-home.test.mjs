@@ -56,15 +56,28 @@ async function appHarness(hash='',options={}){
   };
 }
 
-test('match home owns expanded session controls and all auxiliary routes render without them',async()=>{
+test('match home prioritizes decisions and keeps secondary session controls accessible across updates',async()=>{
   const app=await appHarness();
   assert.match(app.html(),/workspace-home/);
   assert.match(app.html(),/class="session-panel"/);
-  assert.match(app.html(),/class="session-body "/);
+  assert.match(app.html(),/class="session-body collapsed" hidden/);
+  assert.ok(app.html().indexOf('data-ui-id="main-content"')<app.html().indexOf('data-ui-id="session-panel"'));
+  assert.ok(app.html().indexOf('data-ui-id="session-panel"')<app.html().indexOf('data-ui-id="version-panel"'));
   assert.match(app.html(),/id="home-compare"/);
   assert.equal((app.html().match(/class="triple-slot live-offer-waiting/g)||[]).length,3);
-  assert.match(app.html(),/<details class="home-manual-fallback"><summary>/);
+  assert.match(app.html(),/<details class="home-manual-fallback" data-disclosure-key="manual-candidates"><summary id="manual-candidates-summary">/);
   assert.doesNotMatch(app.html(),/<details class="home-manual-fallback" open/);
+  app.click('toggle-session');
+  assert.match(app.html(),/class="session-body "  data-ui-id="session-body"/);
+  assert.match(app.html(),/aria-expanded="true" aria-controls="session-controls"/);
+  app.sync({owned:[],route:'auto',gameId:'fixture-game'});
+  assert.match(app.html(),/aria-expanded="true" aria-controls="session-controls"/);
+  app.click('toggle-session');
+  assert.match(app.html(),/class="session-body collapsed" hidden/);
+  app.click('focus-session');
+  assert.match(app.html(),/aria-expanded="true" aria-controls="session-controls"/);
+  assert.equal(app.node('#live-session-panel').focuses,1);
+  assert.equal(app.node('#live-session-panel').scrolls,1);
   for(const route of ['library','champions','stats','synergy','compare']){
     app.navigate(route);
     assert.match(app.html(),/workspace-tool/);
@@ -220,6 +233,24 @@ test('automatic live polling restores only foreground controls replaced inside l
     app.refreshLive();
     assert.equal(next.focuses,mode==='foreground'?1:0,mode);
     assert.equal(old.focuses,0,mode);
+  }
+});
+
+test('polling, offers and manual corrections preserve native disclosures and their focused summaries',async()=>{
+  for(const trigger of ['poll','offers','session-sync','manual-candidate','route'])for(const open of [true,false]){
+    const app=await appHarness('#live'),root=app.node(trigger==='poll'?'#live-content':'#app');
+    const oldSummary=focusElement(app.document,{id:'live-help-summary'}),nextSummary=focusElement(app.document,{id:'live-help-summary'});
+    const old=focusElement(app.document,{dataset:{disclosureKey:'connection-help'},open,children:[oldSummary]});
+    const next=focusElement(app.document,{dataset:{disclosureKey:'connection-help'},open:!open,children:[nextSummary]});
+    root.replaceChildren(old);root.nextChildren=[next];app.document.activeElement=oldSummary;
+    if(trigger==='poll')app.refreshLive();
+    else if(trigger==='offers')app.offers(active.slice(0,3).map(a=>String(a.id)));
+    else if(trigger==='session-sync')app.sync({owned:[],route:'auto',gameId:'fixture-game'});
+    else if(trigger==='manual-candidate')app.click('remove-candidate',{slot:'0'});
+    else app.change('route','tank');
+    assert.equal(next.open,open,`${trigger}: disclosure ${open?'open':'closed'}`);
+    assert.equal(nextSummary.focuses,1,trigger);
+    assert.deepEqual(nextSummary.focusOptions,{preventScroll:true});
   }
 });
 

@@ -37,6 +37,37 @@ html[data-appearance-panel] .workspace.workspace-tool>.main-content,
 .page-champion-context strong{font-size:13px}
 .page-champion-context p{font-size:11px;color:var(--muted)}
 .page-champion-context button{font-size:12px;color:var(--cyan);white-space:nowrap;min-height:36px}
+/* Current decisions lead. The existing editor containers and saved overrides
+   keep their identities; manual corrections and version details follow them. */
+.workspace-home>.main-content{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr));gap:24px;align-items:start}
+.workspace-home #live-content,.workspace-home .home-compare{min-width:0}
+.workspace-home .home-compare{margin:0;padding:0;border-top:0}
+.workspace-home .home-compare>.section-heading{gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.workspace-home .home-compare>.section-heading h2{font-size:23px}
+.workspace-home .home-compare>.section-heading .section-subtitle{font-size:12px;line-height:1.8;max-width:40em}
+.workspace-home .home-compare .triple-grid{gap:10px}
+.workspace-home .home-compare .triple-slot{padding:36px 12px 16px;min-width:0}
+.workspace-home .home-compare .triple-slot h3{font-size:15px;line-height:1.6;overflow-wrap:anywhere}
+.workspace-home .home-compare .slot-number{font-size:11px}
+.workspace-home .home-compare .live-offer-waiting{min-height:200px}
+.workspace-home .home-compare .live-offer-waiting p{font-size:12px;line-height:1.8}
+.workspace-home .home-compare .compare-actions small,.workspace-home .home-manual-fallback{font-size:12px;line-height:1.8}
+.workspace-home .home-manual-fallback{margin-top:16px}
+.workspace-home .home-manual-fallback summary{min-height:36px;cursor:pointer;color:var(--cyan)}
+.workspace-home .session-top{gap:12px;flex-wrap:wrap}
+.workspace-home .session-top h2{flex:1;font-size:14px}
+.workspace-home .session-top .text-button{display:inline-block}
+.workspace-home .session-toggle{display:inline-flex;align-items:center;min-height:36px;font-size:12px;color:var(--cyan);cursor:pointer}
+.workspace-home .session-body.collapsed,.workspace-home .session-body[hidden]{display:none}
+/* A saved column preference controls open layout, never disclosure visibility. */
+#session-controls[hidden]{display:none!important}
+#live-session-panel{scroll-margin-top:24px;outline:none}
+#live-session-panel:focus-visible{outline:2px solid var(--gold);outline-offset:4px}
+.version-panel-disclosure{display:block;margin:24px 0 0;padding:12px 16px}
+.version-panel-disclosure>summary{cursor:pointer;min-height:24px;font-size:12px;color:var(--muted)}
+.version-panel-disclosure[open]>div{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 20px 4px 0}
+.version-panel-disclosure[open]>button{display:inline-block;min-height:32px;margin-top:8px}
+.version-panel-disclosure:not([open])>:not(summary){display:none}
 @media(max-width:1240px){
   .topbar{grid-template-columns:minmax(0,1fr) auto auto auto;column-gap:14px;padding-top:14px;min-height:0}
   .topbar .main-nav{grid-row:2;grid-column:1/-1;justify-content:flex-start;gap:26px;margin:0;min-height:48px}
@@ -54,6 +85,8 @@ html[data-appearance-panel] .workspace.workspace-tool>.main-content,
   .topbar .main-nav>a{min-height:41px;font-size:12px;justify-content:flex-start;gap:5px}
   .topbar .main-nav>a span{font-size:16px}
   .workspace.workspace-home,.workspace.workspace-tool{gap:20px}
+  .workspace-home>.main-content{display:block}
+  .workspace-home .home-compare{margin-top:24px;padding-top:20px;border-top:1px solid var(--line)}
   .workspace-home .session-top{padding:12px 14px}
   .workspace-home .session-body{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;padding:14px}
   .workspace-home .session-body.collapsed{display:none}
