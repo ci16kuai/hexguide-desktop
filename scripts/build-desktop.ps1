@@ -78,6 +78,7 @@ $compilerArguments = @('/nologo', '/target:winexe', '/platform:x64', '/optimize+
 foreach ($reference in $references) { $compilerArguments += '/reference:' + $reference }
 $compilerArguments += Join-Path $projectRoot 'native\Program.cs'
 $compilerArguments += Join-Path $projectRoot 'native\ApplicationInstance.cs'
+$compilerArguments += Join-Path $projectRoot 'native\MainWindowRecovery.cs'
 $compilerArguments += Join-Path $projectRoot 'native\RemoteIconCache.cs'
 $compilerArguments += Join-Path $projectRoot 'native\SidebarShortcut.cs'
 $compilerArguments += Join-Path $projectRoot 'native\SidebarAutoHide.cs'

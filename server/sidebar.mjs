@@ -364,7 +364,7 @@ export class BackgroundSidebar {
     const eligible = this.selectionEligible(live);
     const selection = this.selectionObserver.get(this.selectionContext(), eligible);
     const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), eligible);
-    return {version:'1.17.13', recognitionAt:this.now(), updatedAt:live.observedAt || new Date(this.now()).toISOString(), connection:live.connection,
+    return {version:'1.17.14', recognitionAt:this.now(), updatedAt:live.observedAt || new Date(this.now()).toISOString(), connection:live.connection,
       phase:live.phase, stage:live.stage || 'waiting', gameId:this.session.gameId,
       gameEpoch:this.gameEpoch, sessionRevision:this.session.revision,
       mode:live.mode || {queueId:null,isMayhem:false,known:false},

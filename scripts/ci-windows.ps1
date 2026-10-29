@@ -51,7 +51,7 @@ try {
             '',
             ('Version: **' + $version + '**'),
             '',
-            'Node tests, native selection, instance handling and sidebar fixtures passed.',
+            'Node tests, native selection, instance handling, isolated main-window recovery and sidebar fixtures passed.',
             'Download the installer or portable ZIP from this run''s Windows artifact; SHA-256 checksums are included.',
             'These are unsigned CI builds. Offline checks do not establish live-game recognition accuracy.'
         ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8

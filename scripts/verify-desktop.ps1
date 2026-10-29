@@ -36,7 +36,7 @@ $summary = [ordered]@{
     error = $null
     stages = @()
 }
-foreach ($name in @('preflight', 'node-tests', 'build', 'native-selection', 'native-instance', 'sidebar-preview')) {
+foreach ($name in @('preflight', 'node-tests', 'build', 'native-selection', 'native-instance', 'main-window-recovery', 'sidebar-preview')) {
     $summary.stages += [ordered]@{ name = $name; status = 'not-run' }
 }
 $currentStage = 'preflight'
@@ -177,6 +177,14 @@ try {
         $result = $output | ConvertFrom-Json
         Assert-PositiveInteger $result.checks 'checks'
         if ($result.mode -ne 'offline-instance-no-ui' -or $result.liveGameVerified -isnot [bool] -or $result.liveGameVerified -or $result.checks -lt 22) { throw 'Unexpected instance fixture contract.' }
+        $result
+    }
+    $currentStage = 'main-window-recovery'
+    Invoke-Stage -Name $currentStage -Executable $powershell -Arguments @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'test-main-window-recovery.ps1'), '-WorkPath', (Join-Path $run 'main-window-recovery')) -TimeoutSeconds 60 -Validate {
+        param($output)
+        $result = $output | ConvertFrom-Json
+        Assert-PositiveInteger $result.checks 'checks'
+        if ($result.mode -ne 'isolated-main-window-recovery' -or $result.liveGameVerified -isnot [bool] -or $result.liveGameVerified) { throw 'Unexpected main window recovery fixture contract.' }
         $result
     }
     $currentStage = 'sidebar-preview'

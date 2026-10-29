@@ -34,7 +34,7 @@ test('writes only fixed diagnostic fields and imports the scheduler mode allowli
   assert.deepEqual(Object.keys(value).sort(), ['schemaVersion','appVersion','updatedAtUtc','mode','due',
     'intervalMs','nextInMs','windowRemainingMs','trigger','windowId','scanCount','failureCount','lastDurationMs'].sort());
   assert.equal(value.schemaVersion, 2);
-  assert.equal(value.appVersion, '1.17.13');
+  assert.equal(value.appVersion, '1.17.14');
   assert.equal(value.updatedAtUtc, new Date(TIME).toISOString());
   assert.equal(value.trigger, 'respawn');
   assert.equal(value.windowId, 7);
