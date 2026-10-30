@@ -1,0 +1,18 @@
+import {readFile} from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {readApiKey,translateFields} from './maintenance.mjs';
+import {validateFeed} from './validate-feed.mjs';
+
+export async function verifyOpenAi({feedDirectory,key,translator=translateFields}={}) {
+  const index=await validateFeed(feedDirectory);
+  if(!index.entries.length)throw new Error('An existing real announcement is required for API verification.');
+  const article=JSON.parse(await readFile(path.join(feedDirectory,`${index.entries[0].id}.json`),'utf8'));
+  const change=structuredClone(article.changes[0]);
+  const result=await translator([change],{key});
+  return {status:'verified',announcementId:article.id,fields:1,model:result.model,usage:result.usage};
+}
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
+  try{console.log(JSON.stringify(await verifyOpenAi({feedDirectory:path.resolve(process.argv[2]??''),key:await readApiKey()})));}
+  catch(error){console.error(JSON.stringify({status:'failed',message:String(error.message).replace(/sk-[A-Za-z0-9_-]+/g,'[redacted]').slice(0,700)}));process.exitCode=1;}
+}

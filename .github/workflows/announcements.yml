@@ -1,0 +1,101 @@
+name: Publish equipment and augment announcements
+
+on:
+  schedule:
+    - cron: '37 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      verify_api:
+        description: Verify one real announcement field with OpenAI before checking updates
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hexguide-announcements-publisher
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'ci16kuai/hexguide-desktop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Check out maintenance code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Check out published history and checkpoint
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: codex/announcements-feed
+          path: publisher
+      - name: Test numerical comparison and publication contracts
+        run: node --test source/tests/announcement-maintenance.test.mjs source/tests/announcement-cloud.test.mjs
+      - name: Restore completed AI drafts from interrupted publication
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: publisher/.maintenance/draft-*.json
+          key: announcement-drafts-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: announcement-drafts-v1-
+      - name: Check sources and generate Chinese notices
+        id: maintain
+        env:
+          OPENAI_API_KEY: ${{ secrets.HEXGUIDE_OPENAI_API_KEY }}
+          VERIFY_API: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_api && 'true' || 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module -e "import {readApiKey} from './source/tools/version-maintenance/maintenance.mjs'; await readApiKey();"
+          if [[ "$VERIFY_API" == "true" ]]; then
+            node source/tools/version-maintenance/verify-openai.mjs publisher/announcements
+          fi
+          node source/tools/version-maintenance/run.mjs --state-dir publisher/.maintenance --feed-dir publisher/announcements
+      - name: Validate immutable announcement history
+        run: node source/tools/version-maintenance/validate-feed.mjs publisher/announcements
+      - name: Publish announcements and durable checkpoint together
+        working-directory: publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- announcements .maintenance
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Check and publish verified numerical update notices'
+          for attempt in 1 2 3; do
+            if git push origin HEAD:refs/heads/codex/announcements-feed; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
+      - name: Preserve completed AI drafts for the next hosted retry
+        if: always() && steps.maintain.outcome != 'skipped'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: publisher/.maintenance/draft-*.json
+          key: announcement-drafts-v1-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Preserve checkpoint diagnostics for recovery
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: announcement-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            publisher/.maintenance/
+            publisher/announcements/
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: warn
