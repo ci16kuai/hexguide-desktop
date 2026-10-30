@@ -3,8 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": {"node": ">=22"},
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
-    "openai": "7.45.1"
+    "openai": "7.45.1",
+    "parse5": "8.0.0"
   }
 }

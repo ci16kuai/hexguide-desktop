@@ -17,7 +17,7 @@ function equalToken(received, expected) {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-export async function createLocalServer({collector, scanner, sidebar, appearance, layout, statistics, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
+export async function createLocalServer({collector, scanner, sidebar, appearance, layout, statistics, announcements, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
   if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
   const root = await realpath(staticDirectory);
   let expectedHost;
@@ -36,7 +36,7 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
     let pathname;
     try { pathname = decodeURIComponent(new URL(request.url, `http://${expectedHost}`).pathname); }
     catch { return send(response, 400, {error:'Invalid URL.'}); }
-    const writeRequest = ['/api/ocr', '/api/recognize-once', '/api/session', '/api/session/confirm', '/api/session/reset', '/api/sidebar/ocr', '/api/sidebar/selection', '/api/sidebar/panel', '/api/sidebar/life', '/api/appearance', '/api/layout'].includes(pathname) && request.method === 'POST';
+    const writeRequest = ['/api/ocr', '/api/recognize-once', '/api/session', '/api/session/confirm', '/api/session/reset', '/api/sidebar/ocr', '/api/sidebar/selection', '/api/sidebar/panel', '/api/sidebar/life', '/api/appearance', '/api/layout', '/api/announcements/check', '/api/announcements/read'].includes(pathname) && request.method === 'POST';
     if (!writeRequest && (!['GET', 'HEAD'].includes(request.method) || request.headers['transfer-encoding'] || Number(request.headers['content-length'] || 0) !== 0)) {
       request.resume();
       return send(response, 405, {error:'Only bodyless GET and HEAD requests are permitted.'});
@@ -60,6 +60,17 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
             if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return send(response, 400, {error:'An object is required.'});
           }
         } catch { return send(response, 400, {error:'Invalid request body.'}); }
+        if (pathname === '/api/announcements/check' || pathname === '/api/announcements/read') {
+          if (!announcements) return send(response,503,{error:'Announcements unavailable.'});
+          try {
+            if(pathname.endsWith('/check')) {
+              if(Object.keys(parsed).length)return send(response,400,{error:'Check takes no input.'});
+              return send(response,200,await announcements.check());
+            }
+            if(Object.keys(parsed).length!==1 || typeof parsed.id!=='string')return send(response,400,{error:'An announcement ID is required.'});
+            return send(response,200,await announcements.markRead(parsed.id));
+          } catch { return send(response,400,{error:'Announcement could not be updated.'}); }
+        }
         if (pathname === '/api/layout') {
           if (!layout) return send(response, 503, {error:'Interface layout settings are unavailable.'});
           try { return send(response, 200, await layout.set(parsed)); }
@@ -114,6 +125,12 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
         try { return send(response, 200, sidebar.getRecognitionModel()); }
         catch { return send(response, 503, {error:'Recognition observation is unavailable.'}); }
       }
+      if (pathname === '/api/announcements') return announcements ? send(response,200,announcements.getList()) : send(response,503,{error:'Announcements unavailable.'});
+      if (pathname.startsWith('/api/announcements/')) {
+        if(!announcements)return send(response,503,{error:'Announcements unavailable.'});
+        try { return send(response,200,await announcements.getArticle(pathname.slice('/api/announcements/'.length))); }
+        catch { return send(response,503,{error:'Announcement could not be loaded.'}); }
+      }
       if (pathname === '/api/appearance') return appearance ? send(response, 200, appearance.get()) : send(response, 503, {error:'Appearance settings are unavailable.'});
       if (pathname === '/api/layout') return layout ? send(response, 200, layout.get()) : send(response, 503, {error:'Interface layout settings are unavailable.'});
       if (pathname === '/api/statistics/status') return statistics ? send(response, 200, statistics.getStatus()) : send(response, 503, {error:'Statistics updates are unavailable.'});
@@ -145,6 +162,7 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
     server.listen(port, '127.0.0.1', () => { expectedHost = `127.0.0.1:${server.address().port}`; resolve(); });
   });
   return {server, port:server.address().port, token, close:async () => {
+    await announcements?.close();
     await sidebar?.stop();
     await appearance?.flush();
     await layout?.flush();

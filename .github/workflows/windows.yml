@@ -31,6 +31,8 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Install maintenance parsing and Agent dependencies
+        run: npm ci --prefix tools/version-maintenance --ignore-scripts --no-audit --no-fund
       - name: Run tests and build Windows packages
         run: |
           $ciWork = Join-Path $env:RUNNER_TEMP 'hexguide-ci'

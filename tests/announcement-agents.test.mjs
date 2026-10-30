@@ -8,6 +8,7 @@ import {runAgentMaintenance} from '../tools/version-maintenance/run-agent.mjs';
 import {finalizeAgentRun} from '../tools/version-maintenance/finalize-agent-run.mjs';
 import {setupAgent} from '../tools/version-maintenance/setup-agent.mjs';
 import {validateFeed} from '../tools/version-maintenance/validate-feed.mjs';
+import {runMaintenance} from '../tools/version-maintenance/maintenance.mjs';
 
 const config={schemaVersion:1,agentId:'agent_test',name:'公告助手',model:'gpt-6-luna'};
 const change=(i=1)=>({key:`item:${i}:damage`,kind:'item',entityId:String(i),name:'测试装备',field:'damage',before:60,after:65,unit:'',scale:1});
@@ -17,7 +18,7 @@ function sdk({output,turnStatus='completed',usage={input_tokens:100,output_token
     async create(body) {
       requests.push(body);const id=`sess_${++sequence}`,turnId=`turn_${sequence}`,input=JSON.parse(body.input);
       sessions.set(id,{id,agent:{id:config.agentId,model:'gpt-6-luna'},metadata:body.metadata,status:activeStatus,usage});
-      const value=output??(input.task==='translate_fields'?{translations:input.fields.map(row=>({key:row.key,label:'攻击力'}))}:{status:'checked',summary:'已完成数值检查。'});
+      const value=output??(input.task==='translate_fields'?{translations:input.fields.map(row=>({key:row.key,label:'攻击力'}))}:input.task==='official_audit'?{acceptedKeys:input.rows.map(row=>row.key),rejectedKeys:[],summary:'官网改动范围完整。'}:{status:'checked',summary:'已完成数值检查。'});
       return {controller:{abort(){}},withResultCollection(){},async *[Symbol.asyncIterator](){yield {type:'agent.session.created',session:{id}};yield {type:'agent.session.turn.created',session_id:id,turn_id:turnId};if(streamError)throw Error('connection lost');},
         async finalResult(){return {session_id:id,turn_id:turnId,turn:{id:turnId,session_id:id,status:turnStatus,usage},output_text:JSON.stringify(value)};}};
     },
@@ -50,13 +51,18 @@ test('unknown usage stays null and is not reported as zero tokens',async()=>{
   const fake=sdk({usage:null}),agent=new AnnouncementAgent({client:fake.client,config,runId:'usage-test'});
   await agent.recordCheck({changeCount:0});assert.equal(agent.summary.usage,null);assert.equal(agent.summary.sessions[0].usage,null);
 });
+test('official audit uses bounded real Agent sessions and cannot mutate source facts or silently drop keys',async()=>{
+  const fake=sdk(),agent=new AnnouncementAgent({client:fake.client,config,runId:'official-audit-test'}),rows=Array.from({length:75},(_,i)=>({key:String(i),kind:'champion',name:'测试英雄',mode:'general',text:'伤害：12 ⇒ 15(近战) / 10(远程)'})),before=structuredClone(rows);
+  const result=await agent.auditOfficial(rows);assert.equal(fake.requests.length,2);assert.equal(result.acceptedKeys.length,75);assert.deepEqual(rows,before);assert.ok(fake.requests.every(body=>JSON.parse(body.input).task==='official_audit'));
+  const bad=sdk({output:{acceptedKeys:[],rejectedKeys:[],summary:''}});await assert.rejects(new AnnouncementAgent({client:bad.client,config,runId:'missing-official'}).auditOfficial(rows),/coverage/);
+});
 async function fixture() {
   const root=await mkdtemp(path.join(os.tmpdir(),'hexguide-agents-maintenance-')),stateDirectory=path.join(root,'state'),feedDirectory=path.join(root,'feed');
   const catalog=(version,ad)=>({schemaVersion:1,version,clientVersion:version.split('.').slice(0,2).join('.'),sources:[{name:'Riot',url:'https://ddragon.leagueoflegends.com/data.json',sha256:'c'.repeat(64)}],items:{'1001':{name:'装备',numbers:{damage:ad},description:''}},augments:{}});
   const old=catalog('16.20.1',60),current=catalog('16.21.1',65);
   await mkdir(stateDirectory);await writeFile(path.join(stateDirectory,'snapshot.json'),JSON.stringify(old));
   const envFile=path.join(root,'.env');await writeFile(envFile,'OPENAI_API_KEY=sk-unit-test-only\n');
-  return {root,stateDirectory,feedDirectory,current,options:{stateDirectory,feedDirectory,envFile,officialProvider:async()=>null,versionsProvider:async()=>['16.21.1','16.20.1'],catalogProvider:async()=>current}};
+  return {root,stateDirectory,feedDirectory,current,options:{maintenance:runMaintenance,stateDirectory,feedDirectory,envFile,officialProvider:async()=>null,versionsProvider:async()=>['16.21.1','16.20.1'],catalogProvider:async()=>current}};
 }
 test('a generated notice and unchanged check both retain real Agent run IDs while preserving public history',async()=>{
   const f=await fixture(),fake=sdk();

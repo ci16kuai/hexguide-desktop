@@ -9,6 +9,11 @@ export async function validateFeed(directory) {
   try{index=validateIndex(JSON.parse(await readFile(path.join(directory,'index-v2.json'),'utf8')));}catch(error){if(error.code!=='ENOENT')throw error;}
   if(legacy.entries.some(row=>row.championCount||!index.entries.some(full=>JSON.stringify(full)===JSON.stringify(row)))
     ||index.entries.filter(row=>!row.championCount).length!==legacy.entries.length)throw Error('Legacy announcement index mismatch.');
+  try{
+    const complete=validateIndex(JSON.parse(await readFile(path.join(directory,'index-v3.json'),'utf8')));
+    if(index.entries.some(row=>!complete.entries.some(full=>JSON.stringify(full)===JSON.stringify(row))))throw Error('Official index lost previous immutable history.');
+    index=complete;
+  }catch(error){if(error.code!=='ENOENT')throw error;}
   for(const row of index.entries) {
     const body=await readFile(path.join(directory,`${row.id}.json`),'utf8');
     if(digest(body)!==row.sha256)throw new Error('Announcement file hash mismatch.');

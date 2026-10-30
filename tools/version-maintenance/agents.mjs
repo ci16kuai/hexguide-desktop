@@ -1,6 +1,7 @@
 import {EDITOR_INSTRUCTIONS,fieldPayload,translationSchema,validateTranslations} from './maintenance.mjs';
+import {officialAuditSchema,validateOfficialAudit} from './official-maintenance.mjs';
 
-export const AGENT_NAME='海克斯指南 · 装备与海克斯更新公告';
+export const AGENT_NAME='海克斯指南 · 英雄、装备与海克斯公告';
 export const AGENT_DEFINITION={name:AGENT_NAME,model:'gpt-6-luna',instructions:EDITOR_INSTRUCTIONS,reasoning:{effort:'none'},tools:[],text:{verbosity:'low'},
   metadata:{application:'hexguide',purpose:'numerical-announcements',repository:'ci16kuai/hexguide-desktop',contract_version:'1'}};
 export const safeError=error=>String(error?.message??error).replace(/sk-[A-Za-z0-9_-]+/g,'[redacted]').slice(0,700);
@@ -65,6 +66,15 @@ export class AnnouncementAgent {
     const parsed=JSON.parse(result.output);
     if(parsed.status!=='checked'||typeof parsed.summary!=='string'||parsed.summary.length>500)throw Error('Invalid announcement check receipt.');
     return result;
+  }
+  async auditOfficial(changes){
+    const acceptedKeys=[];const summaries=[];
+    for(let offset=0;offset<changes.length;offset+=64){
+      const batch=changes.slice(offset,offset+64),rows=batch.map(({key,kind,name,mode,text,ability})=>({key,kind,name,mode,text,...(ability?{ability}:{})}));
+      const result=await this.run({task:'official_audit',excludedModes:['classic'],rows},officialAuditSchema(batch),'official-audit');
+      const checked=validateOfficialAudit(batch,result.output);acceptedKeys.push(...checked.acceptedKeys);summaries.push(checked.summary);
+    }
+    return validateOfficialAudit(changes,{acceptedKeys,rejectedKeys:[],summary:summaries.join(' ').slice(0,700)});
   }
   async markPublication(status) {
     if(!['published','failed','verification'].includes(status))throw Error('Invalid publication status.');

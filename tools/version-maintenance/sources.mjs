@@ -8,7 +8,10 @@ export async function fetchText(url, {fetchImpl=fetch, maxBytes=24*1024*1024, ti
   if (Number(response.headers.get('content-length')) > maxBytes) throw new Error('Source too large.');
   let size=0; const chunks=[];
   for await (const chunk of response.body) { size+=chunk.length; if(size>maxBytes) throw new Error('Source too large.'); chunks.push(chunk); }
-  return Buffer.concat(chunks).toString('utf8');
+  const bytes=Buffer.concat(chunks),header=response.headers.get('content-type')??'',probe=bytes.subarray(0,4096).toString('latin1');
+  const charset=/charset\s*=\s*["']?\s*([a-z0-9_-]+)/i.exec(header)?.[1]
+    ??(/text\/html/i.test(header)||/<meta\b/i.test(probe)?/charset\s*=\s*["']?\s*([a-z0-9_-]+)/i.exec(probe)?.[1]:null);
+  return /^(gbk|gb2312|gb18030)$/i.test(charset??'')?new TextDecoder('gb18030').decode(bytes):bytes.toString('utf8');
 }
 export const plain = text => String(text??'').replace(/<[^>]*>/g,' ').replace(/&nbsp;|&#160;/g,' ').replace(/&amp;/g,'&').replace(/\s+/g,' ').trim();
 export const clientVersion = v => v.split('.').slice(0,2).join('.');

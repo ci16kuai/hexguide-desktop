@@ -38,7 +38,7 @@ export class AnnouncementStore {
   }
   async #save(name,data) { return this.#saveText(name,JSON.stringify(data)); }
   async load() {
-    if(this.#bundled){for(const filename of ['index-v2.json','index.json']){try{this.#index=validateIndex(JSON.parse(await readBounded(path.join(this.#bundled,filename),1024*1024)));break;}catch{}}}
+    if(this.#bundled){for(const filename of ['index-v3.json','index-v2.json','index.json']){try{this.#index=validateIndex(JSON.parse(await readBounded(path.join(this.#bundled,filename),1024*1024)));break;}catch{}}}
     if(this.#bundled)try{this.#mergePresentation(JSON.parse(await readBounded(path.join(this.#bundled,'presentation.json'),2*1024*1024)));}catch{}
     if(!this.#directory)return this;
     await mkdir(this.#directory,{recursive:true});
@@ -50,14 +50,15 @@ export class AnnouncementStore {
     return this;
   }
   getList() {
-    return {entries:this.#index.entries.map(row=>({...row,...(this.#metadata(row)?.official?{official:this.#metadata(row).official}:{}),read:this.#read.has(row.id)})),unreadCount:this.#index.entries.filter(row=>!this.#read.has(row.id)).length,
+    const superseded=new Map(this.#index.entries.flatMap(row=>(row.supersedes??[]).map(id=>[id,row.id])));
+    return {entries:this.#index.entries.map(row=>({...row,...(this.#metadata(row)?.official?{official:this.#metadata(row).official}:{}),...(superseded.has(row.id)?{supersededBy:superseded.get(row.id)}:{}),read:this.#read.has(row.id)})),unreadCount:this.#index.entries.filter(row=>!this.#read.has(row.id)&&!superseded.has(row.id)).length,
       lastCheckedAt:this.#lastChecked,error:this.#error,checking:Boolean(this.#pending)};
   }
   #mergePresentation(input){for(const row of validatePresentation(input).articles){if(!this.#index.entries.some(summary=>summary.id===row.id&&summary.sha256===row.sha256))continue;const prior=this.#presentation.get(row.id);if(!prior||Date.parse(row.updatedAt??'1970-01-01')>=Date.parse(prior.updatedAt??'1970-01-01'))this.#presentation.set(row.id,row);}}
   #metadata(summary){const row=this.#presentation.get(summary.id);return row?.sha256===summary.sha256?row:null;}
   #decorate(article,summary){
     const metadata=this.#metadata(summary);
-    return {...article,...(metadata?.official?{official:metadata.official}:{}),changes:article.changes.map(row=>({...row,...(metadata?.icons[row.key]?{icon:metadata.icons[row.key]}:{})}))};
+    return {...article,...(metadata?.official?{official:metadata.official}:{}),changes:article.changes.map(row=>({...row,...(metadata?.icons[row.key]?{icon:metadata.icons[row.key]}:{}),...(row.kind==='champion'&&metadata?.portraits?.[row.entityId]?{championIcon:metadata.portraits[row.entityId]}:{})}))};
   }
   async #download(filename,maximum) {
     if(this.#closed)throw new Error('Announcement store closed.');
@@ -72,7 +73,8 @@ export class AnnouncementStore {
     if(this.#pending)return this.#pending;
     this.#pending=(async()=>{
       try {
-        let index;try{index=validateIndex(JSON.parse(await this.#download('index-v2.json',1024*1024)));}catch{index=validateIndex(JSON.parse(await this.#download('index.json',1024*1024)));}
+        let index;for(const filename of ['index-v3.json','index-v2.json','index.json']){try{index=validateIndex(JSON.parse(await this.#download(filename,1024*1024)));break;}catch{}}
+        if(!index)throw Error('Announcement index unavailable.');
         const next=mergeHistory(this.#index,index);
         if(this.#closed)return this.getList();
         await this.#save('index.json',next);this.#index=next;this.#error=null;

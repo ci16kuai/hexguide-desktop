@@ -1,0 +1,7 @@
+/* The native caption owns navigation and window controls on desktop. Keep the
+   original registered header for normal browsers and saved-layout compatibility. */
+html.desktop-native-chrome #page-shell > .topbar{display:none!important}
+
+/* Hide only the desktop page's outer rail; keep native scrolling available. */
+html.desktop-native-chrome{scrollbar-width:none}
+html.desktop-native-chrome::-webkit-scrollbar{display:none}

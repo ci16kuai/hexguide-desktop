@@ -21,9 +21,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.17.16.0")]
-[assembly: AssemblyFileVersion("1.17.16.0")]
-[assembly: AssemblyInformationalVersion("1.17.16")]
+[assembly: AssemblyVersion("1.18.0.0")]
+[assembly: AssemblyFileVersion("1.18.0.0")]
+[assembly: AssemblyInformationalVersion("1.18.0")]
 
 namespace HexGuide.Desktop
 {
@@ -71,7 +71,7 @@ namespace HexGuide.Desktop
                         + ScreenLifeObserver.ValidateFixtures() + ScreenLifeController.ValidateFixtures() + OwnedPanelWatcher.ValidateFixtures()
                         + RemoteIconCache.ValidateFixtures() + GameWindowCapture.ValidateFixtures() + SelectionFrameSynchronizerFixtures.Run();
                     Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                        { "version", "1.17.16" }, { "checks", checks },
+                        { "version", "1.18.0" }, { "checks", checks },
                         { "titleProbeVersion", 1 },
                         { "nativeDiagnosticMaxBytes", ScreenSelectionWatcher.LargestDiagnosticFixtureBytes },
                         { "mode", "offline-no-ui" }, { "liveGameVerified", false }
@@ -315,7 +315,8 @@ namespace HexGuide.Desktop
         private readonly string dataDirectory;
         private readonly Label status;
         private readonly WebView2 browser;
-        private readonly ToolStripButton reload;
+        private readonly DesktopTitleBar titleBar;
+        private readonly MainWindowChrome windowChrome;
         private Process backend;
         private ChildJob job;
         private Uri localOrigin;
@@ -323,12 +324,12 @@ namespace HexGuide.Desktop
         private bool stoppingBackend;
         private readonly NotifyIcon tray;
         private readonly ToolStripMenuItem scanMenu;
-        private readonly ToolStripLabel shortcutStatus;
         private readonly SidebarWindow sidebar;
         private readonly Timer refreshTimer;
         private readonly Timer recognitionTimer;
         private readonly bool startHidden;
         private bool mainRecoveryQueued;
+        private bool desktopPageReady, browserEngineFailed;
         private readonly SidebarVisibilityState sidebarVisibility;
         private readonly SidebarVisibilityDelay sidebarVisibilityDelay = new SidebarVisibilityDelay();
         private readonly Stopwatch sidebarVisibilityClock = Stopwatch.StartNew();
@@ -362,7 +363,10 @@ namespace HexGuide.Desktop
             OverlayVisibilityCompatibility.Prewarm();
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.17.16 · 我的这一局";
+            Text = "海克斯指南 1.18.0 · 我的这一局";
+            // The host owns every client pixel. Keep WinForms' client-size
+            // conversion borderless; native sizing styles are applied to hWnd.
+            FormBorderStyle = FormBorderStyle.None;
             Size = new Size(1320, 900);
             MinimumSize = new Size(860, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -375,38 +379,9 @@ namespace HexGuide.Desktop
             TopMost = false;
             KeyPreview = true;
 
-            var toolbar = new ToolStrip();
-            toolbar.GripStyle = ToolStripGripStyle.Hidden;
-            toolbar.BackColor = Color.FromArgb(22, 29, 40);
-            toolbar.ForeColor = Color.FromArgb(222, 231, 239);
-            toolbar.Padding = new Padding(10, 4, 10, 4);
-            var title = new ToolStripLabel("海克斯指南  /  我的这一局");
-            var gameTools = new ToolStripDropDownButton("游戏工具");
-            var hideButton = new ToolStripMenuItem("收起到后台");
-            hideButton.Click += delegate { HideMain(); };
-            var sidebarButton = new ToolStripMenuItem("显示 / 收起侧栏");
-            sidebarButton.Click += delegate { ToggleSidebar(); };
-            var gameButton = new ToolStripMenuItem("返回游戏");
-            gameButton.Click += delegate { ReturnToGame(); };
-            var appearanceButton = new ToolStripButton("界面设置");
-            appearanceButton.Click += async delegate { await OpenAppearanceAsync(); };
-            var layoutButton = new ToolStripButton("编辑界面");
-            layoutButton.Click += async delegate { await OpenLayoutAsync(); };
-            reload = new ToolStripButton("刷新页面");
-            reload.Enabled = false;
-            reload.Click += delegate { if (browser.CoreWebView2 != null) browser.Reload(); };
-            toolbar.Items.Add(title);
-            toolbar.Items.Add(new ToolStripSeparator());
-            gameTools.DropDownItems.Add(hideButton);
-            gameTools.DropDownItems.Add(sidebarButton);
-            gameTools.DropDownItems.Add(gameButton);
-            toolbar.Items.Add(gameTools);
-            toolbar.Items.Add(appearanceButton);
-            toolbar.Items.Add(layoutButton);
-            toolbar.Items.Add(reload);
-            shortcutStatus = new ToolStripLabel("Alt + Shift + H：切换侧栏");
-            shortcutStatus.ForeColor = Color.FromArgb(163, 178, 196);
-            toolbar.Items.Add(shortcutStatus);
+            windowChrome = new MainWindowChrome(this);
+            titleBar = new DesktopTitleBar(Icon);
+            titleBar.ActionRequested += OnTitleBarAction;
             browser = new WebView2();
             browser.Dock = DockStyle.Fill;
             browser.DefaultBackgroundColor = BackColor;
@@ -419,8 +394,7 @@ namespace HexGuide.Desktop
             status.Text = "正在载入本局助手…";
             Controls.Add(browser);
             Controls.Add(status);
-            Controls.Add(toolbar);
-            toolbar.Dock = DockStyle.Top;
+            Controls.Add(titleBar);
             sidebar = new SidebarWindow();
             sidebar.HideRequested += delegate { sidebarVisibility.Close(); sidebar.Hide(); };
             sidebar.DetailsRequested += delegate { ShowMain(); };
@@ -484,11 +458,11 @@ namespace HexGuide.Desktop
             recognitionTimer = new Timer { Interval = 150 };
             recognitionTimer.Tick += async delegate { await FetchRecognitionAsync(); };
             recognitionTimer.Start();
-            Shown += async delegate { if (startHidden) Hide(); await StartAsync(); };
+            Shown += async delegate { windowChrome.Apply(); if (startHidden) Hide(); await StartAsync(); };
             // Taskbar/minimize commands must retain the taskbar entry and the
             // native restore state. Only explicit tray actions call HideMain.
             Activated += delegate { QueueMainWindowRecovery(); };
-            Resize += delegate { QueueMainWindowRecovery(); };
+            Resize += delegate { windowChrome.UpdatePadding(); titleBar.SetMaximized(WindowState == FormWindowState.Maximized); QueueMainWindowRecovery(); };
             KeyDown += delegate(object sender, KeyEventArgs e)
             {
                 // Escape is local to this app; no hook, game-key polling, or global Escape registration.
@@ -509,6 +483,75 @@ namespace HexGuide.Desktop
                 tray.Visible = false; tray.Dispose();
                 StopBackend();
             };
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            if (windowChrome != null) windowChrome.Apply();
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            if (windowChrome != null && windowChrome.HandleMessage(ref message)) return;
+            base.WndProc(ref message);
+            if (message.Msg == 0x0117) MainWindowChrome.RefreshSystemMenu(this); // WM_INITMENUPOPUP
+        }
+
+        private async void OnTitleBarAction(string action)
+        {
+            if (closing || IsDisposed) return;
+            try
+            {
+                if (MainWindowChrome.IsRoute(action))
+                {
+                    if (desktopPageReady && browser.CoreWebView2 != null && MainWindowChrome.RouteFromSource(localOrigin, browser.CoreWebView2.Source) != null)
+                        await browser.CoreWebView2.ExecuteScriptAsync("if(window.hexguideLayout?.isEditing())window.hexguideLayout.notify('请先保存或取消当前界面编辑，再切换页面。');else if(!document.querySelector('dialog[open]'))location.hash=" + new JavaScriptSerializer().Serialize("#" + action));
+                    return;
+                }
+                if (action == "minimize") WindowState = FormWindowState.Minimized;
+                else if (action == "maximize") WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
+                else if (action == "close") Close();
+                else if (action == "appearance") await OpenAppearanceAsync();
+                else if (action == "layout") await OpenLayoutAsync();
+                else if (action == "refresh" && browserEngineFailed) ShowFailure("页面引擎已停止，请在更多菜单中完全退出，然后重新打开海克斯指南。");
+                else if (action == "refresh" && browser.CoreWebView2 != null) browser.Reload();
+                else if (action == "sidebar") ToggleSidebar();
+                else if (action == "game") ReturnToGame();
+                else if (action == "background") HideMain();
+                else if (action == "exit") { closing = true; Close(); }
+                else if (action == "announcements" && desktopPageReady && browser.CoreWebView2 != null)
+                    await browser.CoreWebView2.ExecuteScriptAsync("document.querySelector('#announcement-open')?.click()");
+                else if (action == "sources" && desktopPageReady && browser.CoreWebView2 != null)
+                    await browser.CoreWebView2.ExecuteScriptAsync("if(window.hexguideLayout?.isEditing())window.hexguideLayout.notify('请先保存或取消当前界面编辑，再查看数据与版本。');else document.querySelector('[data-action=\"sources\"]')?.click()");
+            }
+            catch (InvalidOperationException) { if (!closing) ShowFailure("页面暂时不可用，请从右上角更多菜单刷新页面。"); }
+            catch (COMException) { if (!closing) ShowFailure("页面暂时不可用，请从右上角更多菜单刷新页面。"); }
+        }
+
+        private void UpdateTitleBarRoute()
+        {
+            if (closing || browser.CoreWebView2 == null) return;
+            try
+            {
+                string route = MainWindowChrome.RouteFromSource(localOrigin, browser.CoreWebView2.Source);
+                if (route != null) titleBar.SetPage(route);
+            }
+            catch (InvalidOperationException) { }
+            catch (COMException) { }
+        }
+
+        private async Task<bool> PrepareDesktopPageAsync()
+        {
+            if (closing || IsDisposed || browser.IsDisposed || browser.CoreWebView2 == null) return false;
+            try
+            {
+                await browser.CoreWebView2.ExecuteScriptAsync("document.documentElement.classList.add('desktop-native-chrome')");
+                return !closing && !IsDisposed && !browserEngineFailed;
+            }
+            catch (InvalidOperationException) { if (!closing) ShowFailure("页面暂时不可用，请从右上角更多菜单刷新页面。"); }
+            catch (COMException) { if (!closing) ShowFailure("页面暂时不可用，请从右上角更多菜单刷新页面。"); }
+            return false;
         }
 
         protected override bool ShowWithoutActivation { get { return !explicitActivation; } }
@@ -648,7 +691,7 @@ namespace HexGuide.Desktop
             string hint = "Alt + Shift + H：侧栏" + (visible ? "已显示" : "已收起");
             if (!shortcut.ContextAllowed) hint += " · 仅游戏 / 助手前台";
             else if (!shortcut.Registered) hint += " · 备用检测（" + shortcut.RegistrationError + "）";
-            if (shortcutStatus.Text != hint) shortcutStatus.Text = hint;
+            titleBar.SetSidebarStatus(visible, hint);
         }
 
         private void ReturnToGame()
@@ -732,14 +775,30 @@ namespace HexGuide.Desktop
                 browser.CoreWebView2.DownloadStarting += delegate(object sender, CoreWebView2DownloadStartingEventArgs args)
                 { args.Cancel = true; };
                 browser.CoreWebView2.NavigationStarting += OnNavigation;
+                browser.CoreWebView2.SourceChanged += delegate { UpdateTitleBarRoute(); };
+                browser.CoreWebView2.ProcessFailed += delegate(object sender, CoreWebView2ProcessFailedEventArgs args)
+                {
+                    if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+                    {
+                        browserEngineFailed = true;
+                        ShowFailure("页面引擎已停止，请在更多菜单中完全退出，然后重新打开海克斯指南。");
+                    }
+                    else if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessExited)
+                        ShowFailure("页面进程已停止，请从右上角更多菜单刷新页面。");
+                    // GPU/utility and other auto-recoverable failures must not hide a healthy page.
+                };
                 browser.CoreWebView2.NewWindowRequested += delegate(object sender, CoreWebView2NewWindowRequestedEventArgs args)
                 { args.Handled = true; OpenExternal(args.Uri); };
                 browser.CoreWebView2.NavigationCompleted += async delegate(object sender, CoreWebView2NavigationCompletedEventArgs args)
                 {
-                    if (!args.IsSuccess) { ShowFailure("页面未能打开，请点击刷新或重启软件。"); return; }
+                    if (!args.IsSuccess) { ShowFailure("页面未能打开，请从右上角更多菜单刷新页面。"); return; }
                     status.Visible = false;
                     browser.Visible = true;
-                    reload.Enabled = true;
+                    // Fixed presentation script only; no messages or host objects are exposed to web content.
+                    if (!await PrepareDesktopPageAsync()) return;
+                    desktopPageReady = true;
+                    titleBar.SetPageReady(true);
+                    UpdateTitleBarRoute();
                     await OpenRequestedAppearanceAsync();
                     await OpenRequestedLayoutAsync();
                 };
@@ -767,7 +826,12 @@ namespace HexGuide.Desktop
         {
             Uri target;
             if (!Uri.TryCreate(args.Uri, UriKind.Absolute, out target)) { args.Cancel = true; return; }
-            if (localOrigin != null && target.Scheme == localOrigin.Scheme && target.Host == localOrigin.Host && target.Port == localOrigin.Port) return;
+            if (localOrigin != null && target.Scheme == localOrigin.Scheme && target.Host == localOrigin.Host && target.Port == localOrigin.Port)
+            {
+                desktopPageReady = false;
+                titleBar.SetPageReady(false);
+                return;
+            }
             args.Cancel = true;
             OpenExternal(args.Uri);
         }
@@ -782,6 +846,7 @@ namespace HexGuide.Desktop
                 var model = await RequestModelAsync("api/sidebar", null);
                 if (closing || IsDisposed || generation != sidebarRequestGeneration || confirmChanging || scanChanging) return;
                 sidebar.Model = model;
+                titleBar.ApplyAppearance(model);
                 if (UpdateSelectionWatchers(model)) lifeController.UpdateModel(model);
                 scanMenu.Checked = ModelValue.Boolean(ModelValue.Object(model, "ocr"), "enabled");
                 scanMenu.Enabled = !scanChanging;
@@ -871,7 +936,7 @@ namespace HexGuide.Desktop
                 json = SelectionDiagnosticsJson(selectionWatcher, recognitionModel ?? sidebar.Model, now, recognitionTrace);
                 var panelSnapshot = panelWatcher.Diagnostics();
                 panelSnapshot["schemaVersion"] = 2;
-                panelSnapshot["appVersion"] = "1.17.16";
+                panelSnapshot["appVersion"] = "1.18.0";
                 panelSnapshot["updatedAtUtc"] = now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);
                 panelSnapshot["backendReason"] = PanelReason(recognitionModel ?? sidebar.Model);
                 panelJson = new JavaScriptSerializer().Serialize(panelSnapshot);
@@ -910,7 +975,7 @@ namespace HexGuide.Desktop
             var native = watcher.Diagnostics();
             if (trace != null) native["trace"] = trace.Snapshot();
             var snapshot = new Dictionary<string, object> {
-                { "version", "1.17.16" }, { "schemaVersion", 2 },
+                { "version", "1.18.0" }, { "schemaVersion", 2 },
                 { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
                 { "native", native },
                 { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
@@ -956,7 +1021,7 @@ namespace HexGuide.Desktop
                 string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), trace);
                 var snapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
                 if (snapshot.Count != 5 || Encoding.UTF8.GetByteCount(json) > 4096
-                    || ModelValue.Text(snapshot, "version") != "1.17.16" || ModelValue.Text(snapshot, "schemaVersion") != "2")
+                    || ModelValue.Text(snapshot, "version") != "1.18.0" || ModelValue.Text(snapshot, "schemaVersion") != "2")
                     throw new InvalidOperationException("The persisted selection diagnostic snapshot exceeded its schema or byte bound.");
                 if (json.Contains("PRIVATE-MARKER") || json.Contains("\"ids\"") || json.Contains("windowHandle")
                     || json.Contains("\"signature\"") || json.Contains("\"signatures\"") || json.Contains("\"delta\""))
@@ -1352,6 +1417,8 @@ namespace HexGuide.Desktop
         private void ShowFailure(string message)
         {
             if (closing || IsDisposed) return;
+            desktopPageReady = false;
+            titleBar.SetPageReady(false);
             browser.Visible = false;
             status.Text = message;
             status.Visible = true;
@@ -1942,6 +2009,7 @@ namespace HexGuide.Desktop
             if (fontsChanged) UpdateFonts();
             if (sectionsChanged) scrollOffset = 0;
             SetIdlePresentation(delayChanged ? false : idleTargetCompact, now, false);
+            MainWindowChrome.RoundWindow(this, S(12));
             Invalidate();
         }
         private void UpdateFonts()
@@ -1981,12 +2049,17 @@ namespace HexGuide.Desktop
         {
             if (augmentHint != null) ClearAugmentHint();
             base.OnResize(e);
+            MainWindowChrome.RoundWindow(this, appearance == null ? 12 : S(12));
         }
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
             Graphics g = e.Graphics;
-            using (var border = new Pen(Color.FromArgb(55, 77, 97))) g.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
+            var borderState = g.Save();
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var border = new Pen(Color.FromArgb(55, 77, 97)))
+            using (var outline = MainWindowChrome.RoundedPath(new RectangleF(.5F, .5F, Width - 1F, Height - 1F), S(12))) g.DrawPath(border, outline);
+            g.Restore(borderState);
             if (idleCompact) { DrawIdleStrip(g); return; }
             int x = 17, width = Math.Max(1, Width - 34), y = 16;
             helpTargets.Clear();
@@ -2805,7 +2878,7 @@ namespace HexGuide.Desktop
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { idleTimer.Stop(); idleTimer.Dispose(); buildIcons.Dispose(); augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); decisionFont.Dispose(); offerNameFont.Dispose(); foreach (Image image in augmentIcons.Values) image.Dispose(); augmentIcons.Clear(); }
+            if (disposing) { idleTimer.Stop(); idleTimer.Dispose(); buildIcons.Dispose(); augmentHint.Dispose(); headingFont.Dispose(); normalFont.Dispose(); smallFont.Dispose(); decisionFont.Dispose(); offerNameFont.Dispose(); foreach (Image image in augmentIcons.Values) image.Dispose(); augmentIcons.Clear(); var shape = Region; Region = null; if (shape != null) shape.Dispose(); }
             base.Dispose(disposing);
         }
         private static Dictionary<string, object> CreateNextItemFixture()
@@ -3314,11 +3387,12 @@ namespace HexGuide.Desktop
                 int augmentIconChecks = ValidateAugmentIconFixtures(iconPreviewPath);
                 int defaultWidth = window.Width, defaultHeight = window.Height;
                 int appearanceChecks = ValidateAppearanceFixtures(window);
+                int nativeChromeChecks = MainWindowChrome.ValidateFixtures() + DesktopTitleBar.ValidateFixtures();
                 string placementPreviewPath;
                 int positionChecks = ValidatePositionFixtures(Path.GetDirectoryName(previewPath), out placementPreviewPath);
                 string customPreviewPath = Path.Combine(Path.GetDirectoryName(previewPath), Path.GetFileNameWithoutExtension(previewPath) + "-custom.png");
                 using (var bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(customPreviewPath, System.Drawing.Imaging.ImageFormat.Png); }
-                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + idleHideChecks + nextItemChecks + helpChecks + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + pendingOfferChecks + loadingPreviewChecks + buildStatisticsChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks + selectionChecks }, { "selectionChecks", selectionChecks }, { "idleHideChecks", idleHideChecks }, { "helpChecks", helpChecks }, { "nextItemChecks", nextItemChecks }, { "pendingOfferChecks", pendingOfferChecks }, { "pendingPreviewPath", pendingPreviewPath }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "buildStatisticsChecks", buildStatisticsChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
+                return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "checks", 10 + idleHideChecks + nextItemChecks + helpChecks + GameWindow.ValidateFixtures() + appearanceChecks + positionChecks + liveStateChecks + pendingOfferChecks + loadingPreviewChecks + buildStatisticsChecks + visibilityChecks + initialPlanChecks + shortcutChecks + augmentIconChecks + passiveActivationChecks + selectionChecks + nativeChromeChecks }, { "nativeChromeChecks", nativeChromeChecks }, { "selectionChecks", selectionChecks }, { "idleHideChecks", idleHideChecks }, { "helpChecks", helpChecks }, { "nextItemChecks", nextItemChecks }, { "pendingOfferChecks", pendingOfferChecks }, { "pendingPreviewPath", pendingPreviewPath }, { "passiveActivationChecks", passiveActivationChecks }, { "augmentIconChecks", augmentIconChecks }, { "shortcutChecks", shortcutChecks }, { "appearanceChecks", appearanceChecks }, { "positionChecks", positionChecks }, { "liveStateChecks", liveStateChecks }, { "loadingPreviewChecks", loadingPreviewChecks }, { "buildStatisticsChecks", buildStatisticsChecks }, { "initialPlanChecks", initialPlanChecks }, { "visibilityChecks", visibilityChecks }, { "width", defaultWidth }, { "height", defaultHeight }, { "previewPath", previewPath }, { "customPreviewPath", customPreviewPath }, { "buildPreviewPath", buildPreviewPath }, { "placementPreviewPath", placementPreviewPath }, { "statusPreviewPath", statusPreviewPath }, { "loadingPreviewPath", loadingPreviewPath }, { "earlyLivePreviewPath", earlyLivePreviewPath }, { "iconPreviewPath", iconPreviewPath } });
             }
         }
         private static int ValidateOfferPresentationFixtures(string directory)

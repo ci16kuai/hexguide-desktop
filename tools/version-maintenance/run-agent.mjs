@@ -2,16 +2,17 @@ import {readFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {runMaintenance,readApiKey,atomicJson} from './maintenance.mjs';
+import {readApiKey,atomicJson} from './maintenance.mjs';
 import {AnnouncementAgent,createAgentsClient,safeError} from './agents.mjs';
+import {runOfficialMaintenance} from './official-maintenance.mjs';
 
-export async function runAgentMaintenance({client,config,runId=randomUUID(),githubRunUrl='',purpose='scheduled-check',maintenance=runMaintenance,...options}={}) {
+export async function runAgentMaintenance({client,config,runId=randomUUID(),githubRunUrl='',purpose='scheduled-check',maintenance=runOfficialMaintenance,...options}={}) {
   if(!/^[A-Za-z0-9_-]{1,160}$/.test(runId))throw Error('Invalid maintenance run ID.');
   const recordPath=path.join(options.stateDirectory,'agent-runs',`${runId}.json`);
   const save=record=>atomicJson(recordPath,{schemaVersion:1,checkedAt:new Date().toISOString(),githubRunUrl,...record});
   const agent=new AnnouncementAgent({client,config,runId,githubRunUrl,purpose,onRecord:save});
   try {
-    const receipt=await maintenance({...options,translator:changes=>agent.translate(changes)});
+    const receipt=await maintenance({...options,translator:changes=>agent.translate(changes),auditor:changes=>agent.auditOfficial(changes)});
     if(!agent.records.length)await agent.recordCheck(receipt);
     receipt.agent=agent.summary;
     await atomicJson(path.join(options.stateDirectory,'last-run.json'),receipt);

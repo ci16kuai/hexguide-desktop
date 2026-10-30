@@ -1,62 +1,41 @@
-# 数值更新公告维护
+# 官网更新公告维护
 
-1.18.0 增加装备、KIWI 海克斯数值公告。此模块不更新推荐规则，不进行机制或出装分析。已有三天统计更新独立运行。
+1.18.1 以英雄联盟国服官网公告及其后续不停机更新为准，取代只根据静态资源猜测版本公告的生产流程。此模块不更新推荐规则，不分析强弱、出装或推荐影响；三天统计更新继续独立运行。
 
-## 数据与公告
+## 采集与范围
 
-维护程序从 Riot Data Dragon 的正式资源版本列表发现版本，比较标注适用于嚎哭深渊的装备属性、价格及可准确对应的描述数值。海克斯只读取 KIWI 名单，按稳定标识比较 RootSpell、该强化子法术的 DataValues，以及 mSpellCalculations 中明确的常量、系数和等级起止数值。计算结构、属性枚举或分段位置变化时不把不同计算项直接配对，记录到维护结果中的 warnings。缺省值不猜成零；新增、移除、纯文案变化不伪装成旧值到新值的数值变化。公开静态资料不能保证覆盖服务器未公布的热修。
+`run-agent.mjs` 的生产入口为 `runOfficialMaintenance`。通过 Data Dragon 的版本列表确定资源版本，从国服官网公告列表定位版本公告，并检查同补丁发布后的不停机更新。已发现的热修 URL 保存在 checkpoint 中，即使随后离开列表第一页也会继续检查。官网不可用、结构无法识别或已发布内容无解释地消失时令任务失败，不把它记成“没有变化”。
 
-OpenAI 只将每个数值字段整理成中文属性名称；原始数字、显示比例、来源和稳定 ID 由程序固定。模型输出必须覆盖全部字段，失败或校验不通过时保留上次有效公告。当前云端通过已保存的 OpenAI Agent 运行；每次检查都会创建可查看的会话，无数值变化时生成简短回执，也会有少量 Token 用量。首次运行对比最近两个不同补丁的正式资源；以后比较上次有效快照和最新资源，同版本内容变化也会检查。
+使用 parse5 解析正文，整个经典模式章节在进入 Agent 前排除。收录通用、海克斯大乱斗、斗魂竞技场的英雄、装备、海克斯与相关修复，并在每项中保留模式，不跨模式合并数值。英雄包含基础属性、被动、Q/W/E/R、非数值机制变化和 BUG 修复。装备不再按 Data Dragon 地图标志过滤。复杂公式、近战/远程分支、无限时长以及其他事实保留官网文字，不从占位零值推测。
 
-资源版本如 16.21.1 单独展示，不冒充游戏官方公告的 26.21 标签。
+英雄画像使用按英雄 ID 绑定的 Data Dragon 头像；技能优先用官网该技能段落的图标，无配图时按已确认的英雄与技能槽取资源。海克斯图标按稳定游戏 ID 对应 CommunityDragon。实体标题无法确认时停止，不沿用上一个英雄。未确认的非实体修复保留原文放在“其他修复”，不硬配图标或标成某个英雄。
 
-### 官网日期、图标和英雄技能
+OpenAI Agent 每批最多核对 64 项，必须逐项返回全部 acceptedKeys，不得遗漏、重复、虚构 key 或改写事实。合法的非数值变化和复杂公式不会被当成无效数据。没有新公告时仍产生简短会话回执，会有模型用量。模型、指令和运行记录可在 Platform 管理；`gpt-6-luna` 为初始模型。
 
-公告列表与详情显示官网公布的文章日期，顶部“上次检查”继续显示本机检查时间，两者独立。资源 16.21 优先读取国服官网对应文章的发布元数据（2026-10-21），并链接原文；其他补丁读取 Riot 官网匹配版本页面的结构化 `datePublished`。按来源的日期字符串显示，不随用户时区跨日。来源不可用时显示“官网公告日期待确认”，后续检查补齐，不使用生成时间代替官网日期。
+## 发布、修订与客户端
 
-历史文章及索引仍保持不可变。额外的 `announcements/presentation.json` 以文章 ID 和 SHA-256 绑定官网日期、原文链接和逐条图标；客户端合并并缓存这些展示资料，不重置已读状态。装备图标取 Data Dragon 的 image.full，海克斯图标取该 KIWI 定义的 AugmentSmallIconPath。链接限于固定资源域名和 PNG 路径；图片加载失败时保留名称及数值。
+完整官网索引为 `announcements/index-v3.json`，详情为 schemaVersion 2 的不可变 JSON。旧 `index.json`、`index-v2.json` 及旧文章保留原字节与 SHA，不要求旧客户端解析新类型。客户端必须升级到 1.18.1 才能查看完整官网公告与新增英雄栏。
 
-兼容索引 `index.json` 继续仅包含装备与海克斯文章，旧版 App 仍能解析并收到这些通知；同次检查的英雄技能变化另生成文章，完整历史写入 `index-v2.json`。新版 App 优先读取完整索引，尚未部署时回退兼容索引，不要求旧版 App 解析新类型条目。数值详情仍放在原目录，按稳定 ID 保存。历史图标资源暂不可用仅记录 warning，不阻塞新数值公告发布。
+文章按来源 URL 和事实生成有效修订。同一来源真实回滚也产生新修订；普通未变化检查不重复发公告。独立热修不会替代主版本公告。新版通过 supersedes 将被补全或修订的记录收入折叠历史，原 ID、已读与文件仍保留。官网配图、头像和日期的更正使用绑定文章 ID + SHA 的 presentation.json 覆盖层，保持事实文件不变。
 
-英雄技能新增 Data Dragon `championFull.json` 对比，绑定英雄 ID、Q/W/E/R 槽和技能 ID，展示对应技能图标及名称。仅比较明确冷却、资源消耗、距离，以及说明直接引用的效果槽；技能替换、等级数量、数组长度或资源类型变化时不直接配对。未解析的被动、伤害与缩放公式不猜值，也不把通用英雄改动描述成大乱斗专属调整。既有检查点首次升级时建立同版本技能基线，以后自动检查变化；不会补造旧公告中的英雄历史。
+公告显示官网发布日，不按用户时区跨日；“上次检查”独立显示检查时间。英雄按人聚合，80px 头像、40px 技能图标，整组默认展开，可收起基础数值、技能和修复内容。同一装备只显示一次名称与图标。分类入口可跳转到英雄、装备、海克斯或其他修复。
 
-## 手动运行
+App 启动及每小时检查索引；详情打开后标记已读，历史、已读和展示资料保存在数据目录 announcements-v1。图片需要可访问对应资源，图片失败不隐藏事实文本。没有退出 App 后的操作系统离线推送。
+
+## 维护端运行
+
+使用 Node.js 22+，先在 tools/version-maintenance 执行 npm ci --ignore-scripts；固定依赖包含 OpenAI SDK 7.45.1 和 parse5 8.0.0。维护依赖、凭据和 checkpoint 不进入玩家包。
 
 ```powershell
 node tools/version-maintenance/run-agent.mjs `
-  --state-dir 'H:\Chatgpt\work\hexguide-announcements\state' `
-  --feed-dir 'H:\Chatgpt\work\hexguide-announcements\publisher\announcements' `
-  --env-file 'H:\Chatgpt\API key\.env'
-
-node tools/version-maintenance/validate-feed.mjs 'H:\Chatgpt\work\hexguide-announcements\publisher\announcements'
+  --state-dir '<公告仓库>/.maintenance' `
+  --feed-dir '<公告仓库>/announcements' `
+  --env-file '<已授权的外部 env 文件>'
+node tools/version-maintenance/validate-feed.mjs '<公告仓库>/announcements'
 ```
 
-Agent 初始模型为 `gpt-6-luna`，可在 OpenAI Platform 的 Agent Setup 中管理后续会话的模型和指令。使用 Agents CLI 前需 Node.js 22+，并在 `tools/version-maintenance` 目录执行 `npm ci --ignore-scripts` 安装固定 SDK。本机手动运行从维护者电脑的外部 env 文件读取 key；云端从 GitHub Actions 加密 Secret 映射为 `OPENAI_API_KEY`。不能将明文 key 放入项目的 dist/server/docs、公告 Git 仓库、日志或安装包。程序仅支持读取环境变量或指定文件中的 OPENAI_API_KEY 字面值，不执行 env 文件内容。旧的 `run.mjs` 保留为传统 Responses API 手动工具，不会创建 Agents 会话。
+云端从 GitHub Actions Secret HEXGUIDE_OPENAI_API_KEY 读取，维护者本机可用已授权的外部 env 文件。禁止将明文 key 放进源码、dist、日志、公告或安装包。会话/turn ID、GitHub run URL 与可用 Token 保存在 .maintenance/agent-runs。usage 未回填时为 null，不当作零花费。
 
-公开文件为 `announcements/index.json` 和按稳定 ID 命名的不可变详情 JSON。索引记录详情 SHA-256，旧公告保留。发布前验证全部条目、来源协议、数值及摘要一致性；客户端使用固定 HTTPS 来源，哈希用于完整性检查，不替代来源身份。
+文章、三个版本索引、presentation 和 .maintenance 必须同一提交推送。完整草稿可在推送失败后复用；checkpoint 必须和完整公告一起恢复。详情见 [云端公告维护](announcement-cloud.md)。
 
-## 自动发布
-
-公共地址：`https://raw.githubusercontent.com/ci16kuai/hexguide-desktop/codex/announcements-feed/announcements/index.json`。
-
-2026-10-31 已配置 GitHub Actions 云端维护，每 6 小时运行一次，不依赖维护者电脑开机。凭据、checkpoint、草稿恢复及故障处理见 [云端公告维护](announcement-cloud.md)。云端实际运行验证成功后停用本机同名任务；下列 Windows 注册方法仅作本机维护备用，不应与云端同时启用。
-
-使用独立的 publisher Git 仓库工作目录，分支固定为 `codex/announcements-feed`。先初始化该分支并发布首份已校验公告，再运行：
-
-```powershell
-./scripts/register-announcement-task.ps1 `
-  -EnvFile 'H:\Chatgpt\API key\.env' `
-  -WorkPath '<维护状态和日志目录>' `
-  -PublisherDirectory '<独立公告仓库目录>' `
-  -NodePath '<已安装 Node.js 20+ 的绝对路径>'
-```
-
-Windows 任务名为 `HexGuide-AnnouncementMaintenance`，每 6 小时运行一次。当前维护者需要已登录且电脑开机、可访问数据源/OpenAI/GitHub；任务错过后补跑。使用已有 Git Credential Manager 身份发布，禁止后台交互登录。同一任务不重叠，最长运行 20 分钟。未成功推送的本地公告提交在下次运行继续推送，不重新生成同一公告。
-
-`last-publish.log` 记录最新发布过程；`state/last-run.json` 记录比较范围、未知项及实际模型用量，不记录凭据。失败保留有效快照和公告；运行中断留下的锁在一小时后允许恢复。更换维护电脑时需迁移有效快照、拉取公告分支并重新配置凭据与任务。
-
-## 客户端
-
-App 启动及运行期间每小时检查公共索引；桌面版右上角“更多 → 更新公告”中可查看历史、手动检查，普通浏览器顶部保留“更新公告”按钮。主窗口显示未读数量及提示，查看详情后才标为已读；旧回答或失败下载不改变未读状态。已读记录、索引和已查看详情保存到应用数据目录的 announcements-v1，断网仍可查看已缓存详情。安装包附带最近一份已验证公告作为离线初始内容。
-
-客户端仅发送固定公共文件路径，不发送游戏状态、玩家信息或 API key。旧版本 App 需要先升级到 1.18.0，才能出现公告入口。维护程序和 Windows 定时任务不随玩家安装包分发。
+旧 run.mjs、静态资源对比测试和 Windows 本机注册脚本保留作历史诊断，不是当前生产入口。本机 HexGuide-AnnouncementMaintenance 任务保持禁用；不能同时启用旧数值任务和云端官网发布器。

@@ -9,6 +9,7 @@ import {AppearanceStore} from './appearance.mjs';
 import {LayoutStore} from './layout.mjs';
 import {RecommendationRepository} from './recommendation-repository.mjs';
 import {StatisticsUpdater} from './statistics-updater.mjs';
+import {AnnouncementStore} from './announcements.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 function argument(name) {
@@ -32,6 +33,7 @@ try {
   const scanner = createOcrScanner({applicationDirectory:path.resolve(directory, '..'), dataDirectory, augments:dataset.augments});
   const appearance = await new AppearanceStore({dataDirectory}).load();
   const layout = await new LayoutStore({dataDirectory}).load();
+  const announcements = await new AnnouncementStore({dataDirectory,bundledDirectory:path.join(directory,'../dist/announcements')}).load();
   let recommendationRepository;
   let statistics;
   try {
@@ -41,17 +43,19 @@ try {
   recommendationRepository = await new RecommendationRepository({dataDirectory, statisticsSnapshot:statistics?.getSnapshot() ?? statisticsSnapshot,
     champions:dataset.champions, augments:dataset.augments, patch:dataset.meta.clientDataVersion || '16.21'}).load();
   const sidebar = await new BackgroundSidebar({collector, scanner, data:dataset, itemsCatalog, dataDirectory, appearance, recommendationRepository}).load();
-  const local = await createLocalServer({collector, scanner, sidebar, appearance, layout, statistics, staticDirectory:path.join(directory, '../dist'), port:Number(requestedPort)});
+  const local = await createLocalServer({collector, scanner, sidebar, appearance, layout, statistics, announcements, staticDirectory:path.join(directory, '../dist'), port:Number(requestedPort)});
   // This is the sole stdout bootstrap line; the native parent owns the token.
   process.stdout.write(JSON.stringify({port:local.port, token:local.token}) + '\n');
   collector.start();
   sidebar.start();
   statistics?.start();
+  announcements.start();
   let closing = false;
   const close = async () => {
     if (closing) return;
     closing = true;
     await statistics?.close();
+    await announcements.close();
     await local.close();
     process.exit(0);
   };
