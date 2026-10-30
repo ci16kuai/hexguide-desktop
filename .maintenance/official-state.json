@@ -6,14 +6,14 @@
       "kind": "patch",
       "articleId": "98ca58513af1cd4269cbb5c8",
       "factsHash": "717dfff188837c3bd95e821cda445f3e7e27b66c4bf4e1e2b7ec5c49fe64f35d",
-      "checkedAt": "2026-10-30T17:46:46.604Z"
+      "checkedAt": "2026-10-30T22:36:37.061Z"
     },
     "https://lol.qq.com/news/detail.shtml?docid=14514250113535829185": {
       "version": "16.21.1",
       "kind": "hotfix",
       "articleId": "b381a5fcc116ea97048fa99b",
       "factsHash": "59bf14bf40e4b15cf911618aa30f41114b50b50af54fbb74a1104763bd98fa1e",
-      "checkedAt": "2026-10-30T17:46:46.604Z"
+      "checkedAt": "2026-10-30T22:36:37.061Z"
     }
   }
 }
