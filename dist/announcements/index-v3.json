@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "revision": "db4ec18613a1053bcbafcc7291f008b0df10bbc2cc39d3c3b7c69a12886997a7",
+  "publishedAt": "2026-10-30T17:38:44.149Z",
+  "entries": [
+    {
+      "id": "b381a5fcc116ea97048fa99b",
+      "sha256": "86b6f8ca83bb657013ec05a4ab7ad1112d7d2cc1886e47842158404732218ccb",
+      "title": "2026年10月23日 不停机更新（不含经典模式）",
+      "publishedAt": "2026-10-30T17:38:44.149Z",
+      "fromVersion": "16.21.1",
+      "toVersion": "16.21.1",
+      "itemCount": 0,
+      "augmentCount": 1,
+      "changeCount": 7,
+      "championCount": 2,
+      "format": 2,
+      "supersedes": [
+        "20a50203ba0070326ee82dc0"
+      ],
+      "sourceUrl": "https://lol.qq.com/news/detail.shtml?docid=14514250113535829185"
+    },
+    {
+      "id": "98ca58513af1cd4269cbb5c8",
+      "sha256": "5335265a1c79cf57d093e6519e11587c3e77f2a1ee1ffb49e1503520af76b6da",
+      "title": "26.21 官网更新公告（不含经典模式）",
+      "publishedAt": "2026-10-30T17:38:44.149Z",
+      "fromVersion": "16.21.1",
+      "toVersion": "16.21.1",
+      "itemCount": 10,
+      "augmentCount": 61,
+      "changeCount": 198,
+      "championCount": 47,
+      "format": 2,
+      "supersedes": [
+        "20a50203ba0070326ee82dc0"
+      ],
+      "sourceUrl": "https://lol.qq.com/gicp/news/410/37099805.html"
+    },
+    {
+      "id": "20a50203ba0070326ee82dc0",
+      "sha256": "d3f82d99443276d95877b26152b912e4fe64afeed13e9ff54fb1cf210fac0336",
+      "title": "装备与海克斯数值更新（资源 16.21）",
+      "publishedAt": "2026-10-30T13:40:48.351Z",
+      "fromVersion": "16.20.1",
+      "toVersion": "16.21.1",
+      "itemCount": 3,
+      "augmentCount": 1,
+      "changeCount": 7
+    }
+  ]
+}

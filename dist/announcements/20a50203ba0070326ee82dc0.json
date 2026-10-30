@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "id": "20a50203ba0070326ee82dc0",
+  "title": "装备与海克斯数值更新（资源 16.21）",
+  "publishedAt": "2026-10-30T13:40:48.351Z",
+  "fromVersion": "16.20.1",
+  "toVersion": "16.21.1",
+  "summary": "本次记录 3 件装备、1 个海克斯的 7 项数值变化。",
+  "scopeNote": "装备范围为资料中标注适用于嚎哭深渊的条目；海克斯范围为 KIWI 模式。装备百分比以 % 显示；海克斯字段未确认单位时保留原始值，按等级变化的数值按源数据顺序列出。以下为客户端公开静态数值；服务器未公开热修、缺省值及无法对应的文本变化不作推测。",
+  "itemCount": 3,
+  "augmentCount": 1,
+  "changeCount": 7,
+  "changes": [
+    {
+      "key": "augment:Ability_SelfAOE_DoubleCast:CloneDuration",
+      "kind": "augment",
+      "entityId": "Ability_SelfAOE_DoubleCast",
+      "name": "回响施放",
+      "field": "CloneDuration",
+      "label": "分身持续时间",
+      "before": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ],
+      "after": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "unit": "",
+      "scale": 1
+    },
+    {
+      "key": "item:3008:gold.base",
+      "kind": "item",
+      "entityId": "3008",
+      "name": "暴食胫甲",
+      "field": "gold.base",
+      "label": "合成费用",
+      "before": 700,
+      "after": 800,
+      "unit": "金币",
+      "scale": 1
+    },
+    {
+      "key": "item:3008:gold.sell",
+      "kind": "item",
+      "entityId": "3008",
+      "name": "暴食胫甲",
+      "field": "gold.sell",
+      "label": "出售价格",
+      "before": 700,
+      "after": 770,
+      "unit": "金币",
+      "scale": 1
+    },
+    {
+      "key": "item:3008:gold.total",
+      "kind": "item",
+      "entityId": "3008",
+      "name": "暴食胫甲",
+      "field": "gold.total",
+      "label": "总费用",
+      "before": 1000,
+      "after": 1100,
+      "unit": "金币",
+      "scale": 1
+    },
+    {
+      "key": "item:6621:effect.2",
+      "kind": "item",
+      "entityId": "6621",
+      "name": "黎明核心",
+      "field": "effect.2",
+      "label": "法术强度",
+      "before": 10,
+      "after": 15,
+      "unit": "",
+      "scale": 1
+    },
+    {
+      "key": "item:773005:effect.0",
+      "kind": "item",
+      "entityId": "773005",
+      "name": "阿塔玛之戟",
+      "field": "effect.0",
+      "label": "冲击：额外攻击力",
+      "before": 1.5,
+      "after": 2,
+      "unit": "%",
+      "scale": 1
+    },
+    {
+      "key": "item:773005:stats.FlatCritChanceMod",
+      "kind": "item",
+      "entityId": "773005",
+      "name": "阿塔玛之戟",
+      "field": "stats.FlatCritChanceMod",
+      "label": "暴击几率",
+      "before": 0.15,
+      "after": 0.18,
+      "unit": "%",
+      "scale": 100
+    }
+  ],
+  "sources": [
+    {
+      "name": "Riot Data Dragon 16.20.1",
+      "url": "https://ddragon.leagueoflegends.com/cdn/16.20.1/data/zh_CN/item.json",
+      "sha256": "3d2035c124c663122c9cbec7d0589427623ded5d46e4b162dc9c3a14e6886e56"
+    },
+    {
+      "name": "CommunityDragon KIWI 16.20.1",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-be-lol-game-data/global/default/v1/augment-lists.json",
+      "sha256": "c1408da464e85296fea63c2d9ea0a42802e1786293d9a718a5a37f9b4edf6d3c"
+    },
+    {
+      "name": "CommunityDragon KIWI 16.20.1",
+      "url": "https://raw.communitydragon.org/16.20/game/maps/modespecificdata/kiwi.bin.json",
+      "sha256": "41d8cf58a5b2bb25d7cc69b94e3f78c98d337135bf0263d35a093eca3c284101"
+    },
+    {
+      "name": "CommunityDragon KIWI 16.20.1",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-be-lol-game-data/global/zh_cn/v1/cherry-augments.json",
+      "sha256": "01265620f0bb8bba0b5925dd44ad5a3f0df187ce97d896125bbb177ab9826a42"
+    },
+    {
+      "name": "Riot Data Dragon 16.21.1",
+      "url": "https://ddragon.leagueoflegends.com/cdn/16.21.1/data/zh_CN/item.json",
+      "sha256": "6895cb9464d361e0ac99c9771c21fa452a5a12de7a22d6cfa12c610d24741c8e"
+    },
+    {
+      "name": "CommunityDragon KIWI 16.21.1",
+      "url": "https://raw.communitydragon.org/16.21/plugins/rcp-be-lol-game-data/global/default/v1/augment-lists.json",
+      "sha256": "bdb432a1b7e3e64bbb6a0fa348fc8d3e42014cc0bf3c0b4c249e15fa5f28a8fb"
+    },
+    {
+      "name": "CommunityDragon KIWI 16.21.1",
+      "url": "https://raw.communitydragon.org/16.21/game/maps/modespecificdata/kiwi.bin.json",
+      "sha256": "e1ed4bfa49ae574f9ea27e9261587e363f2ac3b0f2299a78b5ca42e518053351"
+    },
+    {
+      "name": "CommunityDragon KIWI 16.21.1",
+      "url": "https://raw.communitydragon.org/16.21/plugins/rcp-be-lol-game-data/global/zh_cn/v1/cherry-augments.json",
+      "sha256": "68e8dca7f4fc3426a4754604da7c96df7b218d5dbac1ae189a339306466eee63"
+    }
+  ]
+}

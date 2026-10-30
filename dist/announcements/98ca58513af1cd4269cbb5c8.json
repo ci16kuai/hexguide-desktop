@@ -1,0 +1,3014 @@
+{
+  "schemaVersion": 2,
+  "id": "98ca58513af1cd4269cbb5c8",
+  "title": "26.21 官网更新公告（不含经典模式）",
+  "publishedAt": "2026-10-30T17:38:44.149Z",
+  "fromVersion": "16.21.1",
+  "toVersion": "16.21.1",
+  "summary": "本公告共 198 项改动，涉及 47 位英雄、10 件装备、61 个海克斯。",
+  "scopeNote": "以国服官网正文为准，收录英雄、装备和海克斯的数值、机制与 BUG 修复；完整排除经典模式。通用、海克斯大乱斗、斗魂竞技场改动分别标注，不跨模式合并数值。近战／远程、复杂公式和无限时长按官网文字保留，不分析强弱和推荐影响。",
+  "itemCount": 10,
+  "augmentCount": 61,
+  "championCount": 47,
+  "changeCount": 198,
+  "changes": [
+    {
+      "key": "1bd15771436eed7a89b5890ff1afaf18",
+      "kind": "champion",
+      "entityId": "Azir",
+      "name": "沙漠皇帝 阿兹尔",
+      "mode": "general",
+      "label": "成长法力值",
+      "text": "成长法力值：40/等级 ⇒ 50/等级",
+      "changeType": "adjustment",
+      "beforeText": "40/等级",
+      "afterText": "50/等级",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Azir.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Azir.png"
+    },
+    {
+      "key": "845365f0e096ec905e366309ff9cd34e",
+      "kind": "champion",
+      "entityId": "Caitlyn",
+      "name": "皮城女警 凯特琳",
+      "mode": "general",
+      "label": "伤害",
+      "text": "伤害：60 - 100%攻击力(每1%暴击几率+1%攻击力) (每1%额外暴击伤害+1%攻击力) ⇒ 60 - 80%攻击力(每1%暴击几率+1%攻击力) (每1%额外暴击伤害+1%攻击力)",
+      "changeType": "adjustment",
+      "beforeText": "60 - 100%攻击力(每1%暴击几率+1%攻击力) (每1%额外暴击伤害+1%攻击力)",
+      "afterText": "60 - 80%攻击力(每1%暴击几率+1%攻击力) (每1%额外暴击伤害+1%攻击力)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/92271693261941.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Caitlyn.png",
+      "ability": {
+        "slot": "P",
+        "name": "爆头"
+      }
+    },
+    {
+      "key": "11c91a8da7fb0df8b1e222f3dbda2786",
+      "kind": "champion",
+      "entityId": "Caitlyn",
+      "name": "皮城女警 凯特琳",
+      "mode": "general",
+      "label": "基础伤害",
+      "text": "基础伤害：50 / 90 / 130 / 170 / 210 ⇒ 50 / 95 / 140 / 185 / 230",
+      "changeType": "adjustment",
+      "beforeText": "50 / 90 / 130 / 170 / 210",
+      "afterText": "50 / 95 / 140 / 185 / 230",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/799371670530351.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Caitlyn.png",
+      "ability": {
+        "slot": "Q",
+        "name": "和平使者"
+      }
+    },
+    {
+      "key": "f9713bf45420e356879079f547b1f2bf",
+      "kind": "champion",
+      "entityId": "Darius",
+      "name": "诺克萨斯之手 德莱厄斯",
+      "mode": "general",
+      "label": "冷却时间",
+      "text": "冷却时间：9 / 8 / 7 / 6 / 5秒 ⇒ 9 / 8 / 7 / 6 / 4秒",
+      "changeType": "adjustment",
+      "beforeText": "9 / 8 / 7 / 6 / 5秒",
+      "afterText": "9 / 8 / 7 / 6 / 4秒",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/262151070898043.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Darius.png",
+      "ability": {
+        "slot": "Q",
+        "name": "大杀四方"
+      }
+    },
+    {
+      "key": "3a5ca4da2d18bafeb35a221741b6b4b4",
+      "kind": "champion",
+      "entityId": "Jinx",
+      "name": "暴走萝莉 金克丝",
+      "mode": "general",
+      "label": "攻击力",
+      "text": "攻击力：59 + 3.25/等级 ⇒ 59 + 3/等级",
+      "changeType": "adjustment",
+      "beforeText": "59 + 3.25/等级",
+      "afterText": "59 + 3/等级",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Jinx.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Jinx.png"
+    },
+    {
+      "key": "e76f81578ea31401e8d8647569f706e8",
+      "kind": "champion",
+      "entityId": "Jinx",
+      "name": "暴走萝莉 金克丝",
+      "mode": "general",
+      "label": "生命值",
+      "text": "生命值：630 + 105/等级 ⇒ 610 + 105/等级",
+      "changeType": "adjustment",
+      "beforeText": "630 + 105/等级",
+      "afterText": "610 + 105/等级",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Jinx.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Jinx.png"
+    },
+    {
+      "key": "e5dcfd1e3ad676e3f04fd3c1f484e25c",
+      "kind": "champion",
+      "entityId": "LeeSin",
+      "name": "盲僧 李青",
+      "mode": "general",
+      "label": "冷却时间",
+      "text": "冷却时间：7秒 ⇒ 8秒",
+      "changeType": "adjustment",
+      "beforeText": "7秒",
+      "afterText": "8秒",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/5275533941882.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/LeeSin.png",
+      "ability": {
+        "slot": "W",
+        "name": "金钟罩"
+      }
+    },
+    {
+      "key": "73518ea04ed9af5a90edd5f8c6fba964",
+      "kind": "champion",
+      "entityId": "LeeSin",
+      "name": "盲僧 李青",
+      "mode": "general",
+      "label": "BUG修复",
+      "text": "BUG修复：如果敌人在被【天雷破】命中后进入隐身，将不再被显形。",
+      "changeType": "adjustment",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/56043757178164.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/LeeSin.png",
+      "ability": {
+        "slot": "E",
+        "name": "天雷破"
+      }
+    },
+    {
+      "key": "b169f7ad6d13079300e8c9eafb2df8c1",
+      "kind": "champion",
+      "entityId": "LeeSin",
+      "name": "盲僧 李青",
+      "mode": "general",
+      "label": "踢击伤害",
+      "text": "踢击伤害：175 / 400 / 625 (+200%额外攻击力) ⇒ 150 / 350 / 550 (+200%额外攻击力)",
+      "changeType": "adjustment",
+      "beforeText": "175 / 400 / 625 (+200%额外攻击力)",
+      "afterText": "150 / 350 / 550 (+200%额外攻击力)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/417211290766907.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/LeeSin.png",
+      "ability": {
+        "slot": "R",
+        "name": "猛龙摆尾"
+      }
+    },
+    {
+      "key": "28d7adb59377ba27cd4816d73e7c35cb",
+      "kind": "champion",
+      "entityId": "LeeSin",
+      "name": "盲僧 李青",
+      "mode": "general",
+      "label": "碰撞伤害",
+      "text": "碰撞伤害：175 / 400 / 625 (+200%额外攻击力) (+12 / 15 / 18%被踢英雄的生命值) ⇒ 150 / 350 / 550 (+200%额外攻击力) (+12 / 15 / 18%被踢英雄的生命值)",
+      "changeType": "adjustment",
+      "beforeText": "175 / 400 / 625 (+200%额外攻击力) (+12 / 15 / 18%被踢英雄的生命值)",
+      "afterText": "150 / 350 / 550 (+200%额外攻击力) (+12 / 15 / 18%被踢英雄的生命值)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/417211290766907.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/LeeSin.png",
+      "ability": {
+        "slot": "R",
+        "name": "猛龙摆尾"
+      }
+    },
+    {
+      "key": "fedc845a40f91691e710ba94194bc4ca",
+      "kind": "champion",
+      "entityId": "Locke",
+      "name": "灰烬驱魔人 洛克",
+      "mode": "general",
+      "label": "成长法力值",
+      "text": "成长法力值：70 ⇒ 60",
+      "changeType": "adjustment",
+      "beforeText": "70",
+      "afterText": "60",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Locke.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Locke.png"
+    },
+    {
+      "key": "47c622a4cdef27bc457ba1e69acd89fa",
+      "kind": "champion",
+      "entityId": "Locke",
+      "name": "灰烬驱魔人 洛克",
+      "mode": "general",
+      "label": "未使用充能返还",
+      "text": "未使用充能返还：20 - 35%法力值和冷却时间返还 ⇒ 10 - 40%法力值和冷却时间返还",
+      "changeType": "adjustment",
+      "beforeText": "20 - 35%法力值和冷却时间返还",
+      "afterText": "10 - 40%法力值和冷却时间返还",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/768301483634721.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Locke.png",
+      "ability": {
+        "slot": "Q",
+        "name": "伏魔三钉"
+      }
+    },
+    {
+      "key": "d18f37b000cf35e9a815db8b0f5deaa7",
+      "kind": "champion",
+      "entityId": "Locke",
+      "name": "灰烬驱魔人 洛克",
+      "mode": "general",
+      "label": "法力消耗",
+      "text": "法力消耗：50 / 55 / 60 / 65 / 70 ⇒ 60 / 65 / 70 / 75 / 80",
+      "changeType": "adjustment",
+      "beforeText": "50 / 55 / 60 / 65 / 70",
+      "afterText": "60 / 65 / 70 / 75 / 80",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/35085264057666.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Locke.png",
+      "ability": {
+        "slot": "W",
+        "name": "灵焰仪式"
+      }
+    },
+    {
+      "key": "cd3931956569fae05d4a34f5a7857d54",
+      "kind": "champion",
+      "entityId": "Locke",
+      "name": "灰烬驱魔人 洛克",
+      "mode": "general",
+      "label": "根据当前生命值的灰色生命值储存",
+      "text": "根据当前生命值的灰色生命值储存：40-200 (基于等级的部分) ⇒ 20-200 (基于等级的部分)",
+      "changeType": "adjustment",
+      "beforeText": "40-200 (基于等级的部分)",
+      "afterText": "20-200 (基于等级的部分)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/35085264057666.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Locke.png",
+      "ability": {
+        "slot": "W",
+        "name": "灵焰仪式"
+      }
+    },
+    {
+      "key": "53f2295985e7df2394b9c8e658d4bedc",
+      "kind": "champion",
+      "entityId": "Locke",
+      "name": "灰烬驱魔人 洛克",
+      "mode": "general",
+      "label": "当前生命值储存",
+      "text": "当前生命值储存：150 - 450 (基于等级的部分) ⇒ 100 - 500 (基于等级的部分)",
+      "changeType": "adjustment",
+      "beforeText": "150 - 450 (基于等级的部分)",
+      "afterText": "100 - 500 (基于等级的部分)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/35085264057666.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Locke.png",
+      "ability": {
+        "slot": "W",
+        "name": "灵焰仪式"
+      }
+    },
+    {
+      "key": "747f12ab8faf02a72824c8be16fd64c5",
+      "kind": "champion",
+      "entityId": "Locke",
+      "name": "灰烬驱魔人 洛克",
+      "mode": "general",
+      "label": "闪烁伤害",
+      "text": "闪烁伤害：40 / 50 / 60 / 70 / 80 (+40%法术强度) ⇒ 40 / 55 / 70 / 85 / 100 (+50%法术强度)",
+      "changeType": "adjustment",
+      "beforeText": "40 / 50 / 60 / 70 / 80 (+40%法术强度)",
+      "afterText": "40 / 55 / 70 / 85 / 100 (+50%法术强度)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/946341515745437.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Locke.png",
+      "ability": {
+        "slot": "E",
+        "name": "灰猎无影"
+      }
+    },
+    {
+      "key": "bfef921488adfae19535f2b66b09d631",
+      "kind": "champion",
+      "entityId": "MissFortune",
+      "name": "赏金猎人 厄运小姐",
+      "mode": "general",
+      "label": "伤害",
+      "text": "伤害：70 / 100 / 130 / 160 / 190 (+120%法术强度) ⇒ 90 / 120 / 150 / 180 / 210 (+120%法术强度)",
+      "changeType": "adjustment",
+      "beforeText": "70 / 100 / 130 / 160 / 190 (+120%法术强度)",
+      "afterText": "90 / 120 / 150 / 180 / 210 (+120%法术强度)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/85110425705423.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/MissFortune.png",
+      "ability": {
+        "slot": "E",
+        "name": "枪林弹雨"
+      }
+    },
+    {
+      "key": "e7e0394e2c9a135bd8882f3be4e6e3c2",
+      "kind": "champion",
+      "entityId": "MissFortune",
+      "name": "赏金猎人 厄运小姐",
+      "mode": "general",
+      "label": "暴击伤害",
+      "text": "暴击伤害：130% (每1%额外暴击伤害+0.3%) ⇒ 145% (每1%额外暴击伤害+0.45%)",
+      "changeType": "adjustment",
+      "beforeText": "130% (每1%额外暴击伤害+0.3%)",
+      "afterText": "145% (每1%额外暴击伤害+0.45%)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/932211051673738.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/MissFortune.png",
+      "ability": {
+        "slot": "R",
+        "name": "弹幕时间"
+      }
+    },
+    {
+      "key": "790395832c1817cc7baeb5b00a14288d",
+      "kind": "champion",
+      "entityId": "Nidalee",
+      "name": "狂野女猎手 奈德丽",
+      "mode": "general",
+      "label": "伤害",
+      "text": "伤害： 伤害：55 / 100 / 145 / 190 (+50%额外攻击力) (+30%法术强度) ⇒ 50 / 90 / 130 / 170 (+50%额外攻击力) (+30%法术强度)",
+      "changeType": "adjustment",
+      "beforeText": "伤害：55 / 100 / 145 / 190 (+50%额外攻击力) (+30%法术强度)",
+      "afterText": "50 / 90 / 130 / 170 (+50%额外攻击力) (+30%法术强度)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/26441960282032.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Nidalee.png",
+      "ability": {
+        "slot": "W",
+        "name": "猛扑"
+      }
+    },
+    {
+      "key": "db705bf6d37dadc173f5a8cf870faba3",
+      "kind": "champion",
+      "entityId": "Nidalee",
+      "name": "狂野女猎手 奈德丽",
+      "mode": "general",
+      "label": "攻击速度",
+      "text": "攻击速度：30 / 40 / 50 / 60 / 70% ⇒ 20 / 30 / 40 / 50 / 60%",
+      "changeType": "adjustment",
+      "beforeText": "30 / 40 / 50 / 60 / 70%",
+      "afterText": "20 / 30 / 40 / 50 / 60%",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/855741125203659.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Nidalee.png",
+      "ability": {
+        "slot": "E",
+        "name": "野性奔腾"
+      }
+    },
+    {
+      "key": "0c0c373f7cad003df9160d12d0cd5025",
+      "kind": "champion",
+      "entityId": "Nunu",
+      "name": "雪原双子 努努和威朗普",
+      "mode": "general",
+      "label": "最大伤害",
+      "text": "最大伤害：625 / 925 / 1275 (+300%法术强度) ⇒ 750 / 1100 / 1450 (+300%法术强度)",
+      "changeType": "adjustment",
+      "beforeText": "625 / 925 / 1275 (+300%法术强度)",
+      "afterText": "750 / 1100 / 1450 (+300%法术强度)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/585101297221958.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Nunu.png",
+      "ability": {
+        "slot": "R",
+        "name": "绝对零度"
+      }
+    },
+    {
+      "key": "7db3d8434e0af9acd91c55f9e48a7fe6",
+      "kind": "champion",
+      "entityId": "Orianna",
+      "name": "发条魔灵 奥莉安娜",
+      "mode": "general",
+      "label": "伤害",
+      "text": "伤害：60 / 90 / 120 / 150 / 180 (+55%法术强度) ⇒ 60 / 90 / 120 / 150 / 180 (+60%法术强度)",
+      "changeType": "adjustment",
+      "beforeText": "60 / 90 / 120 / 150 / 180 (+55%法术强度)",
+      "afterText": "60 / 90 / 120 / 150 / 180 (+60%法术强度)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/9981585797040.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Orianna.png",
+      "ability": {
+        "slot": "Q",
+        "name": "指令：攻击"
+      }
+    },
+    {
+      "key": "3267deb1c66f3de532335cf507d5a014",
+      "kind": "champion",
+      "entityId": "Orianna",
+      "name": "发条魔灵 奥莉安娜",
+      "mode": "general",
+      "label": "伤害",
+      "text": "伤害：70 / 110 / 150 / 190 / 230 (+80%法术强度) ⇒ 70 / 110 / 150 / 190 / 230 (+85%法术强度)",
+      "changeType": "adjustment",
+      "beforeText": "70 / 110 / 150 / 190 / 230 (+80%法术强度)",
+      "afterText": "70 / 110 / 150 / 190 / 230 (+85%法术强度)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/155481208911285.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Orianna.png",
+      "ability": {
+        "slot": "W",
+        "name": "指令：杂音"
+      }
+    },
+    {
+      "key": "01b22e85af2c2d14c1b75cd5da2b145c",
+      "kind": "champion",
+      "entityId": "Qiyana",
+      "name": "元素女皇 奇亚娜",
+      "mode": "general",
+      "label": "伤害",
+      "text": "伤害：80 / 110 / 140 / 170 / 200 (+90%额外攻击力) ⇒ 70 / 100 / 130 / 160 / 190 (+90%额外攻击力)",
+      "changeType": "adjustment",
+      "beforeText": "80 / 110 / 140 / 170 / 200 (+90%额外攻击力)",
+      "afterText": "70 / 100 / 130 / 160 / 190 (+90%额外攻击力)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/14135971408862.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Qiyana.png",
+      "ability": {
+        "slot": "Q",
+        "name": "元素之怒 / 以绪塔尔之锋"
+      }
+    },
+    {
+      "key": "3a2a44c5c9ea0159b3409feb0c573618",
+      "kind": "champion",
+      "entityId": "Rammus",
+      "name": "披甲龙龟 拉莫斯",
+      "mode": "general",
+      "label": "额外护甲",
+      "text": "额外护甲：27 / 32 / 37 / 42 / 47 (+30 - 60%护甲) ⇒ 25 / 30 / 35 / 40 / 45 (+30 - 50%护甲)",
+      "changeType": "adjustment",
+      "beforeText": "27 / 32 / 37 / 42 / 47 (+30 - 60%护甲)",
+      "afterText": "25 / 30 / 35 / 40 / 45 (+30 - 50%护甲)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/44221221191129.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Rammus.png",
+      "ability": {
+        "slot": "W",
+        "name": "尖刺防御"
+      }
+    },
+    {
+      "key": "3fd804cf538d7cfb8441efbbd39fd3dd",
+      "kind": "champion",
+      "entityId": "Rammus",
+      "name": "披甲龙龟 拉莫斯",
+      "mode": "general",
+      "label": "额外魔法抗性",
+      "text": "额外魔法抗性：20 / 25 / 30 / 35 / 40 (+30 - 60%魔法抗性) ⇒ 20 / 25 / 30 / 35 / 40 (+30 - 50%魔法抗性)",
+      "changeType": "adjustment",
+      "beforeText": "20 / 25 / 30 / 35 / 40 (+30 - 60%魔法抗性)",
+      "afterText": "20 / 25 / 30 / 35 / 40 (+30 - 50%魔法抗性)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/44221221191129.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Rammus.png",
+      "ability": {
+        "slot": "W",
+        "name": "尖刺防御"
+      }
+    },
+    {
+      "key": "a128e69a394cceac9e7661eeac713037",
+      "kind": "champion",
+      "entityId": "Ryze",
+      "name": "符文法师 瑞兹",
+      "mode": "general",
+      "label": "涌动 额外伤害",
+      "text": "涌动 额外伤害：15% / 40% / 65% / 90%额外伤害 ⇒ 10% / 40% / 70% / 100%额外伤害",
+      "changeType": "adjustment",
+      "beforeText": "15% / 40% / 65% / 90%额外伤害",
+      "afterText": "10% / 40% / 70% / 100%额外伤害",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/881981404135598.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Ryze.png",
+      "ability": {
+        "slot": "Q",
+        "name": "超负荷"
+      }
+    },
+    {
+      "key": "ecce843ba4011e342bbe450cbd6f953c",
+      "kind": "champion",
+      "entityId": "Ryze",
+      "name": "符文法师 瑞兹",
+      "mode": "general",
+      "label": "额外移动速度",
+      "text": "额外移动速度：28% / 32% / 36% / 40% / 44% ⇒ 30% / 35% / 40% / 45% / 50%",
+      "changeType": "adjustment",
+      "beforeText": "28% / 32% / 36% / 40% / 44%",
+      "afterText": "30% / 35% / 40% / 45% / 50%",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/881981404135598.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Ryze.png",
+      "ability": {
+        "slot": "Q",
+        "name": "超负荷"
+      }
+    },
+    {
+      "key": "3f881d164776cbcbeb2c0b1ff0440425",
+      "kind": "champion",
+      "entityId": "Ryze",
+      "name": "符文法师 瑞兹",
+      "mode": "general",
+      "label": "伤害",
+      "text": "伤害：60 / 90 / 120 / 150 / 180 (+60%法术强度) (+3%额外法力值) ⇒ 60 / 90 / 120 / 150 / 180 (+70%法术强度) (+3%额外法力值)",
+      "changeType": "adjustment",
+      "beforeText": "60 / 90 / 120 / 150 / 180 (+60%法术强度) (+3%额外法力值)",
+      "afterText": "60 / 90 / 120 / 150 / 180 (+70%法术强度) (+3%额外法力值)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/52824764370877.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Ryze.png",
+      "ability": {
+        "slot": "W",
+        "name": "符文禁锢"
+      }
+    },
+    {
+      "key": "94cfba416acb516949f9167bbf37aedd",
+      "kind": "champion",
+      "entityId": "Sion",
+      "name": "亡灵战神 赛恩",
+      "mode": "general",
+      "label": "生命值",
+      "text": "生命值：655 + 87/等级 ⇒ 655 + 95/等级",
+      "changeType": "adjustment",
+      "beforeText": "655 + 87/等级",
+      "afterText": "655 + 95/等级",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Sion.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Sion.png"
+    },
+    {
+      "key": "2ef843104bf2759d48ab3e53c1a284fc",
+      "kind": "champion",
+      "entityId": "Sion",
+      "name": "亡灵战神 赛恩",
+      "mode": "general",
+      "label": "引导最初3秒内的伤害提升",
+      "text": "引导最初3秒内的伤害提升：+0 - 166.67%基础伤害，0 - 100%收益伤害 ⇒ +0 - 200%",
+      "changeType": "adjustment",
+      "beforeText": "+0 - 166.67%基础伤害，0 - 100%收益伤害",
+      "afterText": "+0 - 200%",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/3737147697582.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Sion.png",
+      "ability": {
+        "slot": "R",
+        "name": "蛮横冲撞"
+      }
+    },
+    {
+      "key": "02685747742cc4734b4559b3cc67b425",
+      "kind": "champion",
+      "entityId": "Sion",
+      "name": "亡灵战神 赛恩",
+      "mode": "general",
+      "label": "BUG修复",
+      "text": "BUG修复：现在的说明文本会正确显示最小和最大额外攻击力收益率(40-120%)。之前显示了错误的额外攻击力收益率(60%-120%)。实际上在25.16版本并没有改动它。",
+      "changeType": "adjustment",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/3737147697582.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Sion.png",
+      "ability": {
+        "slot": "R",
+        "name": "蛮横冲撞"
+      }
+    },
+    {
+      "key": "39c431d475ca684051d95b188981bd8a",
+      "kind": "champion",
+      "entityId": "Taliyah",
+      "name": "岩雀 塔莉垭",
+      "mode": "general",
+      "label": "伤害",
+      "text": "伤害：60 / 105 / 150 / 195 / 240 (+60%法术强度) ⇒ 70 / 115 / 160 / 205 / 250 (+70%法术强度)",
+      "changeType": "adjustment",
+      "beforeText": "60 / 105 / 150 / 195 / 240 (+60%法术强度)",
+      "afterText": "70 / 115 / 160 / 205 / 250 (+70%法术强度)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/64039590344939.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Taliyah.png",
+      "ability": {
+        "slot": "E",
+        "name": "撒石阵"
+      }
+    },
+    {
+      "key": "25f39aee08e349f32ed7a021bae01986",
+      "kind": "champion",
+      "entityId": "Taliyah",
+      "name": "岩雀 塔莉垭",
+      "mode": "general",
+      "label": "引爆伤害",
+      "text": "引爆伤害：25 / 40 / 55 / 70 / 85 (+30%法术强度) ⇒ 30 / 45 / 60 / 75 / 90 (+30%法术强度)",
+      "changeType": "adjustment",
+      "beforeText": "25 / 40 / 55 / 70 / 85 (+30%法术强度)",
+      "afterText": "30 / 45 / 60 / 75 / 90 (+30%法术强度)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/64039590344939.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Taliyah.png",
+      "ability": {
+        "slot": "E",
+        "name": "撒石阵"
+      }
+    },
+    {
+      "key": "af3cae95e024aae00743eb6cdf39a5f8",
+      "kind": "champion",
+      "entityId": "Taliyah",
+      "name": "岩雀 塔莉垭",
+      "mode": "general",
+      "label": "其他改动",
+      "text": "野怪伤害：对野怪造成225%伤害。",
+      "changeType": "adjustment",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/64039590344939.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Taliyah.png",
+      "ability": {
+        "slot": "E",
+        "name": "撒石阵"
+      }
+    },
+    {
+      "key": "44466fe7adbdfbcd55ab5b4a5143a245",
+      "kind": "champion",
+      "entityId": "Taric",
+      "name": "瓦洛兰之盾 塔里克",
+      "mode": "general",
+      "label": "其他改动",
+      "text": "施放判定：现在，即使友军处于不可被选取状态时，Q技能也能成功施放。",
+      "changeType": "adjustment",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/144461069835823.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Taric.png",
+      "ability": {
+        "slot": "Q",
+        "name": "星光之触"
+      }
+    },
+    {
+      "key": "9cbfcf39edad51ddfc121e9fbf7f62a3",
+      "kind": "champion",
+      "entityId": "Taric",
+      "name": "瓦洛兰之盾 塔里克",
+      "mode": "general",
+      "label": "其他改动",
+      "text": "施放判定：在友军处于不可被选取状态时施放E技能，现在可以成功发射炫光。",
+      "changeType": "adjustment",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/902421367381357.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Taric.png",
+      "ability": {
+        "slot": "E",
+        "name": "炫光"
+      }
+    },
+    {
+      "key": "da2dce5746cc3db31d25b524b5fcbbce",
+      "kind": "champion",
+      "entityId": "Taric",
+      "name": "瓦洛兰之盾 塔里克",
+      "mode": "general",
+      "label": "其他改动",
+      "text": "说明文本：已更新以包含“消失的友军无法发射炫光”。",
+      "changeType": "adjustment",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/902421367381357.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Taric.png",
+      "ability": {
+        "slot": "E",
+        "name": "炫光"
+      }
+    },
+    {
+      "key": "509ce9a1a201eae2cb964f340f6dce95",
+      "kind": "champion",
+      "entityId": "Taric",
+      "name": "瓦洛兰之盾 塔里克",
+      "mode": "general",
+      "label": "其他改动",
+      "text": "施放判定：现在，当友军处于不可被选取时，R技能施放将能成功施放。",
+      "changeType": "adjustment",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/873711662418405.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Taric.png",
+      "ability": {
+        "slot": "R",
+        "name": "宇宙之辉"
+      }
+    },
+    {
+      "key": "1876b90627ba7f19a390d6b50fec99dd",
+      "kind": "champion",
+      "entityId": "Tristana",
+      "name": "麦林炮手 崔丝塔娜",
+      "mode": "general",
+      "label": "攻击速度",
+      "text": "攻击速度：60 / 75 / 90 / 105 / 120% ⇒ 40 / 60 / 80 / 100 / 120%",
+      "changeType": "adjustment",
+      "beforeText": "60 / 75 / 90 / 105 / 120%",
+      "afterText": "40 / 60 / 80 / 100 / 120%",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/58135986429170.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Tristana.png",
+      "ability": {
+        "slot": "Q",
+        "name": "急速射击"
+      }
+    },
+    {
+      "key": "075df2b6ade8e7fea1d80d0628f4e236",
+      "kind": "champion",
+      "entityId": "TwistedFate",
+      "name": "卡牌大师 崔斯特",
+      "mode": "general",
+      "label": "其他改动",
+      "text": "显形：现在可以显形不可被选取的单位。",
+      "changeType": "adjustment",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/134391191151220.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/TwistedFate.png",
+      "ability": {
+        "slot": "R",
+        "name": "命运"
+      }
+    },
+    {
+      "key": "c2ac5300f9f08aa85512b7eba5715172",
+      "kind": "champion",
+      "entityId": "Varus",
+      "name": "惩戒之箭 韦鲁斯",
+      "mode": "general",
+      "label": "伤害计算",
+      "text": "伤害计算：最大伤害增长，53.33 - 240(+80%额外攻击力)至80 - 360(+120%额外攻击力) ⇒ 最小伤害增长，50 - 230(+80%额外攻击力)至85 - 391(+136%额外攻击力)",
+      "changeType": "adjustment",
+      "beforeText": "最大伤害增长，53.33 - 240(+80%额外攻击力)至80 - 360(+120%额外攻击力)",
+      "afterText": "最小伤害增长，50 - 230(+80%额外攻击力)至85 - 391(+136%额外攻击力)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/990411288774152.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Varus.png",
+      "ability": {
+        "slot": "Q",
+        "name": "穿刺之箭"
+      }
+    },
+    {
+      "key": "59fdc6534257a1b272713fdcf442c9e0",
+      "kind": "champion",
+      "entityId": "Varus",
+      "name": "惩戒之箭 韦鲁斯",
+      "mode": "general",
+      "label": "随引导时间提升伤害",
+      "text": "随引导时间提升伤害：提升幅度上限为50% ⇒ 提升幅度上限为70%",
+      "changeType": "adjustment",
+      "beforeText": "提升幅度上限为50%",
+      "afterText": "提升幅度上限为70%",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/990411288774152.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Varus.png",
+      "ability": {
+        "slot": "Q",
+        "name": "穿刺之箭"
+      }
+    },
+    {
+      "key": "483bacac0488ded938e6c567e6269ac4",
+      "kind": "champion",
+      "entityId": "Varus",
+      "name": "惩戒之箭 韦鲁斯",
+      "mode": "general",
+      "label": "附带伤害",
+      "text": "附带伤害：4 / 13 / 22 / 31 / 40 (+15%额外攻击力) (+25%法术强度) ⇒ 4 / 10 / 16 / 22 / 28 (+20%额外攻击力) (+30%法术强度)",
+      "changeType": "adjustment",
+      "beforeText": "4 / 13 / 22 / 31 / 40 (+15%额外攻击力) (+25%法术强度)",
+      "afterText": "4 / 10 / 16 / 22 / 28 (+20%额外攻击力) (+30%法术强度)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/45466460765336.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Varus.png",
+      "ability": {
+        "slot": "W",
+        "name": "枯萎箭袋"
+      }
+    },
+    {
+      "key": "b6ee527d24e7d92701c3ccc5666213f9",
+      "kind": "champion",
+      "entityId": "Varus",
+      "name": "惩戒之箭 韦鲁斯",
+      "mode": "general",
+      "label": "每层伤害",
+      "text": "每层伤害：3 - 5% (每100法术强度提升1.3%)目标最大生命值 ⇒ 2.5 - 4.5% (每100法术强度提升1.4%)目标最大生命值",
+      "changeType": "adjustment",
+      "beforeText": "3 - 5% (每100法术强度提升1.3%)目标最大生命值",
+      "afterText": "2.5 - 4.5% (每100法术强度提升1.4%)目标最大生命值",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/45466460765336.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Varus.png",
+      "ability": {
+        "slot": "W",
+        "name": "枯萎箭袋"
+      }
+    },
+    {
+      "key": "3e8b5ff671cdb079184d7b15bc9e311e",
+      "kind": "champion",
+      "entityId": "Varus",
+      "name": "惩戒之箭 韦鲁斯",
+      "mode": "general",
+      "label": "主动 已损失生命值伤害",
+      "text": "主动 已损失生命值伤害：6-14%，可通过Q引导来提升，提升幅度上限为50% (9-21%) ⇒ 6-10%，可通过Q引导来提升，提升幅度上限为70% (10.2-17%)",
+      "changeType": "adjustment",
+      "beforeText": "6-14%，可通过Q引导来提升，提升幅度上限为50% (9-21%)",
+      "afterText": "6-10%，可通过Q引导来提升，提升幅度上限为70% (10.2-17%)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/45466460765336.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Varus.png",
+      "ability": {
+        "slot": "W",
+        "name": "枯萎箭袋"
+      }
+    },
+    {
+      "key": "2ef898fefd3421b335b11248f16b35df",
+      "kind": "champion",
+      "entityId": "Varus",
+      "name": "惩戒之箭 韦鲁斯",
+      "mode": "general",
+      "label": "基础技能 冷却时间返还",
+      "text": "基础技能 冷却时间返还：每层13%，可通过Q引导来提升，提升幅度上限为50% (每层19.5%) ⇒ 11%，可通过Q引导来提升，提升幅度上限为70% (每层18.7%)",
+      "changeType": "adjustment",
+      "beforeText": "每层13%，可通过Q引导来提升，提升幅度上限为50% (每层19.5%)",
+      "afterText": "11%，可通过Q引导来提升，提升幅度上限为70% (每层18.7%)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/45466460765336.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Varus.png",
+      "ability": {
+        "slot": "W",
+        "name": "枯萎箭袋"
+      }
+    },
+    {
+      "key": "37f12698d45e2a8e9f5bcbea687a01ce",
+      "kind": "champion",
+      "entityId": "Velkoz",
+      "name": "虚空之眼 维克兹",
+      "mode": "general",
+      "label": "伤害",
+      "text": "伤害：35 - 180 (+60%法术强度) ⇒ 35 - 205 (+65%法术强度)",
+      "changeType": "adjustment",
+      "beforeText": "35 - 180 (+60%法术强度)",
+      "afterText": "35 - 205 (+65%法术强度)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/239511491474395.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Velkoz.png",
+      "ability": {
+        "slot": "P",
+        "name": "有机体解构"
+      }
+    },
+    {
+      "key": "6e9cde8467f9105c9c95b12a964117d1",
+      "kind": "champion",
+      "entityId": "Velkoz",
+      "name": "虚空之眼 维克兹",
+      "mode": "general",
+      "label": "冷却时间",
+      "text": "冷却时间：7秒 ⇒ 6秒",
+      "changeType": "adjustment",
+      "beforeText": "7秒",
+      "afterText": "6秒",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/524811483997092.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Velkoz.png",
+      "ability": {
+        "slot": "Q",
+        "name": "等离子裂变"
+      }
+    },
+    {
+      "key": "9e59e59b816033a188e804078ba945bf",
+      "kind": "champion",
+      "entityId": "Viktor",
+      "name": "奥术先驱 维克托",
+      "mode": "general",
+      "label": "移动速度",
+      "text": "移动速度：335 ⇒ 330",
+      "changeType": "adjustment",
+      "beforeText": "335",
+      "afterText": "330",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Viktor.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Viktor.png"
+    },
+    {
+      "key": "6a9369bebd2a917e8f64c5972881c825",
+      "kind": "champion",
+      "entityId": "Viktor",
+      "name": "奥术先驱 维克托",
+      "mode": "general",
+      "label": "护盾值",
+      "text": "护盾值：40 - 140 (基于等级) (+25%法术强度) ⇒ 30 - 130 (+20%法术强度)",
+      "changeType": "adjustment",
+      "beforeText": "40 - 140 (基于等级) (+25%法术强度)",
+      "afterText": "30 - 130 (+20%法术强度)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/86083389024824.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Viktor.png",
+      "ability": {
+        "slot": "Q",
+        "name": "虹吸能量"
+      }
+    },
+    {
+      "key": "ee1891294f8b548d8b970efdf8f4f947",
+      "kind": "champion",
+      "entityId": "Viktor",
+      "name": "奥术先驱 维克托",
+      "mode": "general",
+      "label": "护盾持续时间",
+      "text": "护盾持续时间：2.5秒 ⇒ 2秒",
+      "changeType": "adjustment",
+      "beforeText": "2.5秒",
+      "afterText": "2秒",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/86083389024824.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Viktor.png",
+      "ability": {
+        "slot": "Q",
+        "name": "虹吸能量"
+      }
+    },
+    {
+      "key": "8210af9335c7afc62b8b29c0d9ecdf1d",
+      "kind": "champion",
+      "entityId": "MonkeyKing",
+      "name": "齐天大圣 孙悟空",
+      "mode": "general",
+      "label": "生命回复",
+      "text": "生命回复：3.5 + 0.65/等级 ⇒ 5.5 + 0.65/等级",
+      "changeType": "adjustment",
+      "beforeText": "3.5 + 0.65/等级",
+      "afterText": "5.5 + 0.65/等级",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/MonkeyKing.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/MonkeyKing.png"
+    },
+    {
+      "key": "8875e43561fa29cf00b4d84e58f46b50",
+      "kind": "champion",
+      "entityId": "MonkeyKing",
+      "name": "齐天大圣 孙悟空",
+      "mode": "general",
+      "label": "每层护甲",
+      "text": "每层护甲：6 - 10 (基于英雄等级) ⇒ 4.5 - 10 (基于英雄等级)",
+      "changeType": "adjustment",
+      "beforeText": "6 - 10 (基于英雄等级)",
+      "afterText": "4.5 - 10 (基于英雄等级)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/623341766794417.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/MonkeyKing.png",
+      "ability": {
+        "slot": "P",
+        "name": "金刚不坏"
+      }
+    },
+    {
+      "key": "3a332df5d3799b1bfa6c5d312f136171",
+      "kind": "champion",
+      "entityId": "XinZhao",
+      "name": "德邦总管 赵信",
+      "mode": "general",
+      "label": "每一击伤害",
+      "text": "每一击伤害：15 / 30 / 45 / 60 / 75 (+40%额外攻击力) ⇒ 15 / 30 / 45 / 60 / 75 (+45%额外攻击力)",
+      "changeType": "adjustment",
+      "beforeText": "15 / 30 / 45 / 60 / 75 (+40%额外攻击力)",
+      "afterText": "15 / 30 / 45 / 60 / 75 (+45%额外攻击力)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/6102617479351.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/XinZhao.png",
+      "ability": {
+        "slot": "Q",
+        "name": "三重爪击"
+      }
+    },
+    {
+      "key": "e4d35b22e6a7a46fca944f8be2e210a5",
+      "kind": "champion",
+      "entityId": "XinZhao",
+      "name": "德邦总管 赵信",
+      "mode": "general",
+      "label": "攻击速度收益",
+      "text": "攻击速度收益：1%每5%额外攻击速度(来自永久来源) ⇒ 1%每4%额外攻击速度(来自永久来源)",
+      "changeType": "adjustment",
+      "beforeText": "1%每5%额外攻击速度(来自永久来源)",
+      "afterText": "1%每4%额外攻击速度(来自永久来源)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/114841301124549.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/XinZhao.png",
+      "ability": {
+        "slot": "E",
+        "name": "无畏冲锋"
+      }
+    },
+    {
+      "key": "6990efc204b719b02d155beb13a937d1",
+      "kind": "champion",
+      "entityId": "Yone",
+      "name": "封魔剑魂 永恩",
+      "mode": "general",
+      "label": "伤害",
+      "text": "伤害：25 / 50 / 75 / 100 / 125 (+110%攻击力) ⇒ 25 / 50 / 75 / 100 / 125 (+105%攻击力)",
+      "changeType": "adjustment",
+      "beforeText": "25 / 50 / 75 / 100 / 125 (+110%攻击力)",
+      "afterText": "25 / 50 / 75 / 100 / 125 (+105%攻击力)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/42079110271719.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Yone.png",
+      "ability": {
+        "slot": "Q",
+        "name": "错玉切"
+      }
+    },
+    {
+      "key": "7a0e91f2bd6df6150c2b80ba50089379",
+      "kind": "champion",
+      "entityId": "Zyra",
+      "name": "荆棘之兴 婕拉",
+      "mode": "general",
+      "label": "种子充能",
+      "text": "种子充能：18 / 16 / 14 / 12 / 10秒 ⇒ 16 / 14.5 / 13 / 11.5 / 10秒",
+      "changeType": "adjustment",
+      "beforeText": "18 / 16 / 14 / 12 / 10秒",
+      "afterText": "16 / 14.5 / 13 / 11.5 / 10秒",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/242851436917056.jpg",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Zyra.png",
+      "ability": {
+        "slot": "W",
+        "name": "狂野生长"
+      }
+    },
+    {
+      "key": "e0c39d5b60895b903fda6422b5f63af1",
+      "kind": "item",
+      "entityId": "2520",
+      "name": "破垒者",
+      "mode": "general",
+      "label": "穿甲",
+      "text": "穿甲：22 ⇒ 18",
+      "changeType": "adjustment",
+      "beforeText": "22",
+      "afterText": "18",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/77553760187253.jpg"
+    },
+    {
+      "key": "a0ac747c2317937cd2e257c4c749b8d7",
+      "kind": "item",
+      "entityId": "2520",
+      "name": "破垒者",
+      "mode": "general",
+      "label": "成型炸药 伤害",
+      "text": "成型炸药 伤害：近战: 50+1.5x穿甲；远程:25+0.75x穿甲 ⇒ 近战: 40+1.5x穿甲；远程:20+0.75x穿甲",
+      "changeType": "adjustment",
+      "beforeText": "近战: 50+1.5x穿甲；远程:25+0.75x穿甲",
+      "afterText": "近战: 40+1.5x穿甲；远程:20+0.75x穿甲",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/77553760187253.jpg"
+    },
+    {
+      "key": "689d68e3d1f0b30460d99bc654873943",
+      "kind": "item",
+      "entityId": "2520",
+      "name": "破垒者",
+      "mode": "general",
+      "label": "蓄意破坏 持续时间",
+      "text": "蓄意破坏 持续时间：90秒 ⇒ 无限",
+      "changeType": "adjustment",
+      "beforeText": "90秒",
+      "afterText": "无限",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/77553760187253.jpg"
+    },
+    {
+      "key": "243dfbbf37fd13e463b2320b7f78e55a",
+      "kind": "item",
+      "entityId": "2520",
+      "name": "破垒者",
+      "mode": "general",
+      "label": "其他改动",
+      "text": "蓄意破坏 持续时间说明：这是你可对战略点造成额外伤害的时间。",
+      "changeType": "adjustment",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/77553760187253.jpg"
+    },
+    {
+      "key": "65e4a52972b10323c4c1b911feef9b9e",
+      "kind": "item",
+      "entityId": "6621",
+      "name": "黎明核心",
+      "mode": "general",
+      "label": "每100%基础法力回复提供的法术强度",
+      "text": "每100%基础法力回复提供的法术强度：10 ⇒ 15",
+      "changeType": "adjustment",
+      "beforeText": "10",
+      "afterText": "15",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/740131764779516.jpg"
+    },
+    {
+      "key": "1a55dbcf82dedfbbf194dd11221c2467",
+      "kind": "item",
+      "entityId": "3008",
+      "name": "暴食胫甲",
+      "mode": "general",
+      "label": "总费用",
+      "text": "总费用：1000金 ⇒ 1100金",
+      "changeType": "adjustment",
+      "beforeText": "1000金",
+      "afterText": "1100金",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/47541563389371.jpg"
+    },
+    {
+      "key": "a5ba71f10334e5494ddd1adb9851b786",
+      "kind": "item",
+      "entityId": "6697",
+      "name": "狂妄",
+      "mode": "general",
+      "label": "基础额外攻击力",
+      "text": "基础额外攻击力：12 ⇒ 15(近战) / 10(远程)",
+      "changeType": "adjustment",
+      "beforeText": "12",
+      "afterText": "15(近战) / 10(远程)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/25786346506176.jpg"
+    },
+    {
+      "key": "1ad70a3f64733ca1252220ed86ac1fc2",
+      "kind": "item",
+      "entityId": "6697",
+      "name": "狂妄",
+      "mode": "general",
+      "label": "每层额外攻击力",
+      "text": "每层额外攻击力：3 ⇒ 3(近战) / 2(远程)",
+      "changeType": "adjustment",
+      "beforeText": "3",
+      "afterText": "3(近战) / 2(远程)",
+      "icon": "https://ossweb-img.qq.com/upload/webplat/info/lol/20261021/25786346506176.jpg"
+    },
+    {
+      "key": "dc97936618d0996d3211e4725a4d5552",
+      "kind": "augment",
+      "entityId": "BlueBarrier",
+      "name": "蓝色屏障",
+      "mode": "aram",
+      "label": "新增",
+      "text": "每当你施放一个技能时，获得基于该法力消耗的护盾值。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/bluenote_small.png"
+    },
+    {
+      "key": "ef52e50fead169cc53b1d78c27a9d7dd",
+      "kind": "augment",
+      "entityId": "FlowOfSpirit",
+      "name": "灵魂乐流",
+      "mode": "aram",
+      "label": "新增",
+      "text": "使用一个特定技能时，会为你提供可叠加的攻击速度。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/genericabilityaugmenticon_gold.png"
+    },
+    {
+      "key": "ea2761f21d4f0db2d68f7e390a2f2928",
+      "kind": "augment",
+      "entityId": "Fruitify",
+      "name": "水果化",
+      "mode": "aram",
+      "label": "新增",
+      "text": "参与击杀会在受害者的位置生成水果，可供你和你的友军拾取以回复生命值和法力值。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/fruitseason_small.png"
+    },
+    {
+      "key": "48304fbea818df4c99ef7b714c1f8328",
+      "kind": "augment",
+      "entityId": "GiftoftheDrowned",
+      "name": "溺水之赠礼",
+      "mode": "aram",
+      "label": "新增",
+      "text": "从你的装备获得的所有额外生命值转化为穿甲。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/giftofthedrowned_small.png"
+    },
+    {
+      "key": "43d1a0d26b5d432e806e0352b1732be8",
+      "kind": "augment",
+      "entityId": "HandsOffTheTalent",
+      "name": "远射天资",
+      "mode": "aram",
+      "label": "新增",
+      "text": "你在接近最大攻击距离处打出的攻击造成额外伤害。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/bonk_large.png"
+    },
+    {
+      "key": "e860594a8034d9df319c15c01aeec0c7",
+      "kind": "augment",
+      "entityId": "LichBrain",
+      "name": "巫妖大脑",
+      "mode": "aram",
+      "label": "新增",
+      "text": "获得基于你的额外生命值的法术强度。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/lichbrain_small.png"
+    },
+    {
+      "key": "c78525f88620efd06bcef4d59810d12d",
+      "kind": "augment",
+      "entityId": "LonelyWarrior",
+      "name": "孤勇者",
+      "mode": "aram",
+      "label": "新增",
+      "text": "你周围每有一个敌方英雄，你就会获得护甲、魔法抗性和攻击速度。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/adamant_small.png"
+    },
+    {
+      "key": "dcae9907cc1e75a912b9f3c05c0b8445",
+      "kind": "augment",
+      "entityId": "NoManaNoProblem",
+      "name": "没法力，没问题",
+      "mode": "aram",
+      "label": "新增",
+      "text": "从你的装备获得的所有法力回复转化为法术强度。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/nomananoproblem_small.png"
+    },
+    {
+      "key": "fda515f7433490a0a17f6ee8c0d13443",
+      "kind": "augment",
+      "entityId": "Sound_Barrier",
+      "name": "音之屏障",
+      "mode": "aram",
+      "label": "新增",
+      "text": "你的护盾会提升移动速度。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/swiftandsafe_small.png"
+    },
+    {
+      "key": "9dfa993b410926d35d8a180d17b73f10",
+      "kind": "augment",
+      "entityId": "UltimateRecursion",
+      "name": "终极循环往复",
+      "mode": "aram",
+      "label": "新增",
+      "text": "获得50终极技能急速。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/zealot_large.png"
+    },
+    {
+      "key": "72effb717ef09b67ad6dfa725030264a",
+      "kind": "augment",
+      "entityId": "ArcaneAxiom",
+      "name": "奥术公理",
+      "mode": "aram",
+      "label": "新增",
+      "text": "参与击杀后，会返还你的一部分终极技能冷却时间。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/arcaneaxiom_small.png"
+    },
+    {
+      "key": "f42c2432b6783bb6afe490918b54a27f",
+      "kind": "augment",
+      "entityId": "ArmoredImpact",
+      "name": "装甲冲击",
+      "mode": "aram",
+      "label": "新增",
+      "text": "使用一个技能时，会使你的下一次普攻造成基于你护甲的额外伤害。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/armoredimpact_small.png"
+    },
+    {
+      "key": "0ac67f54cb35dd7fb06656ec6a29d53f",
+      "kind": "augment",
+      "entityId": "BEES",
+      "name": "小蜜蜂！！！",
+      "mode": "aram",
+      "label": "新增",
+      "text": "你的技能会周期性地对敌人们掷出一个爆炸蜂巢，来造成伤害、减速并附带攻击特效。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/bees_small.png"
+    },
+    {
+      "key": "7117af4109b43259ecd84a189e56813f",
+      "kind": "augment",
+      "entityId": "BrassBlast",
+      "name": "黄铜爆音",
+      "mode": "aram",
+      "label": "新增",
+      "text": "获得一个召唤师技能，它可使你蓄力一次号角爆音来击退并伤害你的敌人们。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/camo_large.png"
+    },
+    {
+      "key": "df737b073ed6793ca601423e524a53c1",
+      "kind": "augment",
+      "entityId": "CrimsonCobalt",
+      "name": "深红钴蓝闪光",
+      "mode": "aram",
+      "label": "新增",
+      "text": "你的一个技能会标记敌方英雄，在消耗该标记时会造成额外伤害并降低你该技能的冷却时间。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/genericabilityaugmenticon_gold.png"
+    },
+    {
+      "key": "05320f168c65583240070f837bdb90e3",
+      "kind": "augment",
+      "entityId": "DoubleTime",
+      "name": "翻倍时间",
+      "mode": "aram",
+      "label": "新增",
+      "text": "快速且连续地用两个不同的技能对敌方英雄造成伤害时，会提供永久法力值并造成额外伤害。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/aram_phenomenalevil_large.png"
+    },
+    {
+      "key": "2af783fdacff5c00d0ac084dbfed0471",
+      "kind": "augment",
+      "entityId": "EnchantingButterflies",
+      "name": "迷人蝴蝶",
+      "mode": "aram",
+      "label": "新增",
+      "text": "为友军提供治疗和护盾时会积攒蝴蝶。一旦你拥有了足够数量的蝴蝶，它们就会飞向你伤害的敌人从而造成额外伤害。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/enchantedbuttery_small.png"
+    },
+    {
+      "key": "9a9a7ba53eab7070f6bd46fc12b562c6",
+      "kind": "augment",
+      "entityId": "ARAM_GetExcited",
+      "name": "罪恶快感",
+      "mode": "aram",
+      "label": "新增",
+      "text": "获得一个召唤师技能，它可使你跳到一个毁灭性的飞弹上并驾驭它冲向你的敌人们。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/getexcited_small.png"
+    },
+    {
+      "key": "c1d2985cd8b89b24bf9f8aa13477172b",
+      "kind": "augment",
+      "entityId": "HeavyIsTheCrown",
+      "name": "王冠之重",
+      "mode": "aram",
+      "label": "新增",
+      "text": "获得攻击力、法术强度和攻击速度，但降低你自己的移动速度。每次参与击杀后都会提升这个效果，并且阵亡时降低这个效果。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/heavyisthecrown_small.png"
+    },
+    {
+      "key": "577c8ad000a08a9a9e46ba0047f98b3b",
+      "kind": "augment",
+      "entityId": "JeweledBracelet",
+      "name": "珠光手镯",
+      "mode": "aram",
+      "label": "新增",
+      "text": "你的终极技能可以暴击。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/genericabilityaugmenticon_gold.png"
+    },
+    {
+      "key": "1fcd71cc50551994d80a252cbe787df6",
+      "kind": "augment",
+      "entityId": "Recoil",
+      "name": "反冲",
+      "mode": "aram",
+      "label": "新增",
+      "text": "你的一个技能将在你发射它时将你向后反冲。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/genericabilityaugmenticon_gold.png"
+    },
+    {
+      "key": "c13e0011bb45e6bc7731ef1450bb2404",
+      "kind": "augment",
+      "entityId": "Salvation",
+      "name": "拯救",
+      "mode": "aram",
+      "label": "新增",
+      "text": "跌下低生命值时，会将敌人们推后并治疗友军们。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/salvation_small.png"
+    },
+    {
+      "key": "b15f814edece70581a9851e8ec32acae",
+      "kind": "augment",
+      "entityId": "SapMagic",
+      "name": "吸元秘术",
+      "mode": "aram",
+      "label": "新增",
+      "text": "每10秒，你的下一次普通攻击造成额外伤害并治疗你。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/mercysstrike_small.png"
+    },
+    {
+      "key": "597d7208d463118529ae41aaba85acc3",
+      "kind": "augment",
+      "entityId": "StillHere",
+      "name": "屹立不倒",
+      "mode": "aram",
+      "label": "新增",
+      "text": "基于你的已损失生命值，获得攻击力、法术强度和生命偷取。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/stillhere_small.png"
+    },
+    {
+      "key": "25bba5c00455ac1b4cfc5f2d052bf6b7",
+      "kind": "augment",
+      "entityId": "TakeemDownDownDown",
+      "name": "将他们放倒倒倒",
+      "mode": "aram",
+      "label": "新增",
+      "text": "用攻击和技能对一个敌方英雄造成5次伤害，即可获得一次爆发性的治疗并对该英雄造成额外伤害。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/takeemdowndowndown_small.png"
+    },
+    {
+      "key": "33eed66f742a4366a9dcbd6d8e8fa5b0",
+      "kind": "augment",
+      "entityId": "TheBoomAndTheBass",
+      "name": "鼓声暴起 低音轰鸣",
+      "mode": "aram",
+      "label": "新增",
+      "text": "施放技能后，你的下一次攻击造成额外伤害并为你提供爆发性的移动速度。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/theboomandthebass_small.png"
+    },
+    {
+      "key": "191165d48c89124dcc72daf50242e49d",
+      "kind": "augment",
+      "entityId": "TickleMonster",
+      "name": "嗡嗡怪兽",
+      "mode": "aram",
+      "label": "新增",
+      "text": "你从装备获得的所有额外攻击力转化为攻击速度。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/ticklemonster_small.png"
+    },
+    {
+      "key": "62a7e5581d8c88f8328fe05e5ff700cf",
+      "kind": "augment",
+      "entityId": "Upgrade_Stormsurge",
+      "name": "升级：风暴狂涌",
+      "mode": "aram",
+      "label": "新增",
+      "text": "当【风暴狂涌】施加【风啸】时，它会引爆一个区域，从而造成额外伤害并用一个次级【风啸】标记敌人们。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/upgradehubris_small.png"
+    },
+    {
+      "key": "1986641054468dca55107c4f6a740ba3",
+      "kind": "augment",
+      "entityId": "WeaponOfDestiny",
+      "name": "命运之武器",
+      "mode": "aram",
+      "label": "新增",
+      "text": "你购买的第一件传说装备会在每次参与击杀后获得更强力的属性。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/protagonistssignatureweapon_small.png"
+    },
+    {
+      "key": "79f8c57b043508719bf5dc499b06e3a5",
+      "kind": "augment",
+      "entityId": "BigShot",
+      "name": "大腕",
+      "mode": "aram",
+      "label": "新增",
+      "text": "你的很大一部分攻击速度转化为暴击伤害。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/bigshot_small.png"
+    },
+    {
+      "key": "34ca133bfcddef0651876e81e723c189",
+      "kind": "augment",
+      "entityId": "BouncingBees",
+      "name": "弹跳蜜蜂",
+      "mode": "aram",
+      "label": "新增",
+      "text": "使用技能后，你的下一次普攻会弹跳至附近敌人，优先选择英雄。让你的攻击弹跳到敌方英雄身上来完成任务，可获得额外的弹跳次数和攻击力。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/kingme_large.png"
+    },
+    {
+      "key": "b665dfb6c886ff17245479c086c3e8ab",
+      "kind": "augment",
+      "entityId": "GroupHug",
+      "name": "一起抱抱",
+      "mode": "aram",
+      "label": "新增",
+      "text": "你的一个技能在提供治疗或护盾时还会为附近的友军提供治疗或护盾。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/empyreampromise_small.png"
+    },
+    {
+      "key": "f6861d7d6690d1a307f59d20c1d5d4dc",
+      "kind": "augment",
+      "entityId": "MoshMonster",
+      "name": "热舞怪兽",
+      "mode": "aram",
+      "label": "新增",
+      "text": "使用你的终极技能时，会为你提供额外生命值并在你周围生成一个地带来减速敌方英雄们。击杀和参与击杀会提升你获得的额外生命值数额以及减速地带的的范围。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/genericabilityaugmenticon_prismatic.png"
+    },
+    {
+      "key": "a78ae1f04cc91b72d7b5ad546127b6f5",
+      "kind": "augment",
+      "entityId": "ThirdTimesTheHarm",
+      "name": "伤不过三",
+      "mode": "aram",
+      "label": "新增",
+      "text": "攻击一个敌方英雄3次，即可造成爆发性的伤害并为你提供爆发性的攻击速度",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/silverbeats_small.png"
+    },
+    {
+      "key": "d9746a39d4fc53c54737c3e898000c12",
+      "kind": "augment",
+      "entityId": "Totentanz",
+      "name": "死之舞",
+      "mode": "aram",
+      "label": "新增",
+      "text": "获得一个召唤师技能，它可让你“与死亡共舞”，从而为你提供持续5秒的“不可被击杀”状态，但如果你在此期间未能获得一次参与击杀，那么你就会被拖入冥界（也就是阵亡）。",
+      "changeType": "added",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/totentanz_small.png"
+    },
+    {
+      "key": "dabd5183d34c958e8c9571fdbdfaf4cf",
+      "kind": "augment",
+      "entityId": "BloodMoneyBurn",
+      "name": "炽燃利息",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：炽燃利息",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/bloodmoney2_small.png"
+    },
+    {
+      "key": "d09805208de29cfb61b61013092fdaeb",
+      "kind": "augment",
+      "entityId": "CritNCast",
+      "name": "由暴生急",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：由暴生急",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/critncast_small.png"
+    },
+    {
+      "key": "faf90272b14738a955e1c32c7f7f624e",
+      "kind": "augment",
+      "entityId": "CriticalMissile",
+      "name": "暴击飞弹",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：暴击飞弹",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/criticalmissile_small.png"
+    },
+    {
+      "key": "93cfab774596c0932e661e4eafd72589",
+      "kind": "augment",
+      "entityId": "DimensionShift_Active",
+      "name": "位面转移",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：位面转移",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/whenthedarknesscomes_small.png"
+    },
+    {
+      "key": "9af03ade839a3115f2af22391f4c1c7b",
+      "kind": "augment",
+      "entityId": "ARAM_DropBear",
+      "name": "空投熊",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：空投熊",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/drop_bear_small.png"
+    },
+    {
+      "key": "208e97b2dfb3ebe7f26c682633c2fe14",
+      "kind": "augment",
+      "entityId": "ARAM_Dropkick",
+      "name": "飞身踢",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：飞身踢",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/dropkick_small.png"
+    },
+    {
+      "key": "10c64d07f9bf07d1ca9d7e48cbb133ad",
+      "kind": "augment",
+      "entityId": "ARAM_FanTheHammer",
+      "name": "连拨击锤",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：连拨击锤",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/fanthehammer_small.png"
+    },
+    {
+      "key": "5f512c0bce6018e27b4ce4d683f19d25",
+      "kind": "augment",
+      "entityId": "BrushPower",
+      "name": "藏身草丛",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：藏身草丛",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/brushpower_small.png"
+    },
+    {
+      "key": "9918a9952f3eccd0ad9c41e263cb8210",
+      "kind": "augment",
+      "entityId": "ARAM_HighRoller",
+      "name": "掷骰狂人",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：掷骰狂人",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/highroller_small.png"
+    },
+    {
+      "key": "c8f9c786fa703640b697b886661c0b58",
+      "kind": "augment",
+      "entityId": "Equilibrium",
+      "name": "我们的治疗",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：我们的治疗",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/equillibrium_small.png"
+    },
+    {
+      "key": "3562849f1f0a9ed56eda855b4794e31e",
+      "kind": "augment",
+      "entityId": "PoroCharge_Active",
+      "name": "魄罗蛮冲",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：魄罗蛮冲",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/questporocharge_small.png"
+    },
+    {
+      "key": "2767505462038bcee7c94f919d6b07fe",
+      "kind": "augment",
+      "entityId": "ARAM_SpiritualPurification",
+      "name": "心灵净化",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：心灵净化",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/spiritualpurification_small.png"
+    },
+    {
+      "key": "b5a37cd9fad3289c9170ea0e66d6bf59",
+      "kind": "augment",
+      "entityId": "SkipTheBasics",
+      "name": "大招工具人",
+      "mode": "aram",
+      "label": "移除",
+      "text": "从强化符文池移除：大招工具人",
+      "changeType": "removed",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/skipthebasic_small.png"
+    },
+    {
+      "key": "ede78e3c7d3e8101fff84f42aa6575b6",
+      "kind": "champion",
+      "entityId": "Belveth",
+      "name": "虚空女皇 卑尔维斯",
+      "mode": "arena",
+      "label": "攻击力收益率",
+      "text": "攻击力收益率：105% ⇒ 95%",
+      "changeType": "adjustment",
+      "beforeText": "105%",
+      "afterText": "95%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/BelvethQ.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Belveth.png",
+      "ability": {
+        "slot": "Q",
+        "name": "虚空激流"
+      }
+    },
+    {
+      "key": "1f36d855df35146885e21a5cf7009329",
+      "kind": "champion",
+      "entityId": "Belveth",
+      "name": "虚空女皇 卑尔维斯",
+      "mode": "arena",
+      "label": "每层额外攻击力收益率",
+      "text": "每层额外攻击力收益率：1% ⇒ 0.5%",
+      "changeType": "adjustment",
+      "beforeText": "1%",
+      "afterText": "0.5%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/BelvethR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Belveth.png",
+      "ability": {
+        "slot": "R",
+        "name": "万载豪筵"
+      }
+    },
+    {
+      "key": "1e487ebfaa9f94cb8dcf6e5f064809a2",
+      "kind": "champion",
+      "entityId": "Briar",
+      "name": "狂厄蔷薇 贝蕾亚",
+      "mode": "arena",
+      "label": "晕眩时长",
+      "text": "晕眩时长：0.85秒 ⇒ 0.5秒",
+      "changeType": "adjustment",
+      "beforeText": "0.85秒",
+      "afterText": "0.5秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/BriarQ.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Briar.png",
+      "ability": {
+        "slot": "Q",
+        "name": "冲头"
+      }
+    },
+    {
+      "key": "4af1335b0fe6fba020d5a92bad0c28c9",
+      "kind": "champion",
+      "entityId": "Briar",
+      "name": "狂厄蔷薇 贝蕾亚",
+      "mode": "arena",
+      "label": "满蓄力法术强度收益率",
+      "text": "满蓄力法术强度收益率：100% ⇒ 150%",
+      "changeType": "adjustment",
+      "beforeText": "100%",
+      "afterText": "150%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/BriarE.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Briar.png",
+      "ability": {
+        "slot": "E",
+        "name": "惊吼"
+      }
+    },
+    {
+      "key": "145b22e51e28003f698bf76fd64898bc",
+      "kind": "champion",
+      "entityId": "Briar",
+      "name": "狂厄蔷薇 贝蕾亚",
+      "mode": "arena",
+      "label": "满蓄力撞墙法术强度收益率",
+      "text": "满蓄力撞墙法术强度收益率：240% ⇒ 350%",
+      "changeType": "adjustment",
+      "beforeText": "240%",
+      "afterText": "350%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/BriarE.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Briar.png",
+      "ability": {
+        "slot": "E",
+        "name": "惊吼"
+      }
+    },
+    {
+      "key": "7b455967334246dc84c4aea411f0c15b",
+      "kind": "champion",
+      "entityId": "Briar",
+      "name": "狂厄蔷薇 贝蕾亚",
+      "mode": "arena",
+      "label": "总最大法术强度收益率",
+      "text": "总最大法术强度收益率：340% ⇒ 500%",
+      "changeType": "adjustment",
+      "beforeText": "340%",
+      "afterText": "500%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/BriarE.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Briar.png",
+      "ability": {
+        "slot": "E",
+        "name": "惊吼"
+      }
+    },
+    {
+      "key": "0be441d245ce6beff32a4b78bdfbc80b",
+      "kind": "champion",
+      "entityId": "Elise",
+      "name": "蜘蛛女皇 伊莉丝",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：8 / 7.5 / 7 / 6.5 / 6秒 ⇒ 10秒",
+      "changeType": "adjustment",
+      "beforeText": "8 / 7.5 / 7 / 6.5 / 6秒",
+      "afterText": "10秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/EliseHumanE.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Elise.png",
+      "ability": {
+        "slot": "E",
+        "name": "结茧"
+      }
+    },
+    {
+      "key": "e8b6d6cc74bb3c569214dc134dc3388b",
+      "kind": "champion",
+      "entityId": "Elise",
+      "name": "蜘蛛女皇 伊莉丝",
+      "mode": "arena",
+      "label": "小蜘蛛",
+      "text": "小蜘蛛：2 / 3 / 4 / 5 ⇒ 4 / 6 / 8 / 10",
+      "changeType": "adjustment",
+      "beforeText": "2 / 3 / 4 / 5",
+      "afterText": "4 / 6 / 8 / 10",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/EliseHumanW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Elise.png",
+      "ability": {
+        "slot": "W",
+        "name": "掠行狂暴"
+      }
+    },
+    {
+      "key": "5f5448a4dd15fa2333225aab48284bc9",
+      "kind": "champion",
+      "entityId": "Elise",
+      "name": "蜘蛛女皇 伊莉丝",
+      "mode": "arena",
+      "label": "其他改动",
+      "text": "已移除 旧版蜘蛛伤害增益：已移除。",
+      "changeType": "adjustment",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/EliseHumanW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Elise.png",
+      "ability": {
+        "slot": "W",
+        "name": "掠行狂暴"
+      }
+    },
+    {
+      "key": "4548d9a9af49e37bb686fcdf94c0819c",
+      "kind": "champion",
+      "entityId": "Ezreal",
+      "name": "探险家 伊泽瑞尔",
+      "mode": "arena",
+      "label": "额外攻击力收益率",
+      "text": "额外攻击力收益率：100% ⇒ 150%",
+      "changeType": "adjustment",
+      "beforeText": "100%",
+      "afterText": "150%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/EzrealR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Ezreal.png",
+      "ability": {
+        "slot": "R",
+        "name": "精准弹幕"
+      }
+    },
+    {
+      "key": "c2805c3bb581552fe914aba08277bc49",
+      "kind": "champion",
+      "entityId": "Ezreal",
+      "name": "探险家 伊泽瑞尔",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：50 / 40 / 30秒 ⇒ 40 / 30 / 20秒",
+      "changeType": "adjustment",
+      "beforeText": "50 / 40 / 30秒",
+      "afterText": "40 / 30 / 20秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/EzrealR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Ezreal.png",
+      "ability": {
+        "slot": "R",
+        "name": "精准弹幕"
+      }
+    },
+    {
+      "key": "2c8fdf02e79a9511e02bc1c941ef9ec3",
+      "kind": "champion",
+      "entityId": "Fiora",
+      "name": "无双剑姬 菲奥娜",
+      "mode": "arena",
+      "label": "额外攻击力收益率",
+      "text": "额外攻击力收益率：3%每100额外攻击力 ⇒ 2%每100额外攻击力",
+      "changeType": "adjustment",
+      "beforeText": "3%每100额外攻击力",
+      "afterText": "2%每100额外攻击力",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/passive/Fiora_P.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Fiora.png",
+      "ability": {
+        "slot": "P",
+        "name": "决斗之舞"
+      }
+    },
+    {
+      "key": "78cc768088ca89d37bc2bfe461838d25",
+      "kind": "champion",
+      "entityId": "Fiora",
+      "name": "无双剑姬 菲奥娜",
+      "mode": "arena",
+      "label": "法术强度收益率",
+      "text": "法术强度收益率：0 ⇒ 25%",
+      "changeType": "adjustment",
+      "beforeText": "0",
+      "afterText": "25%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/FioraQ.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Fiora.png",
+      "ability": {
+        "slot": "Q",
+        "name": "破空斩"
+      }
+    },
+    {
+      "key": "ebecaedddf98ff0f3bf28965ceb5838f",
+      "kind": "champion",
+      "entityId": "Galio",
+      "name": "正义巨像 加里奥",
+      "mode": "arena",
+      "label": "被动护盾生命值收益率",
+      "text": "被动护盾生命值收益率：7.5 - 15% ⇒ 6 - 10%",
+      "changeType": "adjustment",
+      "beforeText": "7.5 - 15%",
+      "afterText": "6 - 10%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/GalioW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Galio.png",
+      "ability": {
+        "slot": "W",
+        "name": "杜朗护盾"
+      }
+    },
+    {
+      "key": "eedaebc8ebe4c6039b7305b61c5cf8b6",
+      "kind": "champion",
+      "entityId": "Galio",
+      "name": "正义巨像 加里奥",
+      "mode": "arena",
+      "label": "完全引导嘲讽时长",
+      "text": "完全引导嘲讽时长：1.5秒 ⇒ 1秒",
+      "changeType": "adjustment",
+      "beforeText": "1.5秒",
+      "afterText": "1秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/GalioW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Galio.png",
+      "ability": {
+        "slot": "W",
+        "name": "杜朗护盾"
+      }
+    },
+    {
+      "key": "fd1d55aaad747858a500aae57b92142e",
+      "kind": "champion",
+      "entityId": "Galio",
+      "name": "正义巨像 加里奥",
+      "mode": "arena",
+      "label": "击飞时长",
+      "text": "击飞时长：1.5秒 ⇒ 1秒",
+      "changeType": "adjustment",
+      "beforeText": "1.5秒",
+      "afterText": "1秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/GalioR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Galio.png",
+      "ability": {
+        "slot": "R",
+        "name": "英雄登场"
+      }
+    },
+    {
+      "key": "0e735f60c191e695bf4447cac12cb0cc",
+      "kind": "champion",
+      "entityId": "Gangplank",
+      "name": "海洋之灾 普朗克",
+      "mode": "arena",
+      "label": "法术强度收益率",
+      "text": "法术强度收益率：90% ⇒ 135%",
+      "changeType": "adjustment",
+      "beforeText": "90%",
+      "afterText": "135%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/GangplankW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Gangplank.png",
+      "ability": {
+        "slot": "W",
+        "name": "坏血病疗法"
+      }
+    },
+    {
+      "key": "0bdf09e1c71ae88831c8056dd8ec281a",
+      "kind": "champion",
+      "entityId": "Gangplank",
+      "name": "海洋之灾 普朗克",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：22 / 20 / 18 / 16 / 14秒 ⇒ 18 / 16 / 14 / 12 / 10秒",
+      "changeType": "adjustment",
+      "beforeText": "22 / 20 / 18 / 16 / 14秒",
+      "afterText": "18 / 16 / 14 / 12 / 10秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/GangplankW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Gangplank.png",
+      "ability": {
+        "slot": "W",
+        "name": "坏血病疗法"
+      }
+    },
+    {
+      "key": "bc3a8f78979f9a3cc5da47531de2385f",
+      "kind": "champion",
+      "entityId": "Gangplank",
+      "name": "海洋之灾 普朗克",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：130 / 110 / 90秒 ⇒ 100 / 80 / 60秒",
+      "changeType": "adjustment",
+      "beforeText": "130 / 110 / 90秒",
+      "afterText": "100 / 80 / 60秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/GangplankR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Gangplank.png",
+      "ability": {
+        "slot": "R",
+        "name": "加农炮幕"
+      }
+    },
+    {
+      "key": "d373ab2ed995b83df6a13cf073209e2f",
+      "kind": "champion",
+      "entityId": "Gnar",
+      "name": "迷失之牙 纳尔",
+      "mode": "arena",
+      "label": "持续时长",
+      "text": "持续时长：4秒 ⇒ 2秒",
+      "changeType": "adjustment",
+      "beforeText": "4秒",
+      "afterText": "2秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/GnarW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Gnar.png",
+      "ability": {
+        "slot": "W",
+        "name": "亢奋"
+      }
+    },
+    {
+      "key": "f8ca4f49fa40dde4e1f4e800213d3e77",
+      "kind": "champion",
+      "entityId": "Gnar",
+      "name": "迷失之牙 纳尔",
+      "mode": "arena",
+      "label": "移动速度",
+      "text": "移动速度：20 / 40 / 60 / 80 ⇒ 40 / 80 / 120 / 160（注：在描述文本中暂未改动，将于后续版本修复）",
+      "changeType": "adjustment",
+      "beforeText": "20 / 40 / 60 / 80",
+      "afterText": "40 / 80 / 120 / 160（注：在描述文本中暂未改动，将于后续版本修复）",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/GnarW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Gnar.png",
+      "ability": {
+        "slot": "W",
+        "name": "亢奋"
+      }
+    },
+    {
+      "key": "d563ad1e07a97cfa419f90ec971529cb",
+      "kind": "champion",
+      "entityId": "Gnar",
+      "name": "迷失之牙 纳尔",
+      "mode": "arena",
+      "label": "法术强度收益率",
+      "text": "法术强度收益率：100% ⇒ 150%",
+      "changeType": "adjustment",
+      "beforeText": "100%",
+      "afterText": "150%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/GnarR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Gnar.png",
+      "ability": {
+        "slot": "R",
+        "name": "呐啊！"
+      }
+    },
+    {
+      "key": "39ed2309ff7cc194b75d67b77f566e74",
+      "kind": "champion",
+      "entityId": "Kayn",
+      "name": "影流之镰 凯隐",
+      "mode": "arena",
+      "label": "其他改动",
+      "text": "转化进度：提升速率。",
+      "changeType": "adjustment",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/passive/Kayn_Passive_Primary.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Kayn.png",
+      "ability": {
+        "slot": "P",
+        "name": "暗裔魔镰"
+      }
+    },
+    {
+      "key": "4d67ae4b8d961fe459c567be401de62b",
+      "kind": "champion",
+      "entityId": "Katarina",
+      "name": "不祥之刃 卡特琳娜",
+      "mode": "arena",
+      "label": "攻击特效 效能",
+      "text": "攻击特效 效能：20 / 25 / 30% ⇒ 固定25%",
+      "changeType": "adjustment",
+      "beforeText": "20 / 25 / 30%",
+      "afterText": "固定25%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/KatarinaR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Katarina.png",
+      "ability": {
+        "slot": "R",
+        "name": "死亡莲华"
+      }
+    },
+    {
+      "key": "b694b7ff1b0c40e3e60c94181d67fa91",
+      "kind": "champion",
+      "entityId": "Katarina",
+      "name": "不祥之刃 卡特琳娜",
+      "mode": "arena",
+      "label": "每把匕首 法术强度收益率",
+      "text": "每把匕首 法术强度收益率：26% ⇒ 35%",
+      "changeType": "adjustment",
+      "beforeText": "26%",
+      "afterText": "35%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/KatarinaR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Katarina.png",
+      "ability": {
+        "slot": "R",
+        "name": "死亡莲华"
+      }
+    },
+    {
+      "key": "3f2f45d7e7e2364952ff75195469f8ff",
+      "kind": "champion",
+      "entityId": "LeeSin",
+      "name": "盲僧 李青",
+      "mode": "arena",
+      "label": "法术强度收益率",
+      "text": "法术强度收益率：0 ⇒ 75%",
+      "changeType": "adjustment",
+      "beforeText": "0",
+      "afterText": "75%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/LeeSinEOne.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/LeeSin.png",
+      "ability": {
+        "slot": "E",
+        "name": "天雷破"
+      }
+    },
+    {
+      "key": "bee60eff76c0a8cf3c22e7d3317a54e5",
+      "kind": "champion",
+      "entityId": "Malzahar",
+      "name": "虚空先知 玛尔扎哈",
+      "mode": "arena",
+      "label": "其他改动",
+      "text": "虚灵充能上限：现在最多可储存6层充能。",
+      "changeType": "adjustment",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/MalzaharW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Malzahar.png",
+      "ability": {
+        "slot": "W",
+        "name": "虚空虫群"
+      }
+    },
+    {
+      "key": "86d5d79282de4669188a4974992b907c",
+      "kind": "champion",
+      "entityId": "Milio",
+      "name": "明烛 米利欧",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：8秒 ⇒ 10秒",
+      "changeType": "adjustment",
+      "beforeText": "8秒",
+      "afterText": "10秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/MilioQ.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Milio.png",
+      "ability": {
+        "slot": "Q",
+        "name": "火爆飞踢"
+      }
+    },
+    {
+      "key": "d276f293196fe814d912879908050c36",
+      "kind": "champion",
+      "entityId": "Milio",
+      "name": "明烛 米利欧",
+      "mode": "arena",
+      "label": "法术强度收益率",
+      "text": "法术强度收益率：120% ⇒ 200%",
+      "changeType": "adjustment",
+      "beforeText": "120%",
+      "afterText": "200%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/MilioQ.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Milio.png",
+      "ability": {
+        "slot": "Q",
+        "name": "火爆飞踢"
+      }
+    },
+    {
+      "key": "7f8938e2d8cf39178a6988d40a7653b7",
+      "kind": "champion",
+      "entityId": "Milio",
+      "name": "明烛 米利欧",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：160 / 145 / 130秒 ⇒ 180 / 150 / 130秒",
+      "changeType": "adjustment",
+      "beforeText": "160 / 145 / 130秒",
+      "afterText": "180 / 150 / 130秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/MilioR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Milio.png",
+      "ability": {
+        "slot": "R",
+        "name": "生生不息"
+      }
+    },
+    {
+      "key": "fabbb32c0072dab8cf48cd6eacfad166",
+      "kind": "champion",
+      "entityId": "MissFortune",
+      "name": "赏金猎人 厄运小姐",
+      "mode": "arena",
+      "label": "法术强度收益率",
+      "text": "法术强度收益率：55% ⇒ 70%",
+      "changeType": "adjustment",
+      "beforeText": "55%",
+      "afterText": "70%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/MissFortuneRicochetShot.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/MissFortune.png",
+      "ability": {
+        "slot": "Q",
+        "name": "一箭双雕"
+      }
+    },
+    {
+      "key": "87f18d06454345916ab286a2f7d63b63",
+      "kind": "champion",
+      "entityId": "MissFortune",
+      "name": "赏金猎人 厄运小姐",
+      "mode": "arena",
+      "label": "法术强度收益率",
+      "text": "法术强度收益率：35% ⇒ 40%",
+      "changeType": "adjustment",
+      "beforeText": "35%",
+      "afterText": "40%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/MissFortuneBulletTime.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/MissFortune.png",
+      "ability": {
+        "slot": "R",
+        "name": "弹幕时间"
+      }
+    },
+    {
+      "key": "59b0f5b691b03b52f0b01d1032771492",
+      "kind": "champion",
+      "entityId": "Morgana",
+      "name": "堕落天使 莫甘娜",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：12秒 ⇒ 14秒",
+      "changeType": "adjustment",
+      "beforeText": "12秒",
+      "afterText": "14秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/MorganaQ.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Morgana.png",
+      "ability": {
+        "slot": "Q",
+        "name": "暗之禁锢"
+      }
+    },
+    {
+      "key": "9213f6b5433e4ebef573b6a34072ed51",
+      "kind": "champion",
+      "entityId": "Morgana",
+      "name": "堕落天使 莫甘娜",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：26 / 23.5 / 21 / 18.5 / 16秒 ⇒ 30 / 27.5 / 11 / 22.5 / 20秒",
+      "changeType": "adjustment",
+      "beforeText": "26 / 23.5 / 21 / 18.5 / 16秒",
+      "afterText": "30 / 27.5 / 11 / 22.5 / 20秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/MorganaE.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Morgana.png",
+      "ability": {
+        "slot": "E",
+        "name": "黑暗之盾"
+      }
+    },
+    {
+      "key": "81e2b59c266a12e4c530e6b58a2e66ae",
+      "kind": "champion",
+      "entityId": "Nidalee",
+      "name": "狂野女猎手 奈德丽",
+      "mode": "arena",
+      "label": "陷阱 冷却时间",
+      "text": "陷阱 冷却时间：14 / 13 / 12 / 11 / 10秒 ⇒ 8秒",
+      "changeType": "adjustment",
+      "beforeText": "14 / 13 / 12 / 11 / 10秒",
+      "afterText": "8秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/Bushwhack.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Nidalee.png",
+      "ability": {
+        "slot": "W",
+        "name": "丛林伏击"
+      }
+    },
+    {
+      "key": "d3a1c58d0d679c3599bef70c4ac748eb",
+      "kind": "champion",
+      "entityId": "Nidalee",
+      "name": "狂野女猎手 奈德丽",
+      "mode": "arena",
+      "label": "美洲狮技能冷却时间",
+      "text": "美洲狮技能冷却时间：6秒 ⇒ 4秒",
+      "changeType": "adjustment",
+      "beforeText": "6秒",
+      "afterText": "4秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/AspectOfTheCougar.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Nidalee.png",
+      "ability": {
+        "slot": "R",
+        "name": "美洲狮形态"
+      }
+    },
+    {
+      "key": "16284f68b20d05e5a867f4fbddd4c968",
+      "kind": "champion",
+      "entityId": "Rengar",
+      "name": "傲之追猎者 雷恩加尔",
+      "mode": "arena",
+      "label": "法术强度收益率",
+      "text": "法术强度收益率：95% ⇒ 120%",
+      "changeType": "adjustment",
+      "beforeText": "95%",
+      "afterText": "120%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/RengarW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Rengar.png",
+      "ability": {
+        "slot": "W",
+        "name": "战争咆哮"
+      }
+    },
+    {
+      "key": "5dd55fecf3819bf5f4c13a891a53461e",
+      "kind": "champion",
+      "entityId": "Rengar",
+      "name": "傲之追猎者 雷恩加尔",
+      "mode": "arena",
+      "label": "强化版 法术强度收益率",
+      "text": "强化版 法术强度收益率：105% ⇒ 120%",
+      "changeType": "adjustment",
+      "beforeText": "105%",
+      "afterText": "120%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/RengarW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Rengar.png",
+      "ability": {
+        "slot": "W",
+        "name": "战争咆哮"
+      }
+    },
+    {
+      "key": "11a0dd591c01190b5cf3eae9f56ecee3",
+      "kind": "champion",
+      "entityId": "Renata",
+      "name": "炼金男爵 烈娜塔 · 戈拉斯克",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：150 / 130 / 110秒 ⇒ 170 / 150 / 130秒",
+      "changeType": "adjustment",
+      "beforeText": "150 / 130 / 110秒",
+      "afterText": "170 / 150 / 130秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/RenataR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Renata.png",
+      "ability": {
+        "slot": "R",
+        "name": "恶意收购"
+      }
+    },
+    {
+      "key": "b197539c742c3644c50dd7545b720df6",
+      "kind": "champion",
+      "entityId": "Renata",
+      "name": "炼金男爵 烈娜塔 · 戈拉斯克",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：28 / 27 / 26 / 25 / 24秒 ⇒ 32 / 31 / 30 / 29 / 28秒",
+      "changeType": "adjustment",
+      "beforeText": "28 / 27 / 26 / 25 / 24秒",
+      "afterText": "32 / 31 / 30 / 29 / 28秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/RenataW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Renata.png",
+      "ability": {
+        "slot": "W",
+        "name": "及时救难"
+      }
+    },
+    {
+      "key": "18ce33df342f77d0e94ba222c1c9cae7",
+      "kind": "champion",
+      "entityId": "Skarner",
+      "name": "上古领主 斯卡纳",
+      "mode": "arena",
+      "label": "额外攻击力收益率",
+      "text": "额外攻击力收益率：90% ⇒ 150%",
+      "changeType": "adjustment",
+      "beforeText": "90%",
+      "afterText": "150%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/SkarnerQ.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Skarner.png",
+      "ability": {
+        "slot": "Q",
+        "name": "撼地"
+      }
+    },
+    {
+      "key": "8a6df158e359e4bf74e10278b9e54617",
+      "kind": "champion",
+      "entityId": "Skarner",
+      "name": "上古领主 斯卡纳",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：10 / 9 / 8 / 7 / 6秒 ⇒ 8 / 7 / 6 / 5 / 4秒",
+      "changeType": "adjustment",
+      "beforeText": "10 / 9 / 8 / 7 / 6秒",
+      "afterText": "8 / 7 / 6 / 5 / 4秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/SkarnerW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Skarner.png",
+      "ability": {
+        "slot": "W",
+        "name": "震地壁垒"
+      }
+    },
+    {
+      "key": "63bf5f259a19026b62df834ada2fc6e5",
+      "kind": "champion",
+      "entityId": "Skarner",
+      "name": "上古领主 斯卡纳",
+      "mode": "arena",
+      "label": "法术强度收益率",
+      "text": "法术强度收益率：80% ⇒ 120%",
+      "changeType": "adjustment",
+      "beforeText": "80%",
+      "afterText": "120%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/SkarnerW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Skarner.png",
+      "ability": {
+        "slot": "W",
+        "name": "震地壁垒"
+      }
+    },
+    {
+      "key": "01873e5ee4359b95f5e97c21338b969f",
+      "kind": "champion",
+      "entityId": "Teemo",
+      "name": "迅捷斥候 提莫",
+      "mode": "arena",
+      "label": "首次命中 攻击力收益率",
+      "text": "首次命中 攻击力收益率：5% ⇒ 10%",
+      "changeType": "adjustment",
+      "beforeText": "5%",
+      "afterText": "10%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/TeemoE.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Teemo.png",
+      "ability": {
+        "slot": "E",
+        "name": "毒性射击"
+      }
+    },
+    {
+      "key": "a1239d385cc2d6ba715a46ab1be14eaa",
+      "kind": "champion",
+      "entityId": "Teemo",
+      "name": "迅捷斥候 提莫",
+      "mode": "arena",
+      "label": "数值调整",
+      "text": "持续伤害 攻击力收益率10% ⇒ 20%",
+      "changeType": "adjustment",
+      "beforeText": "持续伤害 攻击力收益率10%",
+      "afterText": "20%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/TeemoE.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Teemo.png",
+      "ability": {
+        "slot": "E",
+        "name": "毒性射击"
+      }
+    },
+    {
+      "key": "596c74cf9ff187bf6a8853e80b6fb88d",
+      "kind": "champion",
+      "entityId": "Urgot",
+      "name": "无畏战车 厄加特",
+      "mode": "arena",
+      "label": "附伤效能",
+      "text": "附伤效能：50% ⇒ 75%",
+      "changeType": "adjustment",
+      "beforeText": "50%",
+      "afterText": "75%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/UrgotW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Urgot.png",
+      "ability": {
+        "slot": "W",
+        "name": "净除"
+      }
+    },
+    {
+      "key": "aa7be90211c2ba0da580c74ffddb09bb",
+      "kind": "champion",
+      "entityId": "Varus",
+      "name": "惩戒之箭 韦鲁斯",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：18 / 16 / 14 / 12 / 10秒 ⇒ 14 / 12 / 10 / 8 / 6秒",
+      "changeType": "adjustment",
+      "beforeText": "18 / 16 / 14 / 12 / 10秒",
+      "afterText": "14 / 12 / 10 / 8 / 6秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/VarusE.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Varus.png",
+      "ability": {
+        "slot": "E",
+        "name": "恶灵箭雨"
+      }
+    },
+    {
+      "key": "89418e80ca2fa7104b137c0606b587be",
+      "kind": "champion",
+      "entityId": "Varus",
+      "name": "惩戒之箭 韦鲁斯",
+      "mode": "arena",
+      "label": "法术强度收益率",
+      "text": "法术强度收益率：0 ⇒ 50%",
+      "changeType": "adjustment",
+      "beforeText": "0",
+      "afterText": "50%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/VarusE.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Varus.png",
+      "ability": {
+        "slot": "E",
+        "name": "恶灵箭雨"
+      }
+    },
+    {
+      "key": "6059c28a4fa96dfb57169270323291a8",
+      "kind": "champion",
+      "entityId": "Yone",
+      "name": "封魔剑魂 永恩",
+      "mode": "arena",
+      "label": "额外攻击力收益率",
+      "text": "额外攻击力收益率：80% ⇒ 100%",
+      "changeType": "adjustment",
+      "beforeText": "80%",
+      "afterText": "100%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/YoneR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Yone.png",
+      "ability": {
+        "slot": "R",
+        "name": "封尘绝念斩"
+      }
+    },
+    {
+      "key": "ebbc1cd1bb8bf4f9b903b09378de6a03",
+      "kind": "champion",
+      "entityId": "Yone",
+      "name": "封魔剑魂 永恩",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：70 / 60 / 50秒 ⇒ 60 / 50 / 40秒",
+      "changeType": "adjustment",
+      "beforeText": "70 / 60 / 50秒",
+      "afterText": "60 / 50 / 40秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/YoneR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Yone.png",
+      "ability": {
+        "slot": "R",
+        "name": "封尘绝念斩"
+      }
+    },
+    {
+      "key": "cc0e97bd386650c94e9269d3f0dc73ef",
+      "kind": "champion",
+      "entityId": "Yuumi",
+      "name": "魔法猫咪 悠米",
+      "mode": "arena",
+      "label": "治疗和护盾强度",
+      "text": "治疗和护盾强度：10 - 25% ⇒ 4 - 8%",
+      "changeType": "adjustment",
+      "beforeText": "10 - 25%",
+      "afterText": "4 - 8%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/YuumiW.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Yuumi.png",
+      "ability": {
+        "slot": "W",
+        "name": "悠米出动！"
+      }
+    },
+    {
+      "key": "08b7e2c8838c082bca81f184eef8a352",
+      "kind": "champion",
+      "entityId": "Zaahen",
+      "name": "不落魔锋 亚恒",
+      "mode": "arena",
+      "label": "每层额外攻击力",
+      "text": "每层额外攻击力：1 - 2% ⇒ 1%",
+      "changeType": "adjustment",
+      "beforeText": "1 - 2%",
+      "afterText": "1%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/passive/ZaahenP.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Zaahen.png",
+      "ability": {
+        "slot": "P",
+        "name": "不落之志"
+      }
+    },
+    {
+      "key": "d53c1f5794fe0fc12334c9ed65d5ad07",
+      "kind": "item",
+      "entityId": "443079",
+      "name": "涡轮炼金罐",
+      "mode": "arena",
+      "label": "回复",
+      "text": "回复：4% ⇒ 20%最大生命值",
+      "changeType": "adjustment",
+      "beforeText": "4%",
+      "afterText": "20%最大生命值",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/443079.png"
+    },
+    {
+      "key": "e9578355f8fb7d4a424d28c7622ecd39",
+      "kind": "item",
+      "entityId": "6671",
+      "name": "狂风之力",
+      "mode": "arena",
+      "label": "最大冲刺距离",
+      "text": "最大冲刺距离：600 ⇒ 900",
+      "changeType": "adjustment",
+      "beforeText": "600",
+      "afterText": "900",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/6671.png"
+    },
+    {
+      "key": "e6a57595a7f794160c621d95ee901cdc",
+      "kind": "item",
+      "entityId": "4636",
+      "name": "暗夜收割者",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：10秒 ⇒ 8秒",
+      "changeType": "adjustment",
+      "beforeText": "10秒",
+      "afterText": "8秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/4636.png"
+    },
+    {
+      "key": "c8015a6a86771bd04dbe4295b9461fdc",
+      "kind": "item",
+      "entityId": "4636",
+      "name": "暗夜收割者",
+      "mode": "arena",
+      "label": "移动速度持续时长",
+      "text": "移动速度持续时长：1.5秒 ⇒ 1秒",
+      "changeType": "adjustment",
+      "beforeText": "1.5秒",
+      "afterText": "1秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/4636.png"
+    },
+    {
+      "key": "4dd8a1295660fe004528f29df4c7fd58",
+      "kind": "item",
+      "entityId": "4636",
+      "name": "暗夜收割者",
+      "mode": "arena",
+      "label": "移动速度",
+      "text": "移动速度：40% ⇒ 60%",
+      "changeType": "adjustment",
+      "beforeText": "40%",
+      "afterText": "60%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/4636.png"
+    },
+    {
+      "key": "5d8d88adf44d7dee6386008acdd18024",
+      "kind": "item",
+      "entityId": "447100",
+      "name": "幻境之刃",
+      "mode": "arena",
+      "label": "剩余冷却返还",
+      "text": "剩余冷却返还：20% ⇒ 15%",
+      "changeType": "adjustment",
+      "beforeText": "20%",
+      "afterText": "15%",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/447100.png"
+    },
+    {
+      "key": "d3621a312362a8185f3b30668b9e9f9e",
+      "kind": "item",
+      "entityId": "447110",
+      "name": "月华咒刃",
+      "mode": "arena",
+      "label": "每次攻击的冷却返还",
+      "text": "每次攻击的冷却返还：0.5秒 ⇒ 0.3秒",
+      "changeType": "adjustment",
+      "beforeText": "0.5秒",
+      "afterText": "0.3秒",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/447110.png"
+    },
+    {
+      "key": "1bac265607b0d0f0b39f52f805e21276",
+      "kind": "item",
+      "entityId": "447110",
+      "name": "月华咒刃",
+      "mode": "arena",
+      "label": "强化攻击次数",
+      "text": "强化攻击次数：2 ⇒ 3",
+      "changeType": "adjustment",
+      "beforeText": "2",
+      "afterText": "3",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/447110.png"
+    },
+    {
+      "key": "adc2dfa1d47e9fd643bac291e6f0578b",
+      "kind": "augment",
+      "entityId": "ARAM_BigBrain",
+      "name": "超强大脑",
+      "mode": "arena",
+      "label": "脱离战斗计时器",
+      "text": "脱离战斗计时器：3秒 ⇒ 5秒",
+      "changeType": "adjustment",
+      "beforeText": "3秒",
+      "afterText": "5秒",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/bigbrain_small.png"
+    },
+    {
+      "key": "47c38a7fde3e5d80274bda56c8a0c855",
+      "kind": "augment",
+      "entityId": "Castle",
+      "name": "王车易位",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：12秒 ⇒ 10秒",
+      "changeType": "adjustment",
+      "beforeText": "12秒",
+      "afterText": "10秒",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/castle_small.png"
+    },
+    {
+      "key": "fdb8de4d3dd77f49205d5694bc54eb8a",
+      "kind": "augment",
+      "entityId": "ChromaFlux",
+      "name": "炫彩跃动",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：10秒 ⇒ 8秒",
+      "changeType": "adjustment",
+      "beforeText": "10秒",
+      "afterText": "8秒",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/chroma_flux_small.png"
+    },
+    {
+      "key": "e8b42783e285cda20e650ff1ebb0ab1e",
+      "kind": "augment",
+      "entityId": "ARAM_CourageoftheColossus",
+      "name": "巨像的勇气",
+      "mode": "arena",
+      "label": "护盾冷却时间",
+      "text": "护盾冷却时间：5秒 ⇒ 6秒",
+      "changeType": "adjustment",
+      "beforeText": "5秒",
+      "afterText": "6秒",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/courageofthecolossus_small.png"
+    },
+    {
+      "key": "0a9692db9bbcd9edee33c7908a836eeb",
+      "kind": "augment",
+      "entityId": "ARAM_DawnbringersResolve",
+      "name": "黎明使者的坚决",
+      "mode": "arena",
+      "label": "治疗效果",
+      "text": "治疗效果：25 / 30 ⇒ 35 / 40",
+      "changeType": "adjustment",
+      "beforeText": "25 / 30",
+      "afterText": "35 / 40",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/dawnbringersresolve_small.png"
+    },
+    {
+      "key": "61ff2b7054c3f13ec661b895b97c2331",
+      "kind": "augment",
+      "entityId": "ARAM_DualWield",
+      "name": "双刀流",
+      "mode": "arena",
+      "label": "附伤效能",
+      "text": "附伤效能：40 / 50 / 60% ⇒ 40 / 45 / 50%",
+      "changeType": "adjustment",
+      "beforeText": "40 / 50 / 60%",
+      "afterText": "40 / 45 / 50%",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/dualwield_small.png"
+    },
+    {
+      "key": "24dd0b5236199611859ab901c403de7b",
+      "kind": "augment",
+      "entityId": "ARAM_Flashy",
+      "name": "闪现向前",
+      "mode": "arena",
+      "label": "充能数",
+      "text": "充能数：2 / 3 ⇒ 4 / 6",
+      "changeType": "adjustment",
+      "beforeText": "2 / 3",
+      "afterText": "4 / 6",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/flashy_small.png"
+    },
+    {
+      "key": "5ad9baedc8ede650929c44f82930e929",
+      "kind": "augment",
+      "entityId": "HiveMind",
+      "name": "蜂巢思维",
+      "mode": "arena",
+      "label": "初始小蜜蜂",
+      "text": "初始小蜜蜂：2 / 4 / 6 ⇒ 3 / 6 / 9",
+      "changeType": "adjustment",
+      "beforeText": "2 / 4 / 6",
+      "afterText": "3 / 6 / 9",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/hive_mind_small.png"
+    },
+    {
+      "key": "b0829958725b802e3edb10129f0c4e12",
+      "kind": "augment",
+      "entityId": "ARAM_Minionmancer",
+      "name": "仆从大师",
+      "mode": "arena",
+      "label": "仆从强度提升",
+      "text": "仆从强度提升：40% / 55% ⇒ 55% / 70%",
+      "changeType": "adjustment",
+      "beforeText": "40% / 55%",
+      "afterText": "55% / 70%",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/minionmancer_small.png"
+    },
+    {
+      "key": "ffbe45aa9bb38f343db8139972b93493",
+      "kind": "augment",
+      "entityId": "NestingDoll",
+      "name": "套娃",
+      "mode": "arena",
+      "label": "最大复活次数",
+      "text": "最大复活次数：1 / 2 / 3 ⇒ 0 / 1 / 2",
+      "changeType": "adjustment",
+      "beforeText": "1 / 2 / 3",
+      "afterText": "0 / 1 / 2",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/nesting_doll_small.png"
+    },
+    {
+      "key": "e0f17a627ece93e793112d73c4921309",
+      "kind": "augment",
+      "entityId": "Quest_RiteOfTheForgeGod",
+      "name": "任务：熔铸之神的仪式",
+      "mode": "arena",
+      "label": "装备属性增幅",
+      "text": "装备属性增幅：40% ⇒ 60%",
+      "changeType": "adjustment",
+      "beforeText": "40%",
+      "afterText": "60%",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/quest_rite_of_the_forge_god_small.png"
+    },
+    {
+      "key": "51dec70dedd22e5e5fb794c2a704ec79",
+      "kind": "augment",
+      "entityId": "ARAM_SpinToWin",
+      "name": "旋转至胜",
+      "mode": "arena",
+      "label": "伤害增幅",
+      "text": "伤害增幅：25 / 35% ⇒ 35 / 45%",
+      "changeType": "adjustment",
+      "beforeText": "25 / 35%",
+      "afterText": "35 / 45%",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/spintowin_small.png"
+    },
+    {
+      "key": "f99d4a3dc466363be07f0fbbbd829826",
+      "kind": "augment",
+      "entityId": "ARAM_TrueshotProdigy",
+      "name": "精准奇才",
+      "mode": "arena",
+      "label": "基础伤害",
+      "text": "基础伤害：175 / 350 / 525 ⇒ 175 / 275 / 375",
+      "changeType": "adjustment",
+      "beforeText": "175 / 350 / 525",
+      "afterText": "175 / 275 / 375",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/trueshotprodigy_small.png"
+    },
+    {
+      "key": "866b45cd2b91860383e4eb917b64dc33",
+      "kind": "augment",
+      "entityId": "ARAM_TrueshotProdigy",
+      "name": "精准奇才",
+      "mode": "arena",
+      "label": "攻击力收益率",
+      "text": "攻击力收益率：100% ⇒ 50%",
+      "changeType": "adjustment",
+      "beforeText": "100%",
+      "afterText": "50%",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/trueshotprodigy_small.png"
+    },
+    {
+      "key": "4e1654952c714868d02ab116693e36c9",
+      "kind": "augment",
+      "entityId": "ARAM_TrueshotProdigy",
+      "name": "精准奇才",
+      "mode": "arena",
+      "label": "冷却时间",
+      "text": "冷却时间：10 / 8 / 6秒 ⇒ 12 / 10 / 8秒",
+      "changeType": "adjustment",
+      "beforeText": "10 / 8 / 6秒",
+      "afterText": "12 / 10 / 8秒",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/cherry/augments/icons/trueshotprodigy_small.png"
+    },
+    {
+      "key": "51f3f8656bd9b0a39077bd5b01a7374b",
+      "kind": "champion",
+      "entityId": "Zaahen",
+      "name": "不落魔锋 亚恒",
+      "mode": "general",
+      "label": "BUG修复",
+      "text": "修复了一个BUG，该BUG曾导致：如果亚恒在Q技能的攻击过程中进入复活状态，那么他的Q技能无法完成。",
+      "changeType": "fix",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/ZaahenQ.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Zaahen.png",
+      "ability": {
+        "slot": "Q",
+        "name": "暗裔长刀"
+      }
+    },
+    {
+      "key": "62e803c01286aafd1faed48b1dc1b6bb",
+      "kind": "other",
+      "entityId": "official-c6fd47806b55be31",
+      "name": "通用修复",
+      "mode": "general",
+      "label": "BUG修复",
+      "text": "修复了一个BUG，该BUG曾导致：召唤师技能【传送】在草丛中施放时，其引导状态的视觉特效会被敌方看到。",
+      "changeType": "fix"
+    },
+    {
+      "key": "6e56c380d1545e10abcc263fa70fc39f",
+      "kind": "item",
+      "entityId": "3748",
+      "name": "巨型九头蛇",
+      "mode": "general",
+      "label": "BUG修复",
+      "text": "修复了一个BUG，该BUG曾导致：【巨型九头蛇】在使用后不显示冷却时间。",
+      "changeType": "fix",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/3748.png"
+    },
+    {
+      "key": "42d26f2f92d2696831ec9899e3f780f5",
+      "kind": "champion",
+      "entityId": "Zoe",
+      "name": "暮光星灵 佐伊",
+      "mode": "general",
+      "label": "BUG修复",
+      "text": "修复了一个BUG，该BUG曾导致：【佐伊】可以比预期更早从小兵掉落中获得1000伤害的【惩戒】。",
+      "changeType": "fix",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Zoe.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Zoe.png"
+    },
+    {
+      "key": "8adbe4c7c977f5480a53acbb418edb0e",
+      "kind": "other",
+      "entityId": "official-c6fd47806b55be31",
+      "name": "通用修复",
+      "mode": "general",
+      "label": "BUG修复",
+      "text": "修复了一个BUG，该BUG曾导致：如果首次攻击被取消，【丛刃】在普攻重置时不会触发。",
+      "changeType": "fix"
+    },
+    {
+      "key": "40f4241fb52e5d55f7999e57f1d6e00c",
+      "kind": "champion",
+      "entityId": "Nidalee",
+      "name": "狂野女猎手 奈德丽",
+      "mode": "general",
+      "label": "BUG修复",
+      "text": "修复了一个BUG，该BUG曾导致：奈德丽的(Q)标枪在最大距离处的伤害可以穿透法术护盾。",
+      "changeType": "fix",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/JavelinToss.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Nidalee.png",
+      "ability": {
+        "slot": "Q",
+        "name": "标枪投掷 / 推倒"
+      }
+    },
+    {
+      "key": "7193caeacbde16b0da03cfeda5a997fd",
+      "kind": "champion",
+      "entityId": "Briar",
+      "name": "狂厄蔷薇 贝蕾亚",
+      "mode": "general",
+      "label": "其他改动",
+      "text": "更新了音效，现在对阵贝蕾亚、克烈和赛恩时将听到他们基础皮肤的终极技能音效，让战斗更清晰。",
+      "changeType": "fix",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/BriarR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Briar.png",
+      "ability": {
+        "slot": "R",
+        "name": "毙除"
+      }
+    },
+    {
+      "key": "e3b878bc799335cd338e3db206f80da3",
+      "kind": "champion",
+      "entityId": "Kled",
+      "name": "暴怒骑士 克烈",
+      "mode": "general",
+      "label": "其他改动",
+      "text": "更新了音效，现在对阵贝蕾亚、克烈和赛恩时将听到他们基础皮肤的终极技能音效，让战斗更清晰。",
+      "changeType": "fix",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/KledR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Kled.png",
+      "ability": {
+        "slot": "R",
+        "name": "冲啊——！！"
+      }
+    },
+    {
+      "key": "b1cf9be5236677a0af33c810a5533e2b",
+      "kind": "champion",
+      "entityId": "Sion",
+      "name": "亡灵战神 赛恩",
+      "mode": "general",
+      "label": "其他改动",
+      "text": "更新了音效，现在对阵贝蕾亚、克烈和赛恩时将听到他们基础皮肤的终极技能音效，让战斗更清晰。",
+      "changeType": "fix",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/SionR.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Sion.png",
+      "ability": {
+        "slot": "R",
+        "name": "蛮横冲撞"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "name": "英雄联盟国服官网原文",
+      "url": "https://lol.qq.com/gicp/news/410/37099805.html",
+      "sha256": "9e59c2da2367ecbbfa1425ff7e554fcf759a491ace04a98a5cd64612f727d6c4"
+    }
+  ],
+  "official": {
+    "date": "2026-10-21",
+    "title": "26.21版本更新公告",
+    "url": "https://lol.qq.com/gicp/news/410/37099805.html",
+    "sha256": "9e59c2da2367ecbbfa1425ff7e554fcf759a491ace04a98a5cd64612f727d6c4"
+  },
+  "supersedes": [
+    "20a50203ba0070326ee82dc0"
+  ]
+}
