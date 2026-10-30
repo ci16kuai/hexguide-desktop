@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "articles": [
+    {
+      "id": "20a50203ba0070326ee82dc0",
+      "sha256": "d3f82d99443276d95877b26152b912e4fe64afeed13e9ff54fb1cf210fac0336",
+      "icons": {
+        "augment:Ability_SelfAOE_DoubleCast:CloneDuration": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/genericabilityaugmenticon_prismatic.png",
+        "item:3008:gold.base": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/3008.png",
+        "item:3008:gold.sell": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/3008.png",
+        "item:3008:gold.total": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/3008.png",
+        "item:6621:effect.2": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/6621.png",
+        "item:773005:effect.0": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/773005.png",
+        "item:773005:stats.FlatCritChanceMod": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/item/773005.png"
+      },
+      "official": {
+        "date": "2026-10-21",
+        "title": "26.21版本更新公告",
+        "url": "https://lol.qq.com/news/detail.shtml?docid=9107763462516557080",
+        "sha256": "1f05f1c9dccb1567c1b2aeda5d836bce5d2f773f564b462ceb9d7c2556484cb3"
+      },
+      "updatedAt": "2026-10-30T16:56:38.345Z"
+    }
+  ]
+}
