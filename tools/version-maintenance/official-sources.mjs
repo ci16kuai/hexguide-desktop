@@ -21,6 +21,9 @@ function* blocks(node){
   }
 }
 const normalized=value=>clean(value).replace(/[【】\[\]\s·]/g,'');
+// Data Dragon lists only the primary form. Bind alternate forms by their exact
+// official skill name; asset verified in game/data/characters/elise/elise.bin.json.
+const alternateSkillIcons={'Elise:W:掠行狂暴':'assets/characters/elise/hud/icons2d/elisespiderw.png'};
 export function officialCatalog({version,champions,items,augments=[]}){
   if(champions?.version!==version||!champions.data||!items?.data)throw Error('Official announcement icon catalog unavailable.');
   return {
@@ -99,7 +102,8 @@ export function parseOfficialChanges(html,{url,version,catalog}={}){
     const skill=/^(被动|[QWER])\s*[-—–]\s*(.+)$/.exec(text);
     if(category==='champion'&&skill){
       const slot=skill[1]==='被动'?'P':skill[1],source=slot==='P'?entity?.passive:entity?.spells?.[['Q','W','E','R'].indexOf(slot)];
-      const fallbackIcon=source?.image?.full?`https://ddragon.leagueoflegends.com/cdn/${version}/img/${slot==='P'?'passive':'spell'}/${source.image.full}`:'';
+      const alternate=alternateSkillIcons[`${entity?.id}:${slot}:${clean(skill[2])}`];
+      const fallbackIcon=alternate?`https://raw.communitydragon.org/${version.split('.').slice(0,2).join('.')}/game/${alternate}`:source?.image?.full?`https://ddragon.leagueoflegends.com/cdn/${version}/img/${slot==='P'?'passive':'spell'}/${source.image.full}`:'';
       ability={slot,name:skill[2],icon:block.icon||fallbackIcon};continue;
     }
     if(mode==='aram'&&status==='removed'&&category==='augment'&&block.type==='li'){const who=identify('augment',text,block.icon);add(`从强化符文池移除：${text}`,{who,type:'removed',spell:null});continue;}

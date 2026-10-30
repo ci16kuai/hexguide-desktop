@@ -43,6 +43,13 @@ test('all official hero facts include base stats, passives, named skill icons an
   assert.equal(heroes.find(row=>row.entityId==='Darius'&&row.label==='冷却时间').afterText,'9 / 8 / 7 / 6 / 4秒');
   assert.ok(heroes.some(row=>row.changeType==='fix'));
 });
+test('alternate form abilities use the corresponding form icon instead of the primary form',()=>{
+  const spider=parse(html).changes.find(row=>row.entityId==='Elise'&&row.ability?.name==='掠行狂暴');
+  assert.match(spider.icon,/elisespiderw\.png$/);
+  const human=parse(html.replace('W - 掠行狂暴','W - 自爆蜘蛛')).changes.find(row=>row.entityId==='Elise'&&row.ability?.name==='自爆蜘蛛');
+  assert.match(human.icon,/EliseHumanW\.png$/);
+});
+
 test('short champion headings and augment names containing colons never inherit the preceding entity',()=>{
   const result=parse(html),renata=result.changes.filter(row=>row.entityId==='Renata');assert.equal(renata.length,2);assert.deepEqual(renata.map(row=>row.ability.slot).sort(),['R','W']);assert.ok(renata.every(row=>row.icon.endsWith(`Renata${row.ability.slot}.png`)));
   const storm=result.changes.filter(row=>row.entityId==='Upgrade_Stormsurge');assert.equal(storm.length,1);assert.equal(storm[0].name,'升级：风暴狂涌');assert.ok(storm[0].text.includes('次级【风啸】'));

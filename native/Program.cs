@@ -21,9 +21,9 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyCompany("HexGuide")]
 [assembly: AssemblyProduct("海克斯指南桌面版")]
 [assembly: AssemblyCopyright("Copyright © 2026 HexGuide")]
-[assembly: AssemblyVersion("1.18.0.0")]
-[assembly: AssemblyFileVersion("1.18.0.0")]
-[assembly: AssemblyInformationalVersion("1.18.0")]
+[assembly: AssemblyVersion("1.18.1.0")]
+[assembly: AssemblyFileVersion("1.18.1.0")]
+[assembly: AssemblyInformationalVersion("1.18.1")]
 
 namespace HexGuide.Desktop
 {
@@ -71,7 +71,7 @@ namespace HexGuide.Desktop
                         + ScreenLifeObserver.ValidateFixtures() + ScreenLifeController.ValidateFixtures() + OwnedPanelWatcher.ValidateFixtures()
                         + RemoteIconCache.ValidateFixtures() + GameWindowCapture.ValidateFixtures() + SelectionFrameSynchronizerFixtures.Run();
                     Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                        { "version", "1.18.0" }, { "checks", checks },
+                        { "version", "1.18.1" }, { "checks", checks },
                         { "titleProbeVersion", 1 },
                         { "nativeDiagnosticMaxBytes", ScreenSelectionWatcher.LargestDiagnosticFixtureBytes },
                         { "mode", "offline-no-ui" }, { "liveGameVerified", false }
@@ -363,7 +363,7 @@ namespace HexGuide.Desktop
             OverlayVisibilityCompatibility.Prewarm();
             startHidden = background || GameWindow.IsGameForeground();
             sidebarVisibility = new SidebarVisibilityState(preview);
-            Text = "海克斯指南 1.18.0 · 我的这一局";
+            Text = "海克斯指南 1.18.1 · 我的这一局";
             // The host owns every client pixel. Keep WinForms' client-size
             // conversion borderless; native sizing styles are applied to hWnd.
             FormBorderStyle = FormBorderStyle.None;
@@ -936,7 +936,7 @@ namespace HexGuide.Desktop
                 json = SelectionDiagnosticsJson(selectionWatcher, recognitionModel ?? sidebar.Model, now, recognitionTrace);
                 var panelSnapshot = panelWatcher.Diagnostics();
                 panelSnapshot["schemaVersion"] = 2;
-                panelSnapshot["appVersion"] = "1.18.0";
+                panelSnapshot["appVersion"] = "1.18.1";
                 panelSnapshot["updatedAtUtc"] = now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);
                 panelSnapshot["backendReason"] = PanelReason(recognitionModel ?? sidebar.Model);
                 panelJson = new JavaScriptSerializer().Serialize(panelSnapshot);
@@ -975,7 +975,7 @@ namespace HexGuide.Desktop
             var native = watcher.Diagnostics();
             if (trace != null) native["trace"] = trace.Snapshot();
             var snapshot = new Dictionary<string, object> {
-                { "version", "1.18.0" }, { "schemaVersion", 2 },
+                { "version", "1.18.1" }, { "schemaVersion", 2 },
                 { "updatedAtUtc", now.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
                 { "native", native },
                 { "backend", ScreenSelectionWatcher.BackendDiagnostics(ModelValue.Object(model, "selectionDiagnostics")) }
@@ -1021,7 +1021,7 @@ namespace HexGuide.Desktop
                 string json = SelectionDiagnosticsJson(watcher, privateBackend, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), trace);
                 var snapshot = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
                 if (snapshot.Count != 5 || Encoding.UTF8.GetByteCount(json) > 4096
-                    || ModelValue.Text(snapshot, "version") != "1.18.0" || ModelValue.Text(snapshot, "schemaVersion") != "2")
+                    || ModelValue.Text(snapshot, "version") != "1.18.1" || ModelValue.Text(snapshot, "schemaVersion") != "2")
                     throw new InvalidOperationException("The persisted selection diagnostic snapshot exceeded its schema or byte bound.");
                 if (json.Contains("PRIVATE-MARKER") || json.Contains("\"ids\"") || json.Contains("windowHandle")
                     || json.Contains("\"signature\"") || json.Contains("\"signatures\"") || json.Contains("\"delta\""))
