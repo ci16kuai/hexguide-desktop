@@ -1,7 +1,22 @@
 {
-  "checkedAt": "2026-10-30T15:13:59.422Z",
+  "checkedAt": "2026-10-30T15:57:30.305Z",
   "fromVersion": "16.21.1",
   "toVersion": "16.21.1",
   "changeCount": 0,
-  "warnings": []
+  "warnings": [],
+  "agent": {
+    "agentId": "agent_29a1151c93594fbc81dff44d9ed748c67eadc3cc7e1f406ab4",
+    "runId": "gha-41085418853-1",
+    "sessions": [
+      {
+        "task": "check-receipt",
+        "status": "completed",
+        "sessionId": "sess_0c4a5136f18978b6006ae4be6b4ca481959a864b8c38c5a823",
+        "turnId": "turn_0c4a5136f18978b6006ae4be6e56248195b9da940297e77fea",
+        "usage": null,
+        "model": "gpt-6-luna"
+      }
+    ],
+    "usage": null
+  }
 }

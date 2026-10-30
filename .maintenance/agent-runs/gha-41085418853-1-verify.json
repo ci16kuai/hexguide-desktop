@@ -1,0 +1,15 @@
+{
+  "agentId": "agent_29a1151c93594fbc81dff44d9ed748c67eadc3cc7e1f406ab4",
+  "runId": "gha-41085418853-1-verify",
+  "sessions": [
+    {
+      "task": "translate-fields",
+      "status": "completed",
+      "sessionId": "sess_03d1118d4aab24f2006ae4be640f548193a3757f193926b4a4",
+      "turnId": "turn_03d1118d4aab24f2006ae4be6767448193a90a54c16ff63853",
+      "usage": null,
+      "model": "gpt-6-luna"
+    }
+  ],
+  "usage": null
+}
