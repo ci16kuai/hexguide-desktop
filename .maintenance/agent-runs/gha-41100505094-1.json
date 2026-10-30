@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-10-30T17:39:44.413Z",
+  "githubRunUrl": "https://github.com/ci16kuai/hexguide-desktop/actions/runs/41100505094",
+  "agentId": "agent_29a1151c93594fbc81dff44d9ed748c67eadc3cc7e1f406ab4",
+  "runId": "gha-41100505094-1",
+  "sessions": [
+    {
+      "task": "official-audit",
+      "status": "completed",
+      "sessionId": "sess_0b6677d37ed7e2cf006ae4d627d7908196831d0da2cd94a69d",
+      "turnId": "turn_0b6677d37ed7e2cf006ae4d62aaed08196bba4de92686441ee",
+      "usage": null,
+      "model": "gpt-6-luna"
+    },
+    {
+      "task": "official-audit",
+      "status": "completed",
+      "sessionId": "sess_0c9c8e98b8a2e3e7006ae4d636afcc81968b8678e5d29894f3",
+      "turnId": "turn_0c9c8e98b8a2e3e7006ae4d63af6c88196854ec1b3836cfaea",
+      "usage": null,
+      "model": "gpt-6-luna"
+    },
+    {
+      "task": "official-audit",
+      "status": "completed",
+      "sessionId": "sess_0971429eda3461ef006ae4d64526f88197947809dfbed45a91",
+      "turnId": "turn_0971429eda3461ef006ae4d648dfa88197af3d0a9493e26902",
+      "usage": null,
+      "model": "gpt-6-luna"
+    },
+    {
+      "task": "official-audit",
+      "status": "completed",
+      "sessionId": "sess_0b810870ba528645006ae4d65353548197b6d330bb9909dbd5",
+      "turnId": "turn_0b810870ba528645006ae4d6563b84819794e52f28dcf5e08a",
+      "usage": null,
+      "model": "gpt-6-luna"
+    },
+    {
+      "task": "official-audit",
+      "status": "completed",
+      "sessionId": "sess_0065d8e0585f757d006ae4d659f6c48196bcff1d6e83f66975",
+      "turnId": "turn_0065d8e0585f757d006ae4d65cecd481968f88ca5d9aafdd82",
+      "usage": null,
+      "model": "gpt-6-luna"
+    }
+  ],
+  "usage": null,
+  "outcome": "ready-to-publish"
+}

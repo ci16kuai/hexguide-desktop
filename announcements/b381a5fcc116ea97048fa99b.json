@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 2,
+  "id": "b381a5fcc116ea97048fa99b",
+  "title": "2026年10月23日 不停机更新（不含经典模式）",
+  "publishedAt": "2026-10-30T17:38:44.149Z",
+  "fromVersion": "16.21.1",
+  "toVersion": "16.21.1",
+  "summary": "本公告共 7 项改动，涉及 2 位英雄、0 件装备、1 个海克斯。",
+  "scopeNote": "以国服官网正文为准，收录英雄、装备和海克斯的数值、机制与 BUG 修复；完整排除经典模式。通用、海克斯大乱斗、斗魂竞技场改动分别标注，不跨模式合并数值。近战／远程、复杂公式和无限时长按官网文字保留，不分析强弱和推荐影响。",
+  "itemCount": 0,
+  "augmentCount": 1,
+  "championCount": 2,
+  "changeCount": 7,
+  "changes": [
+    {
+      "key": "a04ba06f0ae96a0b2642c91f1a96b55a",
+      "kind": "champion",
+      "entityId": "Varus",
+      "name": "惩戒之箭 韦鲁斯",
+      "mode": "general",
+      "label": "击杀/参与击杀时的额外攻击力和法术强度",
+      "text": "击杀/参与击杀时的额外攻击力和法术强度：1.1每10%攻速 >>> 1.4每10%攻速(注：这个加成在参与击杀英雄后会提升至3倍)",
+      "changeType": "adjustment",
+      "beforeText": "1.1每10%攻速",
+      "afterText": "1.4每10%攻速(注：这个加成在参与击杀英雄后会提升至3倍)",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/passive/VarusPassive.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Varus.png",
+      "ability": {
+        "slot": "P",
+        "name": "复仇之欲"
+      }
+    },
+    {
+      "key": "ae2abec86b737d1336520c8b32dee7bf",
+      "kind": "champion",
+      "entityId": "Varus",
+      "name": "惩戒之箭 韦鲁斯",
+      "mode": "general",
+      "label": "最小伤害",
+      "text": "最小伤害：50 - 230 >>> 50 - 250",
+      "changeType": "adjustment",
+      "beforeText": "50 - 230",
+      "afterText": "50 - 250",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/VarusQ.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Varus.png",
+      "ability": {
+        "slot": "Q",
+        "name": "穿刺之箭"
+      }
+    },
+    {
+      "key": "111acb0c1a5eb54763c65a02e7c7be40",
+      "kind": "champion",
+      "entityId": "Varus",
+      "name": "惩戒之箭 韦鲁斯",
+      "mode": "general",
+      "label": "BUG修复",
+      "text": "修复了一个BUG，该BUG曾导致：韦鲁斯Q技能的伤害在命中敌人后不会削减",
+      "changeType": "adjustment",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/VarusQ.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Varus.png",
+      "ability": {
+        "slot": "Q",
+        "name": "穿刺之箭"
+      }
+    },
+    {
+      "key": "fcb01715fef4a168d4b94234f617c7c9",
+      "kind": "other",
+      "entityId": "official-34c0bd488d485c26",
+      "name": "海克斯大乱斗修复",
+      "mode": "aram",
+      "label": "BUG修复",
+      "text": "修复了一个BUG，该BUG曾导致：如果在开场仪式期间切换焦点，那么镜头会被卡在错误的位置。",
+      "changeType": "fix"
+    },
+    {
+      "key": "1a4f42107658ed6cb77bf0d97c260eca",
+      "kind": "champion",
+      "entityId": "LeeSin",
+      "name": "盲僧 李青",
+      "mode": "aram",
+      "label": "BUG修复",
+      "text": "修复了一个BUG，该BUG曾导致：李青的W护盾值不随技能等级增长。",
+      "changeType": "fix",
+      "icon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/LeeSinWOne.png",
+      "championIcon": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/LeeSin.png",
+      "ability": {
+        "slot": "W",
+        "name": "金钟罩/铁布衫"
+      }
+    },
+    {
+      "key": "19905d22ac9020bf33de4d425f06786b",
+      "kind": "other",
+      "entityId": "official-34c0bd488d485c26",
+      "name": "海克斯大乱斗修复",
+      "mode": "aram",
+      "label": "BUG修复",
+      "text": "修复了一个BUG，该BUG曾导致：某些终极技能未通过【公理秘术】强化符文进行重置。",
+      "changeType": "fix"
+    },
+    {
+      "key": "9353ad611898757a2b1484e864881466",
+      "kind": "augment",
+      "entityId": "Upgrade_Stormsurge",
+      "name": "升级：风暴狂涌",
+      "mode": "aram",
+      "label": "BUG修复",
+      "text": "修复了一个BUG，该BUG曾导致：【升级：风暴狂涌】可以在击杀时双重触发。",
+      "changeType": "fix",
+      "icon": "https://raw.communitydragon.org/16.21/game/assets/ux/kiwi/augments/icons/upgradehubris_small.png"
+    }
+  ],
+  "sources": [
+    {
+      "name": "英雄联盟国服官网原文",
+      "url": "https://lol.qq.com/news/detail.shtml?docid=14514250113535829185",
+      "sha256": "e80a60331c99dff9e4e96646ff81a03760e18b54081a3cd351e6dc2b098a607c"
+    }
+  ],
+  "official": {
+    "date": "2026-10-23",
+    "title": "2026年10月23日 不停机更新",
+    "url": "https://lol.qq.com/news/detail.shtml?docid=14514250113535829185",
+    "sha256": "e80a60331c99dff9e4e96646ff81a03760e18b54081a3cd351e6dc2b098a607c"
+  },
+  "supersedes": [
+    "20a50203ba0070326ee82dc0"
+  ]
+}
