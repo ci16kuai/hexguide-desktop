@@ -73,7 +73,7 @@ async function setup() {
   const root=await mkdtemp(path.join(os.tmpdir(),'hexguide-announcement-maintenance-'));
   const stateDirectory=path.join(root,'state'),feedDirectory=path.join(root,'feed'),envFile=path.join(root,'.env');await writeFile(envFile,'OPENAI_API_KEY=sk-unit-test-only\n');
   let calls=0;
-  const options={stateDirectory,feedDirectory,envFile,now:'2026-10-31T01:00:00.000Z',versionsProvider:async()=>['16.21.1','16.20.1'],
+  const options={stateDirectory,feedDirectory,envFile,officialProvider:async()=>null,now:'2026-10-31T01:00:00.000Z',versionsProvider:async()=>['16.21.1','16.20.1'],
     catalogProvider:async version=>catalog(version,version==='16.20.1'?60:65),translator:async changes=>{calls++;return {labels:Object.fromEntries(changes.map(x=>[x.key,'攻击力'])),model:'test-model'};}};
   return {root,options,calls:()=>calls};
 }

@@ -31,7 +31,7 @@ test('a new hosted retry restores only drafts and uses the published baseline to
   const catalog=(version,ad)=>({schemaVersion:1,version,clientVersion:version.split('.').slice(0,2).join('.'),sources:[{name:'Riot',url:'https://ddragon.leagueoflegends.com/data.json',sha256:'c'.repeat(64)}],
     items:{'1001':{name:'装备',numbers:{'stats.FlatPhysicalDamageMod':ad},description:''}},augments:{}});
   const previous=catalog('16.20.1',60),current=catalog('16.21.1',65);
-  const options={versionsProvider:async()=>['16.21.1','16.20.1'],catalogProvider:async version=>version===current.version?current:previous,envFile:path.join(root,'.env')};
+  const options={officialProvider:async()=>null,versionsProvider:async()=>['16.21.1','16.20.1'],catalogProvider:async version=>version===current.version?current:previous,envFile:path.join(root,'.env')};
   await writeFile(options.envFile,'OPENAI_API_KEY=sk-unit-test-only\n');
   const first={stateDirectory:path.join(root,'first-state'),feedDirectory:path.join(root,'unpublished-feed')};
   let calls=0;

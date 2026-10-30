@@ -43,7 +43,7 @@ jobs:
       - name: Install the pinned OpenAI Agents SDK
         run: npm ci --prefix source/tools/version-maintenance --ignore-scripts --no-audit --no-fund
       - name: Test numerical comparison and publication contracts
-        run: node --test source/tests/announcement-maintenance.test.mjs source/tests/announcement-cloud.test.mjs source/tests/announcement-agents.test.mjs
+        run: node --test source/tests/announcement-maintenance.test.mjs source/tests/announcement-cloud.test.mjs source/tests/announcement-agents.test.mjs source/tests/announcement-presentation.test.mjs
       - name: Restore completed AI drafts from interrupted publication
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:

@@ -56,7 +56,7 @@ async function fixture() {
   const old=catalog('16.20.1',60),current=catalog('16.21.1',65);
   await mkdir(stateDirectory);await writeFile(path.join(stateDirectory,'snapshot.json'),JSON.stringify(old));
   const envFile=path.join(root,'.env');await writeFile(envFile,'OPENAI_API_KEY=sk-unit-test-only\n');
-  return {root,stateDirectory,feedDirectory,current,options:{stateDirectory,feedDirectory,envFile,versionsProvider:async()=>['16.21.1','16.20.1'],catalogProvider:async()=>current}};
+  return {root,stateDirectory,feedDirectory,current,options:{stateDirectory,feedDirectory,envFile,officialProvider:async()=>null,versionsProvider:async()=>['16.21.1','16.20.1'],catalogProvider:async()=>current}};
 }
 test('a generated notice and unchanged check both retain real Agent run IDs while preserving public history',async()=>{
   const f=await fixture(),fake=sdk();
