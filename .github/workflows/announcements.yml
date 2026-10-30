@@ -40,8 +40,10 @@ jobs:
         with:
           ref: codex/announcements-feed
           path: publisher
+      - name: Install the pinned OpenAI Agents SDK
+        run: npm ci --prefix source/tools/version-maintenance --ignore-scripts --no-audit --no-fund
       - name: Test numerical comparison and publication contracts
-        run: node --test source/tests/announcement-maintenance.test.mjs source/tests/announcement-cloud.test.mjs
+        run: node --test source/tests/announcement-maintenance.test.mjs source/tests/announcement-cloud.test.mjs source/tests/announcement-agents.test.mjs
       - name: Restore completed AI drafts from interrupted publication
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -53,17 +55,20 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.HEXGUIDE_OPENAI_API_KEY }}
           VERIFY_API: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_api && 'true' || 'false' }}
+          ANNOUNCEMENT_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          ANNOUNCEMENT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
           set -euo pipefail
           node --input-type=module -e "import {readApiKey} from './source/tools/version-maintenance/maintenance.mjs'; await readApiKey();"
           if [[ "$VERIFY_API" == "true" ]]; then
-            node source/tools/version-maintenance/verify-openai.mjs publisher/announcements
+            node source/tools/version-maintenance/verify-openai.mjs publisher/announcements --agents --record "publisher/.maintenance/agent-runs/$ANNOUNCEMENT_RUN_ID-verify.json"
           fi
-          node source/tools/version-maintenance/run.mjs --state-dir publisher/.maintenance --feed-dir publisher/announcements
+          node source/tools/version-maintenance/run-agent.mjs --state-dir publisher/.maintenance --feed-dir publisher/announcements --run-id "$ANNOUNCEMENT_RUN_ID" --github-run-url "$ANNOUNCEMENT_RUN_URL"
       - name: Validate immutable announcement history
         run: node source/tools/version-maintenance/validate-feed.mjs publisher/announcements
       - name: Publish announcements and durable checkpoint together
+        id: publish
         working-directory: publisher
         shell: bash
         run: |
@@ -82,8 +87,26 @@ jobs:
             sleep 5
           done
           exit 1
-      - name: Preserve completed AI drafts for the next hosted retry
+      - name: Record publication outcome in Platform sessions
         if: always() && steps.maintain.outcome != 'skipped'
+        env:
+          OPENAI_API_KEY: ${{ secrets.HEXGUIDE_OPENAI_API_KEY }}
+          PUBLICATION_STATUS: ${{ steps.publish.outcome == 'success' && 'published' || 'failed' }}
+          ANNOUNCEMENT_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          outcome=0
+          for record in "publisher/.maintenance/agent-runs/$ANNOUNCEMENT_RUN_ID.json" "publisher/.maintenance/agent-runs/$ANNOUNCEMENT_RUN_ID-verify.json"; do
+            if [[ -f "$record" ]]; then
+              status="$PUBLICATION_STATUS"
+              if [[ "$record" == *-verify.json && "$status" == "published" ]]; then status="verification"; fi
+              if ! node source/tools/version-maintenance/finalize-agent-run.mjs "$record" "$status"; then outcome=1; fi
+            fi
+          done
+          exit "$outcome"
+      - name: Preserve completed AI drafts for the next hosted retry
+        if: always() && steps.maintain.outcome != 'skipped' && hashFiles('publisher/.maintenance/draft-*.json') != ''
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: publisher/.maintenance/draft-*.json
