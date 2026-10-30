@@ -49,6 +49,50 @@ test('mid-game attachment starts scanning at verified death before the respawn r
   assert.equal(h.sidebar.getModel().ocr.schedule.windowRemainingMs, 60000);
 });
 
+test('returning to game after a respawn focus failure delivers three candidates on the next half-second probe', async t => {
+  let foreground=false;
+  const h=harness({scanner:async()=>foreground ? cards() : {status:'waiting',code:'game-not-foreground',proposals:[]}});
+  t.after(()=>h.sidebar.stop()); h.update({gameTime:300});
+  await h.sidebar.pollOnce(); assert.equal(h.scans(),0);
+  h.advance(1000); h.update({life:{status:'detected',isDead:true}}); await h.sidebar.pollOnce();
+  h.advance(1000); h.update({life:{status:'detected',isDead:false}}); await h.sidebar.pollOnce();
+  const original=h.sidebar.getModel(); assert.equal(h.scans(),2); assert.equal(original.ocr.schedule.trigger,'respawn');
+  foreground=true; h.advance(499); await h.sidebar.pollOnce(); assert.equal(h.scans(),2);
+  h.advance(1); await h.sidebar.pollOnce();
+  const resumed=h.sidebar.getModel(); assert.equal(h.scans(),3);
+  assert.equal(resumed.offers.length,3); assert.deepEqual(resumed.plan.ownedIds,[]);
+  assert.equal(resumed.ocr.schedule.windowId,original.ocr.schedule.windowId);
+  assert.equal(resumed.ocr.schedule.windowRemainingMs,59500,'focus recovery must not renew the respawn window');
+});
+
+test('follow-up focus retries deliver candidates promptly and then return to normal OCR pacing', async t => {
+  let foreground=true, showCards=false;
+  const h=harness({scanner:async()=>!foreground ? {status:'waiting',code:'foreground-changed',proposals:[]}
+    : showCards ? cards() : noCards});
+  t.after(()=>h.sidebar.stop()); await h.sidebar.pollOnce();
+  h.advance(60000); foreground=false; await h.sidebar.pollOnce();
+  const original=h.sidebar.getModel(); assert.equal(original.ocr.schedule.mode,'backoff');
+  assert.equal(h.scans(),2); assert.equal(original.ocr.schedule.nextInMs,500);
+  foreground=true; showCards=true; h.advance(500); await h.sidebar.pollOnce();
+  const resumed=h.sidebar.getModel(); assert.equal(h.scans(),3); assert.equal(resumed.offers.length,3);
+  assert.deepEqual(resumed.plan.ownedIds,[]); assert.equal(resumed.ocr.schedule.mode,'follow-up');
+  assert.equal(resumed.ocr.schedule.intervalMs,5000); assert.equal(resumed.ocr.schedule.windowRemainingMs,0);
+  assert.equal(resumed.ocr.schedule.windowId,original.ocr.schedule.windowId);
+  h.advance(4999); await h.sidebar.pollOnce(); assert.equal(h.scans(),3);
+  h.advance(1); await h.sidebar.pollOnce(); assert.equal(h.scans(),4);
+});
+
+test('an old-game foreground failure cannot delay the current game opening candidates', async t => {
+  let finish;
+  const h=harness({scanner:({scans})=>scans===1 ? new Promise(resolve=>{finish=resolve;}) : Promise.resolve(cards())});
+  t.after(()=>h.sidebar.stop()); const old=h.sidebar.scan();
+  h.advance(500); h.update({gameId:'isolated-schedule-next',level:3,gameTime:1}); h.sidebar.getModel();
+  finish({status:'waiting',code:'game-not-foreground',proposals:[]}); await old;
+  await h.sidebar.pollOnce(); const model=h.sidebar.getModel();
+  assert.equal(h.scans(),2); assert.equal(model.offers.length,3); assert.deepEqual(model.plan.ownedIds,[]);
+  assert.equal(model.ocr.schedule.trigger,'game-start'); assert.equal(h.sidebar.scanSchedule.foregroundBackoff,false);
+});
+
 test('slow OCR is serial and rests one hundred milliseconds in the fast and follow-up phases', async t => {
   const h = harness({scanner:async ({advance}) => { advance(8000); return noCards; }});
   t.after(() => h.sidebar.stop());
@@ -246,11 +290,28 @@ test('stored schedule diagnostics describe current window and actual count/durat
   const h = harness({dataDirectory:folder, scanner:async ({advance}) => { advance(1500); return noCards; }});
   await h.sidebar.pollOnce(); await h.sidebar.stop();
   const storedText = await readFile(path.join(folder, 'diagnostics', 'ocr-schedule.json'), 'utf8'), stored = JSON.parse(storedText);
-  assert.equal(stored.schemaVersion, 2); assert.equal(stored.appVersion, '1.17.14');
+  assert.equal(stored.schemaVersion, 2); assert.equal(stored.appVersion, '1.17.16');
   assert.equal(stored.scanCount, 1); assert.equal(stored.lastDurationMs, 1500);
   assert.equal(stored.mode, 'window'); assert.equal(stored.trigger, 'game-start'); assert.equal(stored.windowId, 1);
   assert.ok(stored.windowRemainingMs > 0); assert.ok(Buffer.byteLength(storedText) < 2048);
   assert.doesNotMatch(storedText, /isolated-schedule|championId|player|token|screenshot/i);
+});
+
+for (const late of [false,true]) test(`persisted scan status reflects ${late ? 'context rejection' : 'scanner exception'} rather than raw OCR status`, async t => {
+  const root=process.env.HEXGUIDE_TEST_WORK || 'H:/Chatgpt/work/2026-10-30/hexguide-respawn-candidates/diagnostic-tests';
+  await mkdir(root,{recursive:true}); const folder=await mkdtemp(path.join(root,'status-'));
+  t.after(()=>rm(folder,{recursive:true,force:true}));
+  const h=harness({dataDirectory:folder,scanner:async({advance})=>{
+    if (!late) throw Error('PRIVATE-ERROR');
+    advance(500); h.update({gameId:'isolated-replacement',gameTime:1});
+    h.sidebar.getModel(); return cards();
+  }});
+  await h.sidebar.scan(); await h.sidebar.stop();
+  const stored=JSON.parse(await readFile(path.join(folder,'diagnostics','ocr-schedule.json'),'utf8'));
+  assert.equal(stored.lastScan.code,late ? 'scan-context-changed' : 'scan-execution-failed');
+  assert.equal(stored.lastScan.status,late ? 'waiting' : 'unavailable');
+  assert.deepEqual(h.sidebar.getSession().owned,[]);
+  assert.doesNotMatch(JSON.stringify(stored),/PRIVATE|isolated-replacement/);
 });
 
 test('explicit selected IDs arriving with a real respawn end that same window', async t => {

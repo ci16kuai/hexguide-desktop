@@ -22,6 +22,43 @@ async function directory(t) {
 }
 const read = async folder => JSON.parse(await readFile(path.join(folder, FILE), 'utf8'));
 
+test('retains bounded recent scan causes and safe OCR measurements without text or private proof', async t => {
+  const folder = await directory(t);
+  let clock = TIME;
+  const store = new OcrScheduleDiagnostics({dataDirectory:folder, now:() => clock});
+  for (let index = 0; index < 10; index++) {
+    clock += 1000;
+    await store.publish(entry({scanCount:index + 1,lastScan:{completedAt:clock,
+      status:'unavailable',code:index % 2 ? 'title-layout-incomplete' : 'game-not-foreground',
+      frameId:'PRIVATE-FRAME',text:'PRIVATE-OCR',capture:{token:'PRIVATE-PROOF'},
+      diagnostics:{width:2560,height:1440,dpi:96,language:'zh-Hans',lineCount:20,
+        titleRegionCount:6,exactTitleCount:2,layoutCount:0,passesCompleted:7,passesFailed:0,
+        text:'PRIVATE-OCR',path:'PRIVATE-PATH',titleGeometry:[{private:'PRIVATE'}]}}}));
+  }
+  await store.close();
+  const value = await read(folder), serialized = await readFile(path.join(folder,FILE),'utf8');
+  assert.equal(value.lastScan.code,'title-layout-incomplete');
+  assert.equal(value.lastScan.diagnostics.dpi,96);
+  assert.equal(value.lastScan.diagnostics.language,'zh-Hans');
+  assert.equal(value.recentScans.length,4);
+  assert.deepEqual(value.recentScans.map(scan => scan.code),['game-not-foreground','title-layout-incomplete','game-not-foreground','title-layout-incomplete']);
+  assert.ok(Buffer.byteLength(serialized) < 4096);
+  assert.doesNotMatch(serialized,/PRIVATE|frameId|titleGeometry|capture|token/);
+});
+
+test('scan completion is written promptly even when its start already published the same scan count', async t => {
+  const folder = await directory(t);
+  let clock = TIME;
+  const store = new OcrScheduleDiagnostics({dataDirectory:folder, now:() => clock});
+  await store.publish(entry());
+  clock += 600;
+  await store.publish(entry({lastScan:{completedAt:clock,status:'unavailable',code:'title-layout-incomplete',
+    diagnostics:{exactTitleCount:2,layoutCount:0,language:'zh-Hans-CN',dpi:144}}}));
+  assert.equal((await read(folder)).lastScan.code,'title-layout-incomplete');
+  assert.equal((await read(folder)).lastScan.diagnostics.language,'zh-Hans');
+  await store.close();
+});
+
 test('writes only fixed diagnostic fields and imports the scheduler mode allowlist', async t => {
   const folder = await directory(t);
   const store = new OcrScheduleDiagnostics({dataDirectory:folder, now:() => TIME});
@@ -34,7 +71,7 @@ test('writes only fixed diagnostic fields and imports the scheduler mode allowli
   assert.deepEqual(Object.keys(value).sort(), ['schemaVersion','appVersion','updatedAtUtc','mode','due',
     'intervalMs','nextInMs','windowRemainingMs','trigger','windowId','scanCount','failureCount','lastDurationMs'].sort());
   assert.equal(value.schemaVersion, 2);
-  assert.equal(value.appVersion, '1.17.14');
+  assert.equal(value.appVersion, '1.17.16');
   assert.equal(value.updatedAtUtc, new Date(TIME).toISOString());
   assert.equal(value.trigger, 'respawn');
   assert.equal(value.windowId, 7);

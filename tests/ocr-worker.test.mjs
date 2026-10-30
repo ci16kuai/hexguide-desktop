@@ -64,6 +64,21 @@ test('contrast stage may follow a failed color group without fabricating a color
   await pending; assert.deepEqual(child.commands.map(value => value.type), ['scan','continue']); await h.worker.close();
 });
 
+test('large title stage follows the original two passes and remains private until final foreground validation',async()=>{
+  const h=harness(),seen=[];
+  let completed=false;
+  const pending=h.worker.scan(raw=>{seen.push(raw.marker);return raw.marker==='large';}).then(raw=>{completed=true;return raw;});
+  await tick();const child=h.children[0];
+  for(const stage of ['color','contrast','large'])child.send(frame('stage',1,{marker:stage},{stage}));
+  await tick();
+  assert.equal(completed,false);
+  assert.deepEqual(seen,['color','contrast','large']);
+  assert.deepEqual(child.commands.map(value=>value.type),['scan','continue','continue','accept']);
+  child.send(frame('result',1,{status:'waiting',code:'foreground-changed'}));
+  assert.equal((await pending).code,'foreground-changed');
+  await h.worker.close();
+});
+
 test('NDJSON decoding tolerates split UTF-8 and CRLF but rejects neither private stderr nor chunk boundaries', async () => {
   const h = harness(), pending = h.worker.scan(); await tick(); const child = h.children[0];
   child.stderr.write('Private exception path C:/private is drained, never returned');
@@ -82,6 +97,8 @@ test('malformed, reordered, duplicate and unsolicited protocol frames fail close
     child => child.send(frame('stage', 1, {}, {stage:'other'})),
     child => { child.send(frame('stage', 1, {}, {stage:'contrast'})); child.send(frame('stage', 1, {}, {stage:'color'})); },
     child => { child.send(frame('stage', 1, {}, {stage:'color'})); child.send(frame('stage', 1, {}, {stage:'color'})); },
+    child => { child.send(frame('stage', 1, {}, {stage:'large'})); child.send(frame('stage', 1, {}, {stage:'contrast'})); },
+    child => { child.send(frame('stage', 1, {}, {stage:'large'})); child.send(frame('stage', 1, {}, {stage:'large'})); },
     child => child.stdout.write(JSON.stringify(frame('result', 1)) + '\n' + JSON.stringify(frame('result', 1)) + '\n'),
     child => child.stdout.write(JSON.stringify(frame('result', 1)) + '\nPrivate trailing partial frame'),
     child => child.stdout.write(Buffer.from([0xff,0x0a])),

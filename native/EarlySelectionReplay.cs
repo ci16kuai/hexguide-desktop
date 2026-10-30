@@ -47,6 +47,9 @@ namespace HexGuide.Desktop
     internal sealed class EarlySelectionFrame : IDisposable
     {
         internal long At;
+        // Pixel time and real pointer time differ for asynchronous window capture.
+        // Zero keeps the synchronous desktop capture contract unchanged.
+        internal long PointerAt;
         internal int Kind, Column = -1; // 0 independent frame, 1 actual down, 2 actual up.
         internal ScreenSelectionObservation Geometry;
         internal int[][] Signatures;
@@ -121,6 +124,7 @@ namespace HexGuide.Desktop
         { trace = recognitionTrace ?? new RecognitionTrace(); }
         internal string State = "waiting", Reason = "waiting-scope";
         internal bool Active { get { return !disposed && scope != null; } }
+        internal string ScopeIdentity { get { return scope == null ? null : scope.Identity; } }
         internal bool NeedsFrames { get { return Active && !emitted; } }
         internal bool HasInteraction { get { return pressedAt > 0; } }
         internal long ClickedAt { get { return releasedAt; } }
@@ -184,6 +188,26 @@ namespace HexGuide.Desktop
             State = "waiting"; Reason = reason;
         }
 
+        // Switching between two verified capture transports is not a new
+        // candidate or a loss of game eligibility. Keep only an idle, fresh
+        // reference; all pixel baselines must be acquired again from the new
+        // source. Existing manual/focus/scope fences are never lowered.
+        internal bool RestartCaptureSource(ScreenSelectionObservation nextGeometry, long now)
+        {
+            if (!CheckLease(now) || emitted || HasInteraction || nextGeometry == null
+                || geometry != null && !SameGeometry(geometry, nextGeometry)
+                || reference != null && !SameGeometry(reference, nextGeometry)) return false;
+            ScreenSelectionObservation retained = reference;
+            if (retained != null && (!scope.Matches(retained) || retained.CapturedAt < scope.NotBefore
+                || retained.CapturedAt < minimumReferenceAt || retained.CapturedAt > now
+                || now - retained.CapturedAt > MaximumLeaseMs)) retained = null;
+            Clear();
+            reference = retained;
+            lastFrameAt = now;
+            State = "buffering"; Reason = "waiting-baseline";
+            return true;
+        }
+
         internal bool CheckLease(long now)
         {
             if (!Active) return false;
@@ -242,26 +266,30 @@ namespace HexGuide.Desktop
             if (frame.At < scope.NotBefore || frame.At < minimumReferenceAt || frame.At > now
                 || frame.At <= lastFrameAt || kind < 0 || kind > 2)
             { frame.Dispose(); Cancel("frame-time-invalid", now); return false; }
+            long pointerAt = frame.PointerAt > 0 ? frame.PointerAt : frame.At;
+            if (kind != 0 && (pointerAt < scope.NotBefore || pointerAt < minimumReferenceAt
+                || pointerAt < lastFrameAt || pointerAt > frame.At || frame.At - pointerAt > 150))
+            { frame.Dispose(); Cancel("frame-time-invalid", now); return false; }
             if (geometry != null && !SameGeometry(geometry, frame.Geometry)
                 || reference != null && !SameGeometry(reference, frame.Geometry))
             { frame.Dispose(); Cancel("geometry-changed", now); return false; }
             geometry = frame.Geometry; frame.Kind = kind; frame.Column = column;
-            if (kind == 1) RecordTrace("down", "screen", frame.At);
-            else if (kind == 2) RecordTrace("up", "screen", frame.At);
+            if (kind == 1) RecordTrace("down", "screen", pointerAt);
+            else if (kind == 2) RecordTrace("up", "screen", pointerAt);
             if (kind == 1)
             {
                 if (pressedAt > 0 || column < 0 || column > 2 || baseline.Count != 2)
                 { frame.Dispose(); Cancel(pressedAt > 0 ? "extra-click" : column < 0 ? "outside-click" : "missing-baseline", now); return false; }
-                if (reference != null && reference.CapturedAt > frame.At)
+                if (reference != null && reference.CapturedAt > pointerAt)
                 { frame.Dispose(); Cancel("reference-after-click", now); return false; }
-                pressedAt = frame.At; pressedColumn = column;
+                pressedAt = pointerAt; pressedColumn = column;
                 records.AddRange(baseline); baseline.Clear();
             }
-            else if (kind == 2 && (pressedAt <= 0 || releasedAt > 0 || column != pressedColumn || frame.At - pressedAt > 1500))
+            else if (kind == 2 && (pressedAt <= 0 || releasedAt > 0 || column != pressedColumn || pointerAt - pressedAt > 1500))
             { frame.Dispose(); Cancel("release-unpaired", now); return false; }
             if (kind == 2)
             {
-                releasedAt = frame.At;
+                releasedAt = pointerAt;
             }
             if (pressedAt > 0)
             {
@@ -306,7 +334,9 @@ namespace HexGuide.Desktop
                 int mask = item.TitleMask(reference);
                 int beforeFeedback = replay.FeedbackFrames;
                 if (item.Kind == 0) replay.FrameWithTitleIdentity(item.Signatures, reference.Signatures, item.At, mask);
-                else replay.PointerWithTitleIdentity(item.Kind == 1, item.Column, true, item.At, item.Signatures, reference.Signatures, mask == 7);
+                else replay.PointerWithTitleIdentity(item.Kind == 1, item.Column, true,
+                    item.PointerAt > 0 ? item.PointerAt : item.At, item.Signatures, reference.Signatures, mask == 7,
+                    item.PointerAt > 0 ? item.At : 0);
                 if (replay.Invalid)
                 {
                     var state = replay.DiagnosticState(now);
@@ -321,6 +351,17 @@ namespace HexGuide.Desktop
                 RecordTrace("proof", replay.DirectComplete ? "verified-click-transition" : "full-proof", now);
                 Clear(); emitted = true; State = "observed"; Reason = "full-proof";
                 return evidence;
+            }
+            // The decision has consumed these witnesses into its bounded
+            // baseline/click/transition state. Retaining their pixel bands
+            // would shorten the existing 2.5s result window at a higher sample
+            // rate. Unconsumed pre-reference data keeps the original limits.
+            if (replayed > 0)
+            {
+                for (int index = 0; index < replayed; index++)
+                { bytes -= records[index].Bytes; records[index].Dispose(); }
+                records.RemoveRange(0, replayed);
+                replayed = 0;
             }
             State = replay.FeedbackFrames > 0 ? "feedback" : "pending";
             Reason = "waiting-full-proof";

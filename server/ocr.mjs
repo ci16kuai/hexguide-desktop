@@ -1,6 +1,6 @@
 import path from 'node:path';
 import {sanitizeSelectionCapture} from './selection.mjs';
-import {NATIVE_OCR_STAGES, NATIVE_OCR_CODES} from './scan-diagnostics.mjs';
+import {NATIVE_OCR_STAGES, NATIVE_OCR_CODES, sanitizeOcrMeasurements} from './scan-diagnostics.mjs';
 import {createOcrWorker} from './ocr-worker.mjs';
 
 const normalize = value => String(value || '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
@@ -9,11 +9,7 @@ const nativeStages = new Set(NATIVE_OCR_STAGES);
 const nativeCodes = new Set(NATIVE_OCR_CODES);
 function nativeDetails(raw) {
   if (!raw?.code && !raw?.stage) return {};
-  const diagnostics = {};
-  const limits = {width:8192,height:8192,dpi:960,dpiAwareness:2,ocrMaxDimension:8192,passesCompleted:20,passesFailed:20,elapsedMs:60000,lineCount:10000,initializationMs:60000,captureMs:60000,recognitionMs:60000,totalMs:60000};
-  for (const [key, max] of Object.entries(limits)) if (Number.isFinite(raw.diagnostics?.[key]) && raw.diagnostics[key] >= 0 && raw.diagnostics[key] <= max) diagnostics[key] = raw.diagnostics[key];
-  if (typeof raw.diagnostics?.budgetReached === 'boolean') diagnostics.budgetReached = raw.diagnostics.budgetReached;
-  if (typeof raw.diagnostics?.runtimeReused === 'boolean') diagnostics.runtimeReused = raw.diagnostics.runtimeReused;
+  const diagnostics = sanitizeOcrMeasurements(raw.diagnostics);
   return {code:nativeCodes.has(raw.code) ? raw.code : 'ocr-unavailable',stage:nativeStages.has(raw.stage) ? raw.stage : 'native',diagnostics};
 }
 
@@ -145,7 +141,7 @@ function cardLayout(candidates, width, height) {
 }
 
 const identityAlgorithm = 'luma-sobel-16x8-v1';
-const identityPasses = new Set(['card-titles-color','card-titles-contrast']);
+const identityPasses = new Set(['card-titles-color','card-titles-contrast','card-titles-large']);
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const integer = (value, minimum, maximum) => Number.isSafeInteger(value) && value >= minimum && value <= maximum;
 const exactKeys = (value, keys) => record(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value,key));
@@ -257,7 +253,7 @@ export function matchOcrProposals(raw, augments) {
   if (native.code) {
     diagnostics.nativeCode = native.code;
     diagnostics.nativeStage = native.stage;
-    for (const key of ['passesCompleted','passesFailed','elapsedMs','budgetReached','initializationMs','captureMs','recognitionMs','totalMs','runtimeReused']) if (key in native.diagnostics) diagnostics[key] = native.diagnostics[key];
+    for (const [key,value] of Object.entries(native.diagnostics)) if (!['width','height','lineCount'].includes(key)) diagnostics[key] = value;
   }
   if (Number.isFinite(width) && width >= 0 && width <= 8192) diagnostics.width = width;
   if (Number.isFinite(height) && height >= 0 && height <= 8192) diagnostics.height = height;

@@ -12,7 +12,7 @@ export const DEFAULT_OCR_SCHEDULE_POLICY = Object.freeze({
   cooldownMs:100,
   snapshotFreshnessMs:10000,
   futureToleranceMs:1000,
-  backoff:Object.freeze({initialMs:5000, maxMs:30000, foregroundMs:5000}),
+  backoff:Object.freeze({initialMs:5000, maxMs:30000, foregroundMs:500}),
 });
 
 const integer = (value, min, max) => Number.isSafeInteger(value) && value >= min && value <= max;
@@ -44,7 +44,7 @@ function normalizePolicy(value) {
     futureToleranceMs:bounded(candidate.futureToleranceMs, defaults.futureToleranceMs, 0, 5000),
     backoff:Object.freeze({initialMs,
       maxMs:Math.max(initialMs, bounded(candidate.backoff?.maxMs, defaults.backoff.maxMs, 1000, 30000)),
-      foregroundMs:bounded(candidate.backoff?.foregroundMs, defaults.backoff.foregroundMs, 1000, 10000)}),
+      foregroundMs:bounded(candidate.backoff?.foregroundMs, defaults.backoff.foregroundMs, 500, 10000)}),
   });
 }
 
@@ -256,7 +256,11 @@ export class OcrScanSchedule {
     if (!this.awaitingConfirmation) return result('idle');
     const fast = windowRemainingMs > 0;
     let mode = fast ? 'window' : 'follow-up';
-    let intervalMs = fast ? this.policy.intervalMs : this.policy.followUpIntervalMs;
+    // While the game remains unfocused, its scanner identity guard rejects
+    // before capture/OCR. Retry promptly even in follow-up; a successful or
+    // normal empty completion restores the ordinary OCR start interval.
+    let intervalMs = this.foregroundBackoff ? this.policy.backoff.foregroundMs
+      : fast ? this.policy.intervalMs : this.policy.followUpIntervalMs;
     let dueAt = Math.max(this.lastStartedAt === null ? now : this.lastStartedAt + intervalMs,
       this.lastCompletedAt === null ? now : this.lastCompletedAt + this.policy.cooldownMs);
     if (this.backoffUntil > now) {

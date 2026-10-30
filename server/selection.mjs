@@ -25,7 +25,7 @@ function sanitizeTitleAnchors(value, regions) {
   if (!exactKeys(value, ['version','algorithm','frameId','pass','cards']) || value.version !== 1
     || value.algorithm !== 'luma-sobel-16x8-v1' || typeof value.frameId !== 'string'
     || !/^[A-Za-z0-9_-]{1,80}$/.test(value.frameId)
-    || !['card-titles-color','card-titles-contrast'].includes(value.pass)
+    || !['card-titles-color','card-titles-contrast','card-titles-large'].includes(value.pass)
     || !Array.isArray(value.cards) || value.cards.length !== 3) return null;
   const cards = [];
   for (let column = 0; column < 3; column++) {

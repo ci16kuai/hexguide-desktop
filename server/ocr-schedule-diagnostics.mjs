@@ -1,10 +1,11 @@
 import {mkdir, rename, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {OCR_SCHEDULE_MODES} from './ocr-schedule.mjs';
+import {sanitizeScanCode, sanitizeOcrMeasurements} from './scan-diagnostics.mjs';
 
 const MODES = new Set(OCR_SCHEDULE_MODES);
 const THROTTLE_MS = 5000;
-const MAX_BYTES = 2047;
+const MAX_BYTES = 4095;
 const boundedInteger = (value, maximum) => typeof value === 'number' && Number.isFinite(value)
   ? Math.min(maximum, Math.max(0, Math.floor(value))) : 0;
 const timestamp = value => typeof value === 'number' && Number.isFinite(value)
@@ -21,6 +22,8 @@ export class OcrScheduleDiagnostics {
     this.revision = this.writtenRevision = this.writeId = 0;
     this.closed = false;
     this.closeTask = null;
+    this.recentScans = [];
+    this.lastScanAt = null;
   }
 
   publish(input) {
@@ -29,7 +32,7 @@ export class OcrScheduleDiagnostics {
     const mode = MODES.has(value.mode) ? value.mode : 'inactive';
     const snapshot = {
       schemaVersion:2,
-      appVersion:'1.17.14',
+      appVersion:'1.17.16',
       updatedAtUtc:new Date(timestamp(this.now())).toISOString(),
       mode,
       due:value.due === true,
@@ -42,6 +45,21 @@ export class OcrScheduleDiagnostics {
       failureCount:boundedInteger(value.failureCount, 1000000),
       lastDurationMs:boundedInteger(value.lastDurationMs, 60000),
     };
+    const scan = value.lastScan;
+    if (Number.isSafeInteger(scan?.completedAt) && scan.completedAt >= 0
+      && scan.completedAt <= timestamp(this.now()) && ['recognized','waiting','unavailable'].includes(scan.status)) {
+      snapshot.lastScan = {completedAt:scan.completedAt,status:scan.status,
+        code:sanitizeScanCode(scan.code),diagnostics:sanitizeOcrMeasurements(scan.diagnostics)};
+      if (scan.completedAt !== this.lastScanAt) {
+        this.lastScanAt = scan.completedAt;
+        const previous = this.recentScans.at(-1);
+        // Repeated empty frames cannot erase the preceding recognition/rejection
+        // immediately. Keep transitions, not an unbounded per-frame log.
+        if (previous?.code === snapshot.lastScan.code && previous?.status === snapshot.lastScan.status) this.recentScans[this.recentScans.length - 1] = snapshot.lastScan;
+        else this.recentScans = [...this.recentScans.slice(-3),snapshot.lastScan];
+      }
+      snapshot.recentScans = [...this.recentScans];
+    }
     // There is one latest pending value, not an ever-growing promise/write queue.
     this.latest = this.pending = {revision:++this.revision, value:snapshot};
     if (this.isDue(snapshot)) {
@@ -57,6 +75,7 @@ export class OcrScheduleDiagnostics {
     return !this.lastAttempt || value.mode !== this.lastAttempt.mode
       || value.windowId !== this.lastAttempt.windowId || value.trigger !== this.lastAttempt.trigger
       || value.scanCount !== this.lastAttempt.scanCount
+      || value.lastScan?.completedAt !== this.lastAttempt.lastScan?.completedAt
       || now < this.lastAttemptAt || now - this.lastAttemptAt >= THROTTLE_MS;
   }
 

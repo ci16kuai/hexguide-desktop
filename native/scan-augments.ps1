@@ -83,7 +83,7 @@ function Initialize-TitleIdentityFeature {
 function New-TitleIdentityAnchor($Image, $Region, $Entry, [string]$Pass) {
     # Use exactly the original OCR frame, never a later capture. Wide title
     # bands are discovery regions; only the actual whole OCR line gets an anchor.
-    if (-not $script:selectionCapture -or -not $Region.ContainsKey('column') -or $Pass -notin @('card-titles-color','card-titles-contrast')) { return $null }
+    if (-not $script:selectionCapture -or -not $Region.ContainsKey('column') -or $Pass -notin @('card-titles-color','card-titles-contrast','card-titles-large')) { return $null }
     if (-not (Initialize-TitleIdentityFeature)) { return $null }
     if (-not $script:identityAnchorCounts) { $script:identityAnchorCounts = @{} }
     $countKey = $Pass + ':' + $Region.column
@@ -337,6 +337,10 @@ function Invoke-StagedOcr($Image, [int]$Width, [int]$Height) {
     $groups = @(
         @{name='card-titles-color'; stage='color'; scale=3.0; contrast=$false; regions=$regions},
         @{name='card-titles-contrast'; stage='contrast'; scale=3.0; contrast=$true; regions=$regions},
+        # A short/thin heading can be missed at the first sampling scale. This
+        # bounded fallback keeps all three columns in one independent pass on
+        # the same captured frame; successful original passes still return first.
+        @{name='card-titles-large'; stage='large'; scale=4.0; contrast=$false; regions=$regions},
         @{name='full-window'; stage=''; scale=1.0; contrast=$false; regions=@(@{x=0; y=0; width=$Width; height=$Height})}
     )
     $lines = @()

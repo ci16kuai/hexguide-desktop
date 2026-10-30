@@ -10,9 +10,9 @@ const execute = promisify(execFile);
 const source = fileURLToPath(new URL('../native/scan-augments.ps1', import.meta.url));
 const fixture = fileURLToPath(new URL('./fixtures/native-ocr-frame.ps1', import.meta.url));
 
-function generatedStageScan(acceptStage, augments, {blank=false, omitAcknowledgement=false} = {}) {
+function generatedStageScan(acceptStage, augments, {blank=false, omitAcknowledgement=false, smallOverflowTitles=false} = {}) {
   return new Promise((resolve,reject) => {
-    const child=spawn('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fixture,'-Source',source,'-StageWorker',...(blank?['-BlankFrame']:[])],{windowsHide:true,stdio:['pipe','pipe','pipe']});
+    const child=spawn('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fixture,'-Source',source,'-StageWorker',...(blank?['-BlankFrame']:[]),...(smallOverflowTitles?['-SmallOverflowTitles']:[])],{windowsHide:true,stdio:['pipe','pipe','pipe']});
     let buffer='',result=null,unavailable=null,parseError=null;
     const stages=[];
     const timer=setTimeout(()=>{ child.kill(); reject(new Error('Generated OCR stage fixture timed out.')); },14000);
@@ -134,7 +134,7 @@ for(const [label,width,height,wrapped,maximumDimension] of [
 });
 
 for(const [acceptStage,expectedPasses,expectedStages] of [
-  ['color',3,['color']],['contrast',6,['color','contrast']],[null,7,['color','contrast']],
+  ['color',3,['color']],['contrast',6,['color','contrast']],['large',9,['color','contrast','large']],[null,10,['color','contrast','large']],
 ]) test(`generated native staging ${acceptStage ? `accepts ${acceptStage}` : 'continues to full fallback'} with ${expectedPasses} passes`,{skip:process.platform!=='win32',timeout:20000},async t=>{
   const data=JSON.parse(await readFile(new URL('../dist/data.json',import.meta.url),'utf8'));
   const {code,result,stages,unavailable}=await generatedStageScan(acceptStage,data.augments);
@@ -143,7 +143,7 @@ for(const [acceptStage,expectedPasses,expectedStages] of [
   assert.deepEqual(stages.map(stage=>stage.stage),expectedStages);
   assert.equal(result.diagnostics.passesCompleted,expectedPasses);
   assert.equal(result.diagnostics.passesFailed,0);
-  assert.equal(result.diagnostics.passCodes.includes('full-window'),expectedPasses===7);
+  assert.equal(result.diagnostics.passCodes.includes('full-window'),expectedPasses===10);
   assert.equal(result.frameId,'synthetic-fixture-not-live-game');
   for(const envelope of stages) {
     const matched=matchOcrProposals(envelope.payload,data.augments);
@@ -158,8 +158,32 @@ test('blank generated frame cannot satisfy a triple and executes all fallback pa
   if(unavailable) { t.skip(unavailable.reason); return; }
   assert.equal(code,0); assert.equal(result.status,'recognized');
   assert.equal(result.lines.length,0);
-  assert.deepEqual(stages.map(stage=>stage.stage),['color','contrast']);
-  assert.equal(result.diagnostics.passesCompleted,7);
+  assert.deepEqual(stages.map(stage=>stage.stage),['color','contrast','large']);
+  assert.equal(result.diagnostics.passesCompleted,10);
+});
+
+test('large same-frame title fallback recovers a generated small two-glyph heading without mixing passes',{skip:process.platform!=='win32',timeout:20000},async t=>{
+  const data=JSON.parse(await readFile(new URL('../dist/data.json',import.meta.url),'utf8'));
+  const {code,result,stages,unavailable}=await generatedStageScan('large',data.augments,{smallOverflowTitles:true});
+  if(unavailable){t.skip(unavailable.reason);return;}
+  assert.equal(code,0);
+  const matched=matchOcrProposals(result,data.augments);
+  assert.deepEqual(matched.proposals.map(item=>item.name),['王冠之重','溢流','钢化你心']);
+  assert.equal(matched.selectionMetadataStatus,'accepted');
+  assert.equal(matched.selectionCapture.identityAnchors.pass,'card-titles-large');
+  assert.deepEqual(stages.map(stage=>stage.stage),['color','contrast','large']);
+  assert.equal(result.diagnostics.passesCompleted,9);
+  assert.equal(result.diagnostics.passesFailed,0);
+  assert.equal(result.diagnostics.passCodes.includes('full-window'),false);
+  assert.ok(result.diagnostics.totalMs<=10500);
+  assert.ok(result.identityAnchors.anchors.length<=36);
+  assert.ok(Buffer.byteLength(JSON.stringify(result.identityAnchors))<=32768);
+  const largeLines=result.lines.filter(line=>line.pass==='card-titles-large');
+  const independent=matchOcrProposals({...result,lines:largeLines},data.augments);
+  assert.deepEqual(independent.proposals.map(item=>item.name),['王冠之重','溢流','钢化你心']);
+  assert.equal(independent.selectionMetadataStatus,'accepted');
+  assert.equal(new Set(largeLines.map(line=>line.frameId)).size,1);
+  assert.equal(new Set(largeLines.map(line=>line.column)).size,3);
 });
 
 test('missing generated-stage acknowledgement fails within native budget and stops later passes',{skip:process.platform!=='win32',timeout:20000},async t=>{

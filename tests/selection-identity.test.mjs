@@ -25,6 +25,14 @@ test('title identity survives the OCR-to-observer boundary and same-offer refres
   assert.equal(observer.getResultLease(context).capture.identityAnchors.frameId,'new-independent-frame');
 });
 
+test('large same-frame title identity survives sanitation without admitting an arbitrary pass',()=>{
+  const input=capture();input.identityAnchors.pass='card-titles-large';
+  const checked=sanitizeSelectionCapture(input);
+  assert.deepEqual(checked.identityAnchors,input.identityAnchors);
+  input.identityAnchors.pass='card-titles-untrusted';
+  assert.equal(sanitizeSelectionCapture(input),null);
+});
+
 test('malformed, uninformative or misplaced title anchors cannot become an automatic observation',()=>{
   const changes=[
     value=>value.identityAnchors.cards.pop(),

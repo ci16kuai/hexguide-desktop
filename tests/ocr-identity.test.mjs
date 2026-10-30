@@ -105,6 +105,30 @@ test('same-frame complete cropped titles bind three compact identity cards',()=>
   assert.equal(identity.cards[0].anchors[0].feature[0],0,'the validated result must own its arrays');
 });
 
+test('large titles require their own complete same-frame layout and bound anchors',()=>{
+  const raw=fixture();
+  for(const line of raw.lines)line.pass='card-titles-large';
+  for(const anchor of raw.identityAnchors.anchors)anchor.pass='card-titles-large';
+  const matched=match(raw);
+  assert.deepEqual(matched.proposals.map(row=>row.name),names);
+  assert.equal(matched.selectionMetadataStatus,'accepted');
+  assert.equal(matched.selectionCapture.identityAnchors.pass,'card-titles-large');
+  for(const mutate of [
+    value=>{value.lines[1].frameId='other-frame';},
+    value=>{value.lines[1].pass='card-titles-color';},
+  ]){
+    const changed=structuredClone(raw);mutate(changed);
+    assert.equal(match(changed).status,'unavailable');
+  }
+  for(const mutate of [
+    value=>{value.identityAnchors.frameId='other-frame';},
+    value=>{value.identityAnchors.anchors[0].pass='card-titles-color';},
+  ]){
+    const changed=structuredClone(raw);mutate(changed);
+    recognizedOnly(changed);
+  }
+});
+
 test('complete two-line titles preserve both original line anchors',()=>{
   const result=match(fixture({wrapped:true}));
   assert.deepEqual(result.proposals.map(row=>row.name),names);

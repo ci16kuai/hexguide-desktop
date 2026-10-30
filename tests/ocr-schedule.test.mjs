@@ -402,10 +402,62 @@ test('foreground failures remain bounded and are reset by a fresh respawn window
   for (let n = 0; n < 4; n++) {
     f.schedule.started(); f.advance(500);
     f.schedule.completed({status:'waiting', code:n % 2 ? 'foreground-changed' : 'game-not-foreground'});
-    assert.equal(f.decide().nextInMs, 5000); f.advance(5000);
+    assert.equal(f.decide().nextInMs, 500); f.advance(500);
   }
   died(f); const fresh = respawned(f);
   assert.equal(fresh.mode, 'window'); assert.equal(fresh.due, true);
+});
+
+test('foreground-only failures retry at half-second intervals without exponential backoff', () => {
+  const f = fixture(); f.observe();
+  const original = f.decide(), lifecycle = f.schedule.lifecycle;
+  for (let index = 0; index < 8; index++) {
+    f.schedule.started(); f.advance(7);
+    f.schedule.completed({status:'waiting',code:index % 2 ? 'foreground-changed' : 'game-not-foreground'});
+    assert.equal(f.decide().nextInMs,500);
+    assert.equal(f.decide().intervalMs,500);
+    assert.equal(f.schedule.failureStreak,0);
+    assert.equal(f.decide().windowId,original.windowId);
+    assert.equal(f.schedule.lifecycle,lifecycle);
+    f.advance(499); assert.equal(f.decide().due,false);
+    f.advance(1); assert.equal(f.decide().due,true);
+  }
+  assert.equal(f.decide().windowRemainingMs,60000 - 8 * 507,'focus retries cannot extend the original deadline');
+});
+
+test('follow-up focus probes retry quickly then restore five-second OCR starts', () => {
+  const f = fixture(); f.observe(); const original=f.decide(), lifecycle=f.schedule.lifecycle;
+  f.advance(60000); assert.equal(f.decide().mode,'follow-up');
+  f.schedule.started(); f.advance(7); f.schedule.completed({status:'waiting',code:'game-not-foreground'});
+  assert.equal(f.decide().mode,'backoff'); assert.equal(f.decide().intervalMs,500);
+  assert.equal(f.decide().nextInMs,500);
+  f.advance(500); assert.equal(f.decide().due,true);
+  f.schedule.started(); f.advance(200); f.schedule.completed({status:'waiting',code:'title-layout-incomplete'});
+  const resumed=f.decide(); assert.equal(resumed.mode,'follow-up'); assert.equal(resumed.intervalMs,5000);
+  assert.equal(resumed.nextInMs,4800); assert.equal(resumed.windowRemainingMs,0);
+  assert.equal(resumed.windowId,original.windowId); assert.equal(f.schedule.lifecycle,lifecycle);
+  f.advance(4799); assert.equal(f.decide().due,false);
+  f.advance(1); assert.equal(f.decide().due,true);
+});
+
+test('focus probes retain the shared capture and completion cooldown boundaries', () => {
+  const f=fixture({cooldownMs:1000}); f.observe();
+  f.schedule.started(); f.advance(7); f.schedule.completed({status:'waiting',code:'game-not-foreground'});
+  assert.equal(f.decide().nextInMs,1000,'focus retry cannot shorten the configured completion rest');
+  f.advance(1000); assert.equal(f.decide({inFlight:true}).due,false);
+  assert.equal(f.decide().due,true);
+});
+
+test('an engine fault after a focus probe restores the independent engine backoff', () => {
+  const f=fixture(); f.observe(); f.advance(60000);
+  f.schedule.started(); f.advance(7); f.schedule.completed({status:'waiting',code:'foreground-changed'});
+  f.advance(500); f.schedule.started(); f.advance(200);
+  f.schedule.completed({status:'unavailable',code:'ocr-engine-unavailable'});
+  assert.equal(f.schedule.foregroundBackoff,false); assert.equal(f.schedule.failureStreak,1);
+  assert.equal(f.decide().nextInMs,5000); assert.equal(f.decide().intervalMs,5000);
+  f.advance(5000); f.schedule.started(); f.advance(200);
+  f.schedule.completed({status:'unavailable',code:'ocr-engine-unavailable'});
+  assert.equal(f.decide().nextInMs,10000); assert.equal(f.decide().intervalMs,10000);
 });
 
 test('a successful scan resets failures, while expected no-title frames are not faults', () => {
@@ -544,6 +596,10 @@ test('custom event timings are bounded and legacy level/battle policy is ignored
   }
   for (const value of [0, 999, 30001, -1, NaN, Infinity, '5000']) {
     assert.equal(fixture({followUpIntervalMs:value}).schedule.policy.followUpIntervalMs, 5000);
+  }
+  assert.equal(fixture({backoff:{foregroundMs:750}}).schedule.policy.backoff.foregroundMs,750);
+  for (const value of [0,499,10001,-1,NaN,Infinity,'500']) {
+    assert.equal(fixture({backoff:{foregroundMs:value}}).schedule.policy.backoff.foregroundMs,500);
   }
 });
 

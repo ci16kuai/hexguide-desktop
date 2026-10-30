@@ -12,14 +12,16 @@ namespace HexGuide.Desktop
 {
     // Experimental, screen-only observation. No input is sent, no hook is
     // installed, and no game memory, screenshot file or player identity is read.
-    internal sealed class ScreenSelectionWatcher : IDisposable
+    internal sealed partial class ScreenSelectionWatcher : IDisposable
     {
         private readonly Timer timer;
         private readonly ScreenSelectionDecision decision = new ScreenSelectionDecision();
         private readonly RecognitionTrace trace;
         private readonly EarlySelectionReplay early;
+        private readonly SelectionCaptureRetry earlyCaptureRetry = new SelectionCaptureRetry();
+        private ScreenObservationScope earlyCadenceScope;
+        private long earlyCadenceScopeIssuedAt;
         private bool earlyScopeSupported, earlyButtonKnown, earlyLastDown, earlyHadFocus;
-        private long earlyNextFrameAt;
         private ScreenSelectionObservation observation;
         private bool disposed, lastButtonDown, buttonKnown, eligible, hadGameFocus;
         private long nextFrameAt, lastSeenCapture, nextIdentityCheck;
@@ -61,9 +63,10 @@ namespace HexGuide.Desktop
                 UpdateObservationScope(scopeValue as Dictionary<string, object>, issuedAt);
                 ScreenSelectionObservation nextEarly;
                 long stamp = Now();
-                if (ScreenSelectionObservation.TryRead(ModelValue.Object(model, "selection"), stamp, out nextEarly)
-                    || ScreenSelectionObservation.TryReadContinuation(ModelValue.Object(model, "selectionResult"), stamp, early.ClickedAt, out nextEarly))
-                    early.Bind(nextEarly, stamp);
+                if (ScreenSelectionObservation.TryRead(ModelValue.Object(model, "selection"), stamp, out nextEarly))
+                    BindEarlyReference(nextEarly, stamp, true);
+                else if (ScreenSelectionObservation.TryReadContinuation(ModelValue.Object(model, "selectionResult"), stamp, early.ClickedAt, out nextEarly))
+                    BindEarlyReference(nextEarly, stamp, false);
                 PublishEarly(stamp);
                 return;
             }
@@ -116,19 +119,57 @@ namespace HexGuide.Desktop
         { UpdateObservationScope(null, 0); } // Revocation only; issuing a lease requires its server timestamp.
 
         private void UpdateObservationScope(Dictionary<string, object> scope, long issuedAt)
+        { UpdateEarlyObservationScope(scope, issuedAt, Now(), true); }
+
+        private void UpdateEarlyObservationScope(Dictionary<string, object> scope, long issuedAt, long now, bool startTimer)
         {
             if (disposed) return;
             earlyScopeSupported = true;
-            early.UpdateScope(scope, Now(), issuedAt);
+            if (earlyCadenceScope != null && (earlyCadenceScopeIssuedAt > now + 1000 || now - earlyCadenceScopeIssuedAt > EarlySelectionReplay.ScopeFreshnessMs))
+                earlyCaptureRetry.StopBurst();
+            early.UpdateScope(scope, now, issuedAt);
             eligible = early.Active;
-            if (eligible) timer.Start();
-            else { earlyButtonKnown = earlyHadFocus = false; timer.Stop(); }
-            SetStatus(early.WatcherStatus);
+            ScreenObservationScope incoming;
+            if (eligible && issuedAt >= earlyCadenceScopeIssuedAt && ScreenObservationScope.TryRead(scope, out incoming))
+            {
+                if (earlyCadenceScope == null || earlyCadenceScope.Identity != incoming.Identity) earlyCaptureRetry.StopBurst();
+                earlyCadenceScope = incoming; earlyCadenceScopeIssuedAt = issuedAt;
+            }
+            if (!eligible)
+            {
+                earlyButtonKnown = earlyHadFocus = false; earlyCaptureRetry.Reset();
+                ResetWindowSelection();
+                earlyCadenceScope = null; earlyCadenceScopeIssuedAt = 0; timer.Stop();
+            }
+            ApplyEarlyCaptureCadence(now);
+            if (eligible && startTimer) timer.Start();
+            SetStatus(EarlyWatcherStatus);
+        }
+
+        private void BindEarlyReference(ScreenSelectionObservation value, long now, bool mayStartFast)
+        {
+            // An asynchronous down witness may arrive after a newer OCR result.
+            // Preserve the valid pre-click reference during that bounded wait.
+            if (windowScope == early.ScopeIdentity && windowInput.HasPressedPhysical && value != null
+                && value.CapturedAt > windowInput.PressedAt) return;
+            early.Bind(value, now);
+            if (mayStartFast && early.NeedsFrames && value != null && value.CapturedAt > 0 && value.CapturedAt == early.ReferenceCapturedAt
+                && earlyCadenceScope != null && earlyCadenceScope.Matches(value) && early.CheckLease(now))
+                earlyCaptureRetry.Recognized(value.Identity(), now);
+            ApplyEarlyCaptureCadence(now);
+        }
+
+        private void ApplyEarlyCaptureCadence(long now)
+        {
+            int interval = early.Active && eligible ? earlyCaptureRetry.InputInterval(now) : 25;
+            if (timer.Interval != interval) timer.Interval = interval;
         }
 
         internal void CancelForLocalAction()
         {
-            early.Cancel("local-action", Now()); earlyButtonKnown = false;
+            earlyCaptureRetry.Reset();
+            early.Cancel("local-action", Now()); ResetWindowSelection(); earlyButtonKnown = false;
+            ApplyEarlyCaptureCadence(Now());
             Suspend("local-action", true);
         }
 
@@ -189,6 +230,8 @@ namespace HexGuide.Desktop
             {
                 case "baseline": return "屏幕自动确认（实验）：正在核对本轮卡片";
                 case "identity-waiting": return "屏幕自动确认（实验）：标题暂不可核对，保留本轮等待清晰画面";
+                case "capture-blocked": return "屏幕自动确认（实验）：识别区域被其他窗口遮挡，待确认选择已保留，请露出完整游戏区域";
+                case "capture-unavailable": return "屏幕自动确认（实验）：暂无法读取完整游戏画面，待确认选择已保留，正在重试";
                 case "ready": return "屏幕自动确认（实验）：已就绪，等待游戏内选择";
                 case "pending": return "屏幕自动确认（实验）：正在核对选择特效";
                 case "feedback": return "屏幕自动确认（实验）：已观察到变化，等待卡片收起";
@@ -232,14 +275,17 @@ namespace HexGuide.Desktop
 
         private static long Now() { return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); }
         private static bool ButtonDown() { return (GetAsyncKeyState(0x01) & 0x8000) != 0; }
-        // Only sampled after verifying the foreground game. These inputs can
-        // open an in-game overlay or divert release away from a card.
-        private static bool SelectionInterrupted()
+        // Only sampled after verifying the foreground game. Right movement is
+        // compatible with an already paired left release; before that point it
+        // can divert the click. Overlay keys still invalidate pending evidence.
+        private static bool SelectionInterrupted(Func<int, bool> keyDown, bool completedClick)
         {
             foreach (int key in new[] { 0x02, 0x04, 0x1B, 0x09, 0x50 })
-                if ((GetAsyncKeyState(key) & 0x8000) != 0) return true;
+                if (keyDown(key) && (key != 0x02 || !completedClick)) return true;
             return false;
         }
+
+        private static bool KeyDown(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
 
         private void Poll()
         {
@@ -266,7 +312,7 @@ namespace HexGuide.Desktop
                     Suspend("expired", true);
                 if (observation != null && foreground != observation.Window) Suspend("focus-changed", true);
                 bool down = ButtonDown();
-                if ((down || decision.Pressed || decision.Pending) && SelectionInterrupted())
+                if ((down || decision.Pressed || decision.Pending) && SelectionInterrupted(KeyDown, !down && decision.Pending))
                 { Suspend("interaction-interrupted", true); return; }
                 bool edge = buttonKnown ? down != lastButtonDown : down;
                 buttonKnown = true;
@@ -321,7 +367,7 @@ namespace HexGuide.Desktop
         {
             if (disposed) return;
             long now = Now();
-            if (!early.CheckLease(now)) { earlyHadFocus = earlyButtonKnown = false; SetStatus(early.WatcherStatus); return; }
+            if (!early.CheckLease(now)) { ResetWindowSelection(); earlyHadFocus = earlyButtonKnown = false; earlyCaptureRetry.Reset(); ApplyEarlyCaptureCadence(now); SetStatus(early.WatcherStatus); return; }
             try
             {
                 IntPtr foreground = GetForegroundWindow();
@@ -331,28 +377,13 @@ namespace HexGuide.Desktop
                     identityVerified = GameWindow.IsVerifiedGame(foreground);
                     nextIdentityCheck = now + 1000;
                 }
-                if (!identityVerified)
-                {
-                    if (earlyHadFocus || early.FrameCount > 0) CancelEarly("focus-changed", now);
-                    earlyHadFocus = earlyButtonKnown = false;
-                    return;
-                }
-                earlyHadFocus = true;
+                if (!CheckEarlyFocus(identityVerified, now)) return;
+                if (PollWindowSelection(foreground, now)) return;
                 bool down = ButtonDown();
-                if ((down || early.HasInteraction) && SelectionInterrupted())
-                { CancelEarly("interaction-interrupted", now); earlyButtonKnown = false; return; }
-                if (!earlyButtonKnown)
-                {
-                    earlyButtonKnown = true; earlyLastDown = down;
-                    if (down) { CancelEarly("held-before-observation", now); return; }
-                }
-                bool edge = down != earlyLastDown;
-                earlyLastDown = down;
-                if (!edge && (now < earlyNextFrameAt || !early.WantsFrame(now))) { PublishEarly(now); return; }
-                if (edge || now >= earlyNextFrameAt)
+                PollEarlyVerifiedFrame(now, down, delegate(bool edge)
                 {
                     Rectangle bounds;
-                    if (!ClientBounds(foreground, out bounds)) { CancelEarly("capture-unavailable", now, "client-unavailable"); return; }
+                    if (!ClientBounds(foreground, out bounds)) return new EarlyCaptureAttempt { CancelReason = "capture-unavailable", CaptureCode = "client-unavailable" };
                     var geometry = EarlySelectionReplay.Geometry(foreground, bounds);
                     int column = -1;
                     if (edge)
@@ -360,31 +391,98 @@ namespace HexGuide.Desktop
                         PhysicalPoint point;
                         bool onGame = GetPhysicalCursorPos(out point) && RootWindow(WindowFromPhysicalPoint(point)) == foreground;
                         column = onGame ? geometry.ColumnAt(point.X, point.Y) : -1;
-                        if (!onGame || column < 0) { CancelEarly("outside-click", now); return; }
+                        if (!onGame || column < 0) return new EarlyCaptureAttempt { CancelReason = "outside-click" };
                     }
                     EarlySelectionFrame frame;
                     string failure;
                     bool success = TryCaptureFrame(geometry, out frame, out failure);
-                    RecordCaptureResult(success, failure, Now());
-                    if (!success) { CancelEarly("capture-unavailable", now, failure); return; }
-                    // Timestamp before capture is paired with the actual edge
-                    // sampled above; no final cursor position is replayed.
-                    frame.At = now;
-                    early.Add(frame, edge ? (down ? 1 : 2) : 0, column, Now());
-                    earlyNextFrameAt = now + 65;
-                    PublishEarly(Now());
-                }
+                    return new EarlyCaptureAttempt { Frame = success ? frame : null, Column = column,
+                        RecordAttempt = true, CaptureCode = failure, CancelReason = success ? null : "capture-unavailable" };
+                }, Now, KeyDown);
             }
-            catch { CancelEarly("capture-unavailable", now, "capture-exception"); }
+            catch
+            {
+                earlyCaptureRetry.Completed(false, "capture-exception", now, Now());
+                CancelEarly("capture-unavailable", now, "capture-exception");
+            }
         }
 
+        private sealed class EarlyCaptureAttempt
+        {
+            internal EarlySelectionFrame Frame;
+            internal int Column = -1;
+            internal bool RecordAttempt;
+            internal string CaptureCode, CancelReason;
+        }
+
+        private bool CheckEarlyFocus(bool verified, long now)
+        {
+            if (verified) { earlyHadFocus = true; return true; }
+            earlyCaptureRetry.Reset();
+            ApplyEarlyCaptureCadence(now);
+            if (earlyHadFocus || early.FrameCount > 0) CancelEarly("focus-changed", now);
+            earlyHadFocus = earlyButtonKnown = false;
+            SetStatus(early.WatcherStatus);
+            return false;
+        }
+
+        // The caller supplies a verified foreground-game observation. Keeping
+        // the timing/input seam separate lets fixtures replay the real capture
+        // gate without reading a keyboard, a window, or any screen pixels.
+        private void PollEarlyVerifiedFrame(long now, bool down, Func<bool, EarlyCaptureAttempt> capture, Func<long> completedAt, Func<int, bool> keyDown = null)
+        {
+            if (!early.CheckLease(now)) { earlyButtonKnown = earlyHadFocus = false; earlyCaptureRetry.Reset(); ApplyEarlyCaptureCadence(now); SetStatus(early.WatcherStatus); return; }
+            if (keyDown != null && (down || early.HasInteraction) && SelectionInterrupted(keyDown, !down && early.ClickedAt > 0))
+            { CancelEarly("interaction-interrupted", now); earlyButtonKnown = false; return; }
+            ApplyEarlyCaptureCadence(now);
+            if (!earlyButtonKnown)
+            {
+                earlyButtonKnown = true; earlyLastDown = down;
+                if (down) { CancelEarly("held-before-observation", now); return; }
+            }
+            bool edge = down != earlyLastDown;
+            earlyLastDown = down;
+            if (!earlyCaptureRetry.Due(now, edge) || !edge && !early.WantsFrame(now)) { PublishEarly(now); return; }
+            EarlyCaptureAttempt attempt;
+            try
+            {
+                attempt = capture(edge);
+                if (attempt == null) throw new InvalidOperationException("Missing capture outcome.");
+            }
+            catch
+            {
+                long failedAt = completedAt();
+                RecordCaptureResult(false, "capture-exception", failedAt);
+                earlyCaptureRetry.Completed(false, "capture-exception", now, failedAt);
+                CancelEarly("capture-unavailable", now, "capture-exception"); return;
+            }
+            long finishedAt = completedAt();
+            bool success = attempt.Frame != null;
+            if (attempt.RecordAttempt) RecordCaptureResult(success, attempt.CaptureCode, finishedAt);
+            if (!success)
+            {
+                if (attempt.CaptureCode != null) earlyCaptureRetry.Completed(false, attempt.CaptureCode, now, finishedAt);
+                CancelEarly(attempt.CancelReason ?? "capture-unavailable", now, attempt.CaptureCode); return;
+            }
+            earlyCaptureRetry.Completed(true, "captured", now, finishedAt);
+            // The edge stamp precedes capture; never replay a later cursor.
+            attempt.Frame.At = now;
+            early.Add(attempt.Frame, edge ? (down ? 1 : 2) : 0, attempt.Column, finishedAt);
+            PublishEarly(finishedAt);
+        }
+
+        private string EarlyWatcherStatus
+        { get { return early.Active && earlyCaptureRetry.WaitingStatus != null ? earlyCaptureRetry.WaitingStatus : early.WatcherStatus; } }
+
         private void CancelEarly(string reason, long now, string traceReason = null)
-        { early.Cancel(reason, now, traceReason); SetStatus(early.WatcherStatus); }
+        { ResetWindowSelection(); earlyCaptureRetry.StopBurst(); early.Cancel(reason, now, traceReason); ApplyEarlyCaptureCadence(now); SetStatus(EarlyWatcherStatus); }
 
         private void PublishEarly(long now)
         {
             var evidence = early.TryObserve(now);
-            SetStatus(early.WatcherStatus);
+            if (early.ReferenceCapturedAt <= 0 || evidence != null) earlyCaptureRetry.StopBurst();
+            ApplyEarlyCaptureCadence(now);
+            SetStatus(EarlyWatcherStatus);
             if (evidence == null) return;
             SetStatus("observed");
             var handler = SelectionObserved;
@@ -399,6 +497,7 @@ namespace HexGuide.Desktop
             var current = DecisionDiagnostics(StatusCode);
             current["eligible"] = eligible;
             current["gameForeground"] = earlyScopeSupported ? earlyHadFocus : hadGameFocus;
+            current["captureMode"] = windowTransportActive ? "game-window" : "desktop";
             current["captureAttempts"] = captureAttempts;
             current["captureSuccesses"] = captureSuccesses;
             current["captureFailures"] = captureFailures;
@@ -737,7 +836,430 @@ namespace HexGuide.Desktop
                     throw new InvalidOperationException("A first-frame visual mismatch was lost after returning to waiting.");
                 checks++;
             }
-            return checks + ValidateMaximumDiagnosticFixture();
+            return checks + ValidateMaximumDiagnosticFixture() + ValidateEarlyCaptureRetryFixtures() + ValidateRecognizedCaptureBurstFixtures()
+                + ValidateCaptureRecoverySelectionFixtures() + ValidatePostReleaseInputFixtures() + ValidatePostReleaseGuardFixtures() + ValidateQueuedWindowReferenceFixtures();
+        }
+
+        private static Dictionary<string, object> RetryFixtureScope()
+        {
+            return new Dictionary<string, object> { { "version", 1 }, { "eligible", true }, { "gameId", "retry-fixture" },
+                { "gameEpoch", 2 }, { "revision", 3 }, { "lifecycle", 4 }, { "captureRevision", 5 }, { "notBefore", 900 } };
+        }
+
+        private static EarlySelectionFrame RetryFixtureFrame()
+        {
+            return new EarlySelectionFrame { Geometry = EarlySelectionReplay.Geometry(new IntPtr(42), new Rectangle(0, 0, 800, 600)),
+                Signatures = new[] { new int[192], new int[192], new int[192] }, TitleBands = new Bitmap[3], TitleBoxes = new Rectangle[3] };
+        }
+
+        private static EarlySelectionFrame RetryBurstFixtureFrame(bool titles = true, int body = 0)
+        {
+            var frame = RetryFixtureFrame();
+            for (int column = 0; column < 3; column++)
+            {
+                Rectangle box = EarlySelectionReplay.TitleBox(frame.Geometry, column);
+                var band = new Bitmap(box.Width, box.Height, PixelFormat.Format32bppArgb);
+                using (var graphics = Graphics.FromImage(band))
+                using (var pen = new Pen(Color.White, 3))
+                {
+                    graphics.Clear(Color.FromArgb(15, 20, 25));
+                    for (int x = 10; titles && x < box.Width - 20; x += 30)
+                    {
+                        graphics.DrawLine(pen, x, 20, x + 20, 20); graphics.DrawLine(pen, x + 10, 12, x + 10, 70);
+                        graphics.DrawLine(pen, x, 43, x + 20, 43); graphics.DrawLine(pen, x, 70, x + 20, 35);
+                    }
+                }
+                frame.TitleBands[column] = band; frame.TitleBoxes[column] = box;
+                for (int cell = 0; cell < 192; cell++) frame.Signatures[column][cell] = body;
+                frame.Bytes += (long)band.Width * band.Height * 4 + 192 * sizeof(int);
+            }
+            return frame;
+        }
+
+        private static ScreenSelectionObservation RetryBurstFixtureReference(long capturedAt = 950, string token = "01234567890123456789012345678901")
+        {
+            using (var frame = RetryBurstFixtureFrame())
+            {
+                var value = frame.Geometry; value.Token = token; value.GameId = "retry-fixture"; value.Epoch = 2; value.Revision = 3;
+                value.CapturedAt = capturedAt; value.Ids = new[] { "fixture-left", "fixture-middle", "fixture-right" };
+                value.Signatures = new int[3][]; value.TitleAnchors = new ScreenTitleAnchor[3][];
+                for (int column = 0; column < 3; column++)
+                {
+                    value.Signatures[column] = (int[])frame.Signatures[column].Clone();
+                    var local = new Rectangle(3, 3, frame.TitleBands[column].Width - 6, frame.TitleBands[column].Height - 6);
+                    CardTitleFeature feature = CardTitleIdentity.Extract(frame.TitleBands[column], local);
+                    if (!feature.Usable) throw new InvalidOperationException("Generated retry title anchor is unusable.");
+                    local.Offset(frame.TitleBoxes[column].Location);
+                    value.TitleAnchors[column] = new[] { new ScreenTitleAnchor { Box = local, Feature = feature.Feature } };
+                }
+                return value;
+            }
+        }
+
+        // Exercise the same capture and input seam as PollEarly. These generated
+        // frames carry real title features and satisfy the existing direct-click
+        // decision only after a paired click and the full dismissal window.
+        private static int ValidateCaptureRecoverySelectionFixtures()
+        {
+            int checks = 0;
+            foreach (bool fast in new[] { false, true })
+            foreach (long clearAt in new long[] { 1025, 1100 })
+            foreach (bool freshReference in new[] { false, true })
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                int proofs = 0; long proofAt = 0, currentStamp = 0;
+                watcher.SelectionObserved += delegate { proofs++; proofAt = currentStamp; };
+                watcher.UpdateEarlyObservationScope(RetryFixtureScope(), 1000, 1000, false);
+                watcher.BindEarlyReference(RetryBurstFixtureReference(), 1000, fast);
+                for (long stamp = 1000; stamp <= 1900; stamp += 25)
+                {
+                    long now = stamp; currentStamp = now;
+                    watcher.UpdateEarlyObservationScope(RetryFixtureScope(), now, now, false);
+                    if (now == 1100) watcher.BindEarlyReference(RetryBurstFixtureReference(freshReference ? 1100 : 950), now, fast);
+                    bool down = now >= 1250 && now < 1300;
+                    watcher.PollEarlyVerifiedFrame(now, down, delegate(bool edge)
+                    {
+                        if (now < clearAt) return new EarlyCaptureAttempt { RecordAttempt = true, CaptureCode = "card-occluded", CancelReason = "capture-unavailable" };
+                        return new EarlyCaptureAttempt { RecordAttempt = true, Frame = RetryBurstFixtureFrame(now < 1300, now < 1300 ? 0 : 100), Column = edge ? 1 : -1 };
+                    }, delegate { return now; }, delegate { return false; });
+                }
+                checks++;
+                if (proofs != (freshReference ? 1 : 0) || freshReference && proofAt < 1650)
+                    throw new InvalidOperationException("Recovery click lost fresh baselines or revived a fenced reference: fast=" + fast + ", clear=" + clearAt + ", fresh=" + freshReference + ", proofs=" + proofs);
+            }
+            return checks;
+        }
+
+        private static int ValidatePostReleaseInputFixtures()
+        {
+            int checks = 0;
+            // Right movement after the paired release is compatible with the
+            // pending visual proof. Other interruption keys remain invalidating.
+            foreach (int key in new[] { 0, 0x02, 0x04, 0x1B, 0x09, 0x50 })
+            foreach (long interruptAt in new long[] { 1125, 1175, 1200, 1475 })
+            foreach (bool held in new[] { false, true })
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                int proofs = 0; long proofAt = 0, currentStamp = 0;
+                watcher.SelectionObserved += delegate { proofs++; proofAt = currentStamp; };
+                watcher.UpdateEarlyObservationScope(RetryFixtureScope(), 1000, 1000, false);
+                watcher.BindEarlyReference(RetryBurstFixtureReference(), 1000, true);
+                for (long stamp = 1000; stamp <= 1900; stamp += 25)
+                {
+                    long now = stamp; currentStamp = now;
+                    watcher.UpdateEarlyObservationScope(RetryFixtureScope(), now, now, false);
+                    bool down = now >= 1100 && now < 1175;
+                    watcher.PollEarlyVerifiedFrame(now, down, delegate(bool edge)
+                    { return new EarlyCaptureAttempt { RecordAttempt = true, Frame = RetryBurstFixtureFrame(now < 1250, now < 1250 ? 0 : 100), Column = edge ? 1 : -1 }; },
+                        delegate { return now; }, delegate(int candidate) { return (held ? now >= interruptAt : now == interruptAt) && candidate == key; });
+                }
+                bool expected = key == 0 || key == 0x02 && interruptAt > 1175;
+                checks++;
+                if (proofs != (expected ? 1 : 0) || expected && proofAt < 1600)
+                    throw new InvalidOperationException("Post-release input changed full visual proof: key=" + key + ", at=" + interruptAt + ", proofs=" + proofs);
+            }
+            return checks;
+        }
+
+        private static int ValidatePostReleaseGuardFixtures()
+        {
+            int checks = 0;
+            foreach (string guard in new[] { "no-click", "short-dismissal", "same-titles", "extra-click", "reroll", "scope-revision", "focus", "manual" })
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                int proofs = 0;
+                watcher.SelectionObserved += delegate { proofs++; };
+                watcher.UpdateEarlyObservationScope(RetryFixtureScope(), 1000, 1000, false);
+                watcher.BindEarlyReference(RetryBurstFixtureReference(), 1000, true);
+                for (long stamp = 1000; stamp <= 1900; stamp += 25)
+                {
+                    long now = stamp;
+                    var scope = RetryFixtureScope();
+                    if (guard == "scope-revision" && now >= 1325) { scope["revision"] = 4; scope["captureRevision"] = 6; }
+                    watcher.UpdateEarlyObservationScope(scope, now, now, false);
+                    if (!watcher.CheckEarlyFocus(guard != "focus" || now != 1325, now)) continue;
+                    if (now == 1325)
+                    {
+                        if (guard == "reroll") watcher.BindEarlyReference(RetryBurstFixtureReference(1000, "abcdef0123456789abcdef0123456789"), now, true);
+                        if (guard == "manual") watcher.CancelForLocalAction();
+                    }
+                    bool down = guard != "no-click" && (now >= 1100 && now < 1175 || guard == "extra-click" && now == 1350);
+                    bool titles = now < 1250 || guard == "same-titles" || guard == "short-dismissal" && now >= 1575;
+                    watcher.PollEarlyVerifiedFrame(now, down, delegate(bool edge)
+                    { return new EarlyCaptureAttempt { RecordAttempt = true, Frame = RetryBurstFixtureFrame(titles, titles ? 0 : 100), Column = edge ? 1 : -1 }; },
+                        delegate { return now; }, delegate(int key) { return now >= 1200 && key == 0x02; });
+                }
+                checks++;
+                if (proofs != 0) throw new InvalidOperationException("Post-release right movement bypassed confirmation guard: " + guard);
+            }
+            return checks;
+        }
+
+        private static int MeasureRecognizedRetryCaptures(bool recognized)
+        {
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                int attempts = 0;
+                for (long stamp = 1000; stamp < 21000; stamp += 16)
+                {
+                    long now = stamp;
+                    watcher.UpdateEarlyObservationScope(RetryFixtureScope(), now, now, false);
+                    if ((now - 1000) % 1008 == 0) watcher.BindEarlyReference(RetryBurstFixtureReference(now - 50), now, recognized);
+                    watcher.PollEarlyVerifiedFrame(now, false, delegate(bool edge)
+                    { attempts++; return new EarlyCaptureAttempt { RecordAttempt = true, Frame = RetryBurstFixtureFrame() }; }, delegate { return now; });
+                }
+                return attempts;
+            }
+        }
+
+        private static int ValidateRecognizedCaptureBurstFixtures()
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool condition, string message)
+            { checks++; if (!condition) throw new InvalidOperationException("Recognized capture burst: " + message); };
+            int normal = MeasureRecognizedRetryCaptures(false), recognized = MeasureRecognizedRetryCaptures(true);
+            check(normal == 250 && recognized == 417, "accepted three-card reference did not increase bounded 20s sampling: " + recognized + " vs " + normal);
+            // A 17ms UI pulse is a plausible timer cadence. Faster sampling
+            // must still satisfy the existing 40ms two-baseline proof floor.
+            foreach (bool fast in new[] { false, true })
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                int proofs = 0;
+                watcher.SelectionObserved += delegate { proofs++; };
+                watcher.UpdateEarlyObservationScope(RetryFixtureScope(), 1000, 1000, false);
+                watcher.BindEarlyReference(RetryBurstFixtureReference(), 1000, fast);
+                for (long stamp = 1000; stamp <= 1800; stamp += 17)
+                {
+                    long now = stamp; bool down = now >= 1102 && now < 1170;
+                    watcher.UpdateEarlyObservationScope(RetryFixtureScope(), now, now, false);
+                    watcher.PollEarlyVerifiedFrame(now, down, delegate(bool edge)
+                    {
+                        return new EarlyCaptureAttempt { RecordAttempt = true,
+                            Frame = RetryBurstFixtureFrame(now < 1204, now < 1204 ? 0 : 100), Column = edge ? 1 : -1 };
+                    }, delegate { return now; });
+                }
+                check(proofs == 1, "higher cadence lost a valid no-FX confirmation under a 17ms pulse");
+            }
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                for (long now = 1000; now <= 22000; now += 500)
+                {
+                    watcher.UpdateEarlyObservationScope(RetryFixtureScope(), now, now, false);
+                    watcher.BindEarlyReference(RetryBurstFixtureReference(now - 50), now, true);
+                    check(watcher.timer.Interval == (now < 21000 ? 16 : 25), "same-identity OCR refresh extended or shortened the fixed burst");
+                }
+                watcher.BindEarlyReference(RetryBurstFixtureReference(22000), 22000, false);
+                check(watcher.timer.Interval == 25, "late continuation reopened an exhausted budget");
+            }
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                watcher.UpdateEarlyObservationScope(RetryFixtureScope(), 1000, 1000, false);
+                watcher.BindEarlyReference(RetryBurstFixtureReference(), 1000, false);
+                check(watcher.timer.Interval == 25, "continuation started a new fast budget");
+                watcher.BindEarlyReference(RetryBurstFixtureReference(), 1000, true);
+                check(watcher.timer.Interval == 16 && !watcher.timer.Enabled, "accepted binding did not use the fast interval or started a fixture timer");
+                watcher.BindEarlyReference(RetryBurstFixtureReference(), 1050, false);
+                check(watcher.timer.Interval == 16, "continuation ended an existing valid budget");
+                watcher.CancelEarly("focus-changed", 1100);
+                watcher.UpdateEarlyObservationScope(RetryFixtureScope(), 1100, 1100, false);
+                watcher.BindEarlyReference(RetryBurstFixtureReference(1100), 1100, true);
+                check(watcher.timer.Interval == 25, "focus loss allowed the same key to restart fast capture");
+                var changed = RetryFixtureScope(); changed["revision"] = 4; changed["captureRevision"] = 6;
+                watcher.UpdateEarlyObservationScope(changed, 1200, 1200, false);
+                watcher.BindEarlyReference(RetryBurstFixtureReference(1200), 1200, true);
+                check(watcher.timer.Interval == 25 && watcher.early.ReferenceCapturedAt == 0, "new scope accepted an old reference or started a burst");
+                var next = RetryBurstFixtureReference(1250, "abcdef0123456789abcdef0123456789"); next.Revision = 4;
+                watcher.UpdateEarlyObservationScope(changed, 1250, 1250, false);
+                watcher.BindEarlyReference(next, 1250, true);
+                check(watcher.timer.Interval == 16, "a genuinely new accepted offer could not open a new budget");
+                watcher.UpdateEarlyObservationScope(RetryFixtureScope(), 1000, 1260, false);
+                check(watcher.timer.Interval == 16, "an older scope response cancelled the current accepted budget");
+            }
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                int attempts = 0;
+                watcher.UpdateEarlyObservationScope(RetryFixtureScope(), 1000, 1000, false);
+                watcher.BindEarlyReference(RetryBurstFixtureReference(), 1000, true);
+                foreach (long stamp in new long[] { 1000, 1016, 1032, 1048, 1064, 1547, 1548 })
+                {
+                    long now = stamp; bool down = now == 1032;
+                    watcher.UpdateEarlyObservationScope(RetryFixtureScope(), now, now, false);
+                    watcher.PollEarlyVerifiedFrame(now, down, delegate(bool edge)
+                    { attempts++; return new EarlyCaptureAttempt { RecordAttempt = true, CaptureCode = "card-occluded", CancelReason = "capture-unavailable" }; }, delegate { return now; });
+                    watcher.BindEarlyReference(RetryBurstFixtureReference(now), now, true);
+                }
+                check(attempts == 4 && watcher.timer.Interval == 25, "fast binding replenished failure probes or delayed a real edge");
+                check(!watcher.early.HasInteraction && watcher.early.FrameCount == 0, "fast blocked frames retained a pre-occlusion interaction");
+            }
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                int proofs = 0;
+                watcher.SelectionObserved += delegate { proofs++; };
+                watcher.UpdateEarlyObservationScope(RetryFixtureScope(), 1000, 1000, false);
+                watcher.BindEarlyReference(RetryBurstFixtureReference(), 1000, true);
+                foreach (long stamp in new long[] { 1000, 1070, 1100, 1178, 1240, 1310, 1380, 1450, 1520, 1590 })
+                {
+                    long now = stamp; bool down = now >= 1100 && now < 1178;
+                    watcher.UpdateEarlyObservationScope(RetryFixtureScope(), now, now, false);
+                    watcher.PollEarlyVerifiedFrame(now, down, delegate(bool edge)
+                    { return new EarlyCaptureAttempt { RecordAttempt = true, Frame = RetryBurstFixtureFrame(now < 1240, now < 1240 ? 0 : 100), Column = edge ? 1 : -1 }; }, delegate { return now; });
+                }
+                check(proofs == 1 && watcher.StatusCode == "observed" && watcher.timer.Interval == 25, "completed full proof did not close the fast window");
+                check(watcher.early.FrameCount == 0 && watcher.early.RetainedBytes == 0, "completed fast proof retained generated pixels");
+                watcher.BindEarlyReference(RetryBurstFixtureReference(1600), 1600, true);
+                check(watcher.timer.Interval == 25, "a post-submit model revived the same fast key");
+            }
+            foreach (bool fast in new[] { false, true })
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                int proofs = 0;
+                watcher.SelectionObserved += delegate { proofs++; };
+                watcher.UpdateEarlyObservationScope(RetryFixtureScope(), 1000, 1000, false);
+                watcher.BindEarlyReference(RetryBurstFixtureReference(), 1000, fast);
+                for (long stamp = 1000; stamp <= 3600; stamp += 16)
+                {
+                    long now = stamp; bool down = now >= 1192 && now < 1256;
+                    watcher.UpdateEarlyObservationScope(RetryFixtureScope(), now, now, false);
+                    watcher.PollEarlyVerifiedFrame(now, down, delegate(bool edge)
+                    {
+                        var frame = RetryBurstFixtureFrame(now < 3256, now < 3256 ? 0 : 100);
+                        if (now >= 1300 && now < 1500)
+                            for (int cell = 0; cell < 8 * 3; cell++) frame.Signatures[1][cell] = 40;
+                        return new EarlyCaptureAttempt { RecordAttempt = true, Frame = frame, Column = edge ? 1 : -1 };
+                    }, delegate { return now; });
+                    check(watcher.early.FrameCount <= EarlySelectionReplay.MaximumFrames
+                        && watcher.early.RetainedBytes <= EarlySelectionReplay.MaximumBytes, "fast confirmation exceeded its memory bound");
+                }
+                check(proofs == 1, "fast sampling exhausted the buffer before a valid delayed dismissal");
+            }
+            var policy = new SelectionCaptureRetry();
+            policy.Recognized("fixture-key", 1000); policy.Completed(true, "captured", 1000, 1000);
+            check(!policy.Due(1039, false) && policy.Due(1040, false) && policy.InputInterval(1040) == 16, "recognized cadence was not 40ms/16ms");
+            policy.Recognized("fixture-key", 20999); policy.Completed(true, "captured", 20984, 20984);
+            check(policy.InputInterval(21000) == 25 && !policy.Due(21048, false) && policy.Due(21049, false), "deadline did not restore the 65ms/25ms mode");
+            policy.Reset(); policy.Recognized("fixture-key", 22000);
+            check(policy.InputInterval(22000) == 25, "reset forgot the consumed stable key");
+            policy.Recognized("new-fixture-key", 22000);
+            check(policy.InputInterval(22000) == 16, "new stable key did not receive its own bounded budget");
+            policy.InputInterval(23000);
+            check(policy.InputInterval(22500) == 25, "a wall-clock rollback extended the active fast budget");
+            policy.Recognized("new-fixture-key", 23000);
+            check(policy.InputInterval(23000) == 25, "a clock correction restarted the same fast key");
+            return checks;
+        }
+
+        private static int ValidateEarlyCaptureRetryFixtures()
+        {
+            int checks = 0;
+            Action<bool, string> check = delegate(bool condition, string message)
+            { checks++; if (!condition) throw new InvalidOperationException("Selection capture retry: " + message); };
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                watcher.earlyScopeSupported = watcher.eligible = true;
+                int attempts = 0, proofs = 0;
+                long previousAttemptAt = 0;
+                watcher.SelectionObserved += delegate { proofs++; };
+                for (long stamp = 1000; stamp <= 11000; stamp += 25)
+                {
+                    long now = stamp;
+                    watcher.UpdateEarlyObservationScope(RetryFixtureScope(), now, now, false);
+                    watcher.BindEarlyReference(RetryBurstFixtureReference(now), now, true);
+                    watcher.PollEarlyVerifiedFrame(now, false, delegate(bool edge)
+                    {
+                        if (attempts >= 5) check(now - previousAttemptAt == 500, "reference refresh replenished the short failure retry budget");
+                        attempts++; previousAttemptAt = now;
+                        return new EarlyCaptureAttempt { RecordAttempt = true, CaptureCode = "card-occluded", CancelReason = "capture-unavailable" };
+                    }, delegate { return now; });
+                }
+                check(attempts == 23, "persistent failure exceeded the bounded onset probes and 500ms pacing: " + attempts);
+                check(watcher.early.FrameCount == 0 && watcher.early.RetainedBytes == 0 && proofs == 0, "blocked frames retained witnesses or emitted evidence");
+                check(watcher.StatusCode == "capture-blocked", "blocked capture was displayed as generic waiting");
+                check(StatusMessage(watcher.StatusCode).Contains("遮挡") && StatusMessage(watcher.StatusCode).Contains("待确认"), "blocked capture omitted the recovery/pending explanation");
+            }
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                watcher.earlyScopeSupported = watcher.eligible = true;
+                var capturedAt = new List<long>();
+                for (long stamp = 1000; stamp <= 1700; stamp += 25)
+                {
+                    long now = stamp;
+                    watcher.early.UpdateScopeForFixture(RetryFixtureScope(), now);
+                    watcher.PollEarlyVerifiedFrame(now, false, delegate(bool edge)
+                    {
+                        if (now == 1000) return new EarlyCaptureAttempt { RecordAttempt = true, CaptureCode = "card-occluded", CancelReason = "capture-unavailable" };
+                        capturedAt.Add(now);
+                        return new EarlyCaptureAttempt { RecordAttempt = true, Frame = RetryFixtureFrame() };
+                    }, delegate { return now; });
+                    if (now == 1050) check(watcher.StatusCode == "capture-blocked", "a lease heartbeat hid the active occlusion reason");
+                }
+                check(capturedAt.Count == 9 && capturedAt[0] == 1075, "uncovered cards missed the initial recovery probe");
+                check(capturedAt[1] - capturedAt[0] == 75 && capturedAt[2] - capturedAt[1] == 75, "successful 25ms pulses did not retain the original 65ms target cadence");
+                check(watcher.early.FrameCount == 2 && watcher.StatusCode == "baseline", "recovery reused blocked witnesses or failed to start a fresh baseline");
+            }
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                watcher.earlyScopeSupported = watcher.eligible = true;
+                var edges = new List<string>();
+                for (long stamp = 1000; stamp <= 1600; stamp += 25)
+                {
+                    long now = stamp; bool down = now == 1025;
+                    watcher.early.UpdateScopeForFixture(RetryFixtureScope(), now);
+                    watcher.PollEarlyVerifiedFrame(now, down, delegate(bool edge)
+                    {
+                        edges.Add(edge ? (down ? "down" : "up") : "frame");
+                        return new EarlyCaptureAttempt { RecordAttempt = true, CaptureCode = "card-occluded", CancelReason = "capture-unavailable" };
+                    }, delegate { return now; });
+                }
+                check(string.Join(",", edges.ToArray()) == "frame,down,up,frame,frame", "capture backoff delayed or replayed a real button edge");
+                check(!watcher.earlyLastDown && watcher.early.FrameCount == 0 && !watcher.early.HasInteraction, "a failed edge retained a held button or stale interaction");
+            }
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                watcher.earlyScopeSupported = watcher.eligible = true;
+                int proofs = 0; EarlySelectionFrame release = null;
+                watcher.SelectionObserved += delegate { proofs++; };
+                foreach (long stamp in new long[] { 1000, 1075, 1100, 1175, 1200, 1275, 1350 })
+                {
+                    long now = stamp; bool down = now >= 1100 && now < 1200;
+                    watcher.early.UpdateScopeForFixture(RetryFixtureScope(), now);
+                    watcher.PollEarlyVerifiedFrame(now, down, delegate(bool edge)
+                    {
+                        if (now == 1175) return new EarlyCaptureAttempt { RecordAttempt = true, CaptureCode = "card-occluded", CancelReason = "capture-unavailable" };
+                        var frame = RetryFixtureFrame(); if (now == 1200) release = frame;
+                        return new EarlyCaptureAttempt { RecordAttempt = true, Frame = frame, Column = edge ? 1 : -1 };
+                    }, delegate { return now; });
+                    if (now == 1100) check(watcher.early.HasInteraction, "generated pointer-down never entered the real replay buffer");
+                    if (now == 1175) check(watcher.early.FrameCount == 0 && !watcher.early.HasInteraction, "capture failure retained pre-occlusion input/pixels");
+                    if (now == 1200) check(release != null && release.Disposed && watcher.early.Reason == "release-unpaired", "real up after failure was skipped or paired with an old press");
+                }
+                check(proofs == 0 && watcher.early.FrameCount == 2, "post-occlusion baseline manufactured an old selected outcome");
+            }
+            using (var watcher = new ScreenSelectionWatcher())
+            {
+                watcher.earlyScopeSupported = watcher.eligible = true;
+                int attempts = 0;
+                foreach (long stamp in new long[] { 1000, 1025, 1499, 1500 })
+                {
+                    long now = stamp;
+                    watcher.early.UpdateScopeForFixture(RetryFixtureScope(), now);
+                    watcher.PollEarlyVerifiedFrame(now, false, delegate(bool edge)
+                    { attempts++; throw new InvalidOperationException("generated-capture-failure"); }, delegate { return now; });
+                }
+                check(attempts == 2 && watcher.StatusCode == "capture-unavailable" && watcher.early.FrameCount == 0, "capture exceptions bypassed the retry or failure cleanup");
+                watcher.PollEarlyVerifiedFrame(2601, false, delegate(bool edge)
+                { attempts++; return new EarlyCaptureAttempt { Frame = RetryFixtureFrame() }; }, delegate { return 2601L; });
+                check(attempts == 2 && !watcher.early.Active && watcher.StatusCode == "waiting", "expired scope retained blocked status or recaptured without a lease");
+            }
+            var retry = new SelectionCaptureRetry();
+            retry.Completed(false, "card-occluded", 1000, 1100);
+            check(!retry.Due(1164, false) && retry.Due(1165, false) && retry.Due(1110, true), "failure delay ignored capture completion or blocked an edge");
+            retry.Completed(true, "captured", 2000, 2010);
+            check(!retry.Due(2064, false) && retry.Due(2065, false) && retry.WaitingStatus == null, "success changed the original start-based target interval");
+            retry.Completed(false, "generated-private-code", 3000, 3000);
+            check(retry.WaitingStatus == "capture-unavailable" && retry.Due(2900, false), "clock correction or unknown failure leaked an arbitrary status");
+            retry.Reset();
+            check(retry.WaitingStatus == null && retry.Due(0, false), "reset retained a stale delay or blocked message");
+            return checks;
         }
 
         private static int ValidateMaximumDiagnosticFixture()
@@ -1064,6 +1586,8 @@ namespace HexGuide.Desktop
         private int[][] downImage;
         private long baselineFirstAt, baselineLastAt, directBaselineFirstAt, directBaselineLastAt;
         private long directLastSampleAt, directFirstTransitionAt;
+        private long lastPixelAt;
+        private bool strictPixelTimes;
         private int directFrames, directMaxGap;
         private bool directEligible;
         internal bool DirectComplete;
@@ -1147,6 +1671,7 @@ namespace HexGuide.Desktop
             downImage = null; DirectComplete = directEligible = false;
             baselineFirstAt = baselineLastAt = directBaselineFirstAt = directBaselineLastAt = 0;
             directLastSampleAt = directFirstTransitionAt = 0; directFrames = directMaxGap = 0;
+            lastPixelAt = 0; strictPixelTimes = false;
             referenceCapturedAt = lastObservedFrameAt = 0;
             metricsAvailable = false; maeFailureMask = closeFailureMask = frameGapMs = 0;
             closeCells = new int[3];
@@ -1167,15 +1692,21 @@ namespace HexGuide.Desktop
         internal void Pointer(bool down, int column, bool onGame, long now, int[][] edgeFrame, int[][] baseline)
         { PointerCore(down, column, onGame, now, edgeFrame, baseline, false, false); }
 
-        internal void PointerWithTitleIdentity(bool down, int column, bool onGame, long now, int[][] edgeFrame, int[][] baseline, bool titlesMatch)
-        { PointerCore(down, column, onGame, now, edgeFrame, baseline, true, titlesMatch); }
+        internal void PointerWithTitleIdentity(bool down, int column, bool onGame, long now, int[][] edgeFrame, int[][] baseline, bool titlesMatch, long capturedAt = 0)
+        { PointerCore(down, column, onGame, now, edgeFrame, baseline, true, titlesMatch, capturedAt); }
 
-        private void PointerCore(bool down, int column, bool onGame, long now, int[][] edgeFrame, int[][] baseline, bool titleMode, bool titlesMatch)
+        private void PointerCore(bool down, int column, bool onGame, long now, int[][] edgeFrame, int[][] baseline, bool titleMode, bool titlesMatch, long capturedAt = 0)
         {
             if (Invalid || Complete) return;
-            NoteDecision(now, false);
+            long sampleAt = capturedAt > 0 ? capturedAt : now;
+            if (capturedAt > 0) strictPixelTimes = true;
+            NoteDecision(strictPixelTimes ? sampleAt : now, strictPixelTimes);
             lastEdgeDown = down;
             lastEdgeColumn = column >= 0 && column <= 2 ? column : -1;
+            if (strictPixelTimes && (sampleAt < now || sampleAt - now > SelectionFrameSynchronizer.MaximumEdgeDelayMs
+                || sampleAt <= lastPixelAt))
+            { Reject("pointer-frame-time-invalid", now); return; }
+            lastPixelAt = sampleAt;
             if (!onGame) { Reject("pointer-not-game", now); return; }
             if (column < 0 || column > 2) { Reject("pointer-column-invalid", now); return; }
             if (!Valid(edgeFrame)) { Reject("pointer-invalid-current", now); return; }
@@ -1204,7 +1735,7 @@ namespace HexGuide.Desktop
                     && now > baselineLastAt && now - baselineLastAt <= 180;
                 directLastSampleAt = baselineLastAt;
                 directMaxGap = (int)Math.Max(0, Math.Min(180, baselineLastAt - baselineFirstAt));
-                TrackDirectSample(now);
+                TrackDirectSample(sampleAt);
                 downImage = Clone(edgeFrame);
             }
             else
@@ -1213,13 +1744,14 @@ namespace HexGuide.Desktop
                 if (now - pressedAt > 1500) { Reject("pointer-up-hold-timeout", now); return; }
                 if (now <= pressedAt) { Reject("pointer-up-time-backward", now); return; }
                 SelectedIndex = column; ClickedAt = now; Pending = true;
-                TrackDirectSample(now);
+                TrackDirectSample(sampleAt);
                 if (now - pressedAt > 500) directEligible = false;
             }
-            // This is the frame captured at this actual button edge, not the
-            // preceding timer frame. Release refresh also excludes held-hover FX.
+            // The event lease keeps the physical pointer time. Pixel continuity
+            // uses the actual compositor time, including delayed edge witnesses.
+            // Release refresh also excludes held-hover FX.
             preClick = Clone(edgeFrame);
-            lastFrameAt = now;
+            lastFrameAt = sampleAt;
         }
 
         internal void Frame(int[][] current, int[][] baseline, long now)
@@ -1235,6 +1767,8 @@ namespace HexGuide.Desktop
         {
             if (Invalid || Complete) return;
             NoteDecision(now, true);
+            if (strictPixelTimes && now <= lastPixelAt) { Reject("frame-time-not-newer", now); return; }
+            lastPixelAt = now;
             if (!Valid(current)) { Reject("frame-invalid-current", now); return; }
             if (!Valid(baseline)) { Reject("frame-invalid-reference", now); return; }
             if (titleMode && (titleMask < 0 || titleMask > 7)) { Reject("frame-title-mask-invalid", now); return; }
@@ -1387,6 +1921,53 @@ namespace HexGuide.Desktop
                 for (long at = up + 70; at <= up + 490; at += 70) d.FrameWithTitleIdentity(after, before, at, 0);
                 check(!d.Complete, "invalid activation chain accepted: " + fault);
             }
+            Func<long, long, ScreenSelectionDecision> asynchronousDown = delegate(long pointerAt, long pixelAt) {
+                var d = new ScreenSelectionDecision(); d.Arm(950);
+                d.FrameWithTitleIdentity(before, before, 1000, 7);
+                d.FrameWithTitleIdentity(before, before, 1070, 7);
+                d.PointerWithTitleIdentity(true, 1, true, pointerAt, before, before, true, pixelAt);
+                return d;
+            };
+            var delayed = asynchronousDown(1100, 1190);
+            delayed.PointerWithTitleIdentity(false, 1, true, 1220, after, before, false, 1310);
+            for (long at = 1380; at <= 1730; at += 70) delayed.FrameWithTitleIdentity(after, before, at, 0);
+            check(delayed.DirectComplete && delayed.Complete && !delayed.Invalid,
+                "90 ms delayed edge pixels within actual continuity bounds did not complete");
+            var delayedProof = delayed.DirectEvidence();
+            check(delayed.ClickedAt == 1220 && (long)delayedProof["pressedAt"] == 1100
+                && (long)delayedProof["firstTransitionAt"] == 1380 && delayed.lastPixelAt == 1730,
+                "delayed capture changed physical lease or source observation time");
+            check((int)delayedProof["maxFrameGapMs"] == 120,
+                "proof gaps used event time instead of actual edge pixels");
+
+            var hiddenGap = asynchronousDown(1220, 1310);
+            hiddenGap.PointerWithTitleIdentity(false, 1, true, 1350, after, before, false, 1370);
+            for (long at = 1440; at <= 1790; at += 70) hiddenGap.FrameWithTitleIdentity(after, before, at, 0);
+            check(!hiddenGap.DirectComplete && !hiddenGap.Complete,
+                "actual 240 ms baseline-to-down pixel gap passed as a 150 ms pointer gap");
+            var missingEdge = asynchronousDown(1100, 1201);
+            check(missingEdge.Invalid, "edge image later than 100 ms accepted");
+            var preEdge = asynchronousDown(1100, 1099);
+            check(preEdge.Invalid, "pre-edge cached pixels witnessed a pointer");
+            var reused = asynchronousDown(1100, 1190);
+            reused.PointerWithTitleIdentity(false, 1, true, 1180, after, before, false, 1190);
+            check(reused.Invalid && !reused.Pending, "one source image witnessed both pointer edges");
+            foreach (long duplicateAt in new long[] { 1310, 1309 })
+            {
+                var d = asynchronousDown(1100, 1190);
+                d.PointerWithTitleIdentity(false, 1, true, 1220, after, before, false, 1310);
+                d.FrameWithTitleIdentity(after, before, duplicateAt, 0);
+                check(d.Invalid && d.DismissedFrames == 0 && d.FeedbackFrames == 0,
+                    "duplicate or backward source image increased post-release evidence");
+            }
+            var resetClock = asynchronousDown(1100, 1190);
+            resetClock.Arm(1950);
+            resetClock.FrameWithTitleIdentity(before, before, 2000, 7);
+            resetClock.FrameWithTitleIdentity(before, before, 2070, 7);
+            resetClock.PointerWithTitleIdentity(true, 1, true, 2100, before, before, true);
+            resetClock.PointerWithTitleIdentity(false, 1, true, 2178, after, before, false);
+            for (long at = 2240; at <= 2590; at += 70) resetClock.FrameWithTitleIdentity(after, before, at, 0);
+            check(resetClock.DirectComplete, "new arm retained asynchronous time state in legacy path");
             return checks;
         }
 
@@ -1453,6 +2034,7 @@ namespace HexGuide.Desktop
                 case "arm-reference-ineligible":
                 case "frame-invalid-current": case "frame-invalid-reference":
                 case "frame-title-mask-invalid":
+                case "frame-time-not-newer": case "pointer-frame-time-invalid":
                 case "frame-preclick-mae": case "frame-preclick-close": case "frame-preclick-mae-close":
                 case "frame-hold-timeout": case "frame-pending-time-backward": case "frame-pending-timeout":
                 case "pointer-not-game": case "pointer-column-invalid":

@@ -68,7 +68,7 @@ export function createOcrWorker({applicationDirectory, dataDirectory, checkOnly 
       || envelope.version !== 1 || !Number.isSafeInteger(envelope.id) || envelope.id < 1 || envelope.id !== job.id
       || !record(envelope.payload)) { retire(instance, 'scan-output-invalid'); return; }
     if (envelope.type === 'stage') {
-      const order = envelope.stage === 'color' ? 1 : envelope.stage === 'contrast' ? 2 : 0;
+      const order = envelope.stage === 'color' ? 1 : envelope.stage === 'contrast' ? 2 : envelope.stage === 'large' ? 3 : 0;
       if (!exactKeys(envelope, ['version','type','id','stage','payload']) || !order || order <= job.stage || job.accepted) {
         retire(instance, 'scan-output-invalid'); return;
       }

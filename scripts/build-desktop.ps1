@@ -69,6 +69,10 @@ $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $compiler)) { throw '.NET Framework 4.8 developer tools are required on the build computer.' }
 $references = @(
     'System.dll', 'System.Core.dll', 'System.Drawing.dll', 'System.Windows.Forms.dll', 'System.Web.Extensions.dll',
+    (Join-Path $env:WINDIR 'System32\WinMetadata\Windows.Foundation.winmd'),
+    (Join-Path $env:WINDIR 'System32\WinMetadata\Windows.Graphics.winmd'),
+    (Join-Path $env:WINDIR 'System32\WinMetadata\Windows.Storage.winmd'),
+    (Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8\Facades\System.Runtime.dll'),
     (Join-Path $sdk 'lib\net462\Microsoft.Web.WebView2.Core.dll'),
     (Join-Path $sdk 'lib\net462\Microsoft.Web.WebView2.WinForms.dll')
 )
@@ -83,6 +87,10 @@ $compilerArguments += Join-Path $projectRoot 'native\RemoteIconCache.cs'
 $compilerArguments += Join-Path $projectRoot 'native\SidebarShortcut.cs'
 $compilerArguments += Join-Path $projectRoot 'native\SidebarAutoHide.cs'
 $compilerArguments += Join-Path $projectRoot 'native\ScreenSelectionWatcher.cs'
+$compilerArguments += Join-Path $projectRoot 'native\SelectionCaptureRetry.cs'
+$compilerArguments += Join-Path $projectRoot 'native\WindowSelectionCapture.cs'
+$compilerArguments += Join-Path $projectRoot 'native\SelectionFrameSynchronizer.cs'
+$compilerArguments += Join-Path $projectRoot 'native\GameWindowCapture.cs'
 $compilerArguments += Join-Path $projectRoot 'native\EarlySelectionReplay.cs'
 $compilerArguments += Join-Path $projectRoot 'native\RecognitionTrace.cs'
 $compilerArguments += Join-Path $projectRoot 'native\OverlayVisibilityCompatibility.cs'

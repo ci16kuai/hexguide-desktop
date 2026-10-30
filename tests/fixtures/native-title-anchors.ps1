@@ -33,7 +33,8 @@ try {
     $full = New-TitleIdentityAnchor $bitmap $region $entry 'full-window'
     for ($i = 0; $i -lt 8; $i++) { $null = New-TitleIdentityAnchor $bitmap $region $entry 'card-titles-color' }
     $perPassLimit = $identityAnchors.anchors.Count
-    foreach ($pass in @('card-titles-color','card-titles-contrast')) {
+    # The extra scale fallback shares the original global descriptor budget.
+    foreach ($pass in @('card-titles-color','card-titles-contrast','card-titles-large')) {
         foreach ($column in @(0,1,2)) {
             $region.column = $column
             for ($i = 0; $i -lt 8; $i++) { $null = New-TitleIdentityAnchor $bitmap $region $entry $pass }

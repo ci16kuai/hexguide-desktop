@@ -34,6 +34,9 @@ namespace HexGuide.Desktop
         private string emittedIdentity = "", lastCode = "waiting-offers";
         private int attempts, captured, matched, blocked;
         private long lastAt;
+        private long windowFrameTimestamp, windowFallbackUntil, windowWaitingSince;
+        private bool windowCaptureActive;
+        private string windowCaptureIdentity;
         internal event Action<Dictionary<string, object>> EvidenceReady;
         internal event Action<string> StatusChanged;
         internal string StatusCode { get { return lastCode; } }
@@ -112,6 +115,7 @@ namespace HexGuide.Desktop
             var result = new Dictionary<string, object> {
                 { "provider", "panel-icon" }, { "profile", OwnedPanelMatcher.Profile },
                 { "status", lastCode }, { "attempts", attempts }, { "captured", captured },
+                { "captureMode", windowCaptureActive ? "game-window" : "desktop" },
                 { "matched", matched }, { "blocked", blocked }, { "lastAt", lastAt },
                 { "stableFrames", stability.Count }, { "templateCount", templates.Count },
                 { "liveVerified", false }, { "skillExclusion", context != null && context.ExcludedUrls.Length > 0 ? "provided" : "unavailable" }
@@ -228,10 +232,14 @@ namespace HexGuide.Desktop
                 excluded.Add(shape);
             }
             long stamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            Bitmap bitmap; bool titlesVisible; string failure; long capturedAt;
+            if (!Capture(expected, out bitmap, out titlesVisible, out capturedAt, out failure))
+            {
+                if (GameWindowCapture.IsWaiting(failure)) { SetStatus("waiting-panel"); return; }
+                lastAt = stamp; attempts = Increment(attempts); blocked = Increment(blocked);
+                captureStages.Record("capture-blocked", stamp, failure); stability.Reset(); SetStatus(failure); return;
+            }
             lastAt = stamp; attempts = Increment(attempts);
-            Bitmap bitmap; bool titlesVisible; string failure;
-            if (!Capture(expected, out bitmap, out titlesVisible, out failure))
-            { blocked = Increment(blocked); captureStages.Record("capture-blocked", stamp, failure); stability.Reset(); SetStatus(failure); return; }
             using (bitmap)
             {
                 captured = Increment(captured);
@@ -246,7 +254,7 @@ namespace HexGuide.Desktop
                 matched = Increment(matched);
                 captureStages.Record("slot-matched", stamp);
                 string geometry = expected.GeometryKey + ":" + layout.Key;
-                var frame = new OwnedPanelProofFrame(stamp, geometry, slots);
+                var frame = new OwnedPanelProofFrame(capturedAt, geometry, slots);
                 if (!stability.Observe(expected.Identity, frame)) { SetStatus("pending"); return; }
                 if (context != expected || disposed) return;
                 var proof = new Dictionary<string, object> {
@@ -267,7 +275,65 @@ namespace HexGuide.Desktop
 
         private static int Increment(int value) { return Math.Min(1000000, value + 1); }
 
-        private static bool Capture(OwnedPanelContext expected, out Bitmap bitmap, out bool titlesVisible, out string failure)
+        private bool Capture(OwnedPanelContext expected, out Bitmap bitmap, out bool titlesVisible, out long capturedAt, out string failure)
+        {
+            bitmap = null; titlesVisible = false; capturedAt = 0; failure = "capture-unavailable";
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (windowCaptureIdentity != expected.Identity)
+            { windowCaptureIdentity = expected.Identity; windowCaptureActive = false; windowWaitingSince = 0; }
+            if (!windowCaptureActive)
+            {
+                if (CaptureDesktop(expected, out bitmap, out titlesVisible, out failure))
+                { capturedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); return true; }
+                if (failure != "region-occluded" || now < windowFallbackUntil) return false;
+                windowCaptureActive = true; stability.Reset();
+                windowFrameTimestamp = GameWindowCapture.QpcTicks();
+            }
+            if (now >= windowFallbackUntil)
+            {
+                Rectangle roi = OwnedPanelMatcher.CaptureRegion(expected.Reference.ClientBounds.Size);
+                var regions = new List<Rectangle> { roi };
+                foreach (var card in expected.Reference.TitleAnchors)
+                    foreach (var anchor in card) regions.Add(anchor.Box);
+                GameWindowCaptureFrame captured;
+                if (GameWindowCapture.Shared.TryRead(expected.Reference.Window, expected.Reference.ClientBounds,
+                    regions.ToArray(), windowFrameTimestamp, out captured, out failure))
+                {
+                    using (captured)
+                    {
+                        windowWaitingSince = 0; windowFrameTimestamp = captured.FrameTimestamp;
+                        capturedAt = captured.CapturedAtUtcMs;
+                        int index = 1;
+                        foreach (var card in expected.Reference.TitleAnchors)
+                        {
+                            bool all = true;
+                            foreach (var anchor in card)
+                            {
+                                Bitmap title = captured.Regions[index++];
+                                CardTitleFeature feature = CardTitleIdentity.Extract(title, new Rectangle(Point.Empty, title.Size));
+                                if (!feature.Usable || !CardTitleIdentity.Matches(feature.Feature, anchor.Feature)) all = false;
+                            }
+                            if (all) titlesVisible = true;
+                        }
+                        bitmap = (Bitmap)captured.Regions[0].Clone();
+                        return true;
+                    }
+                }
+                if (GameWindowCapture.IsWaiting(failure))
+                {
+                    if (windowWaitingSince == 0) windowWaitingSince = now;
+                    if (now >= windowWaitingSince && now - windowWaitingSince < 2000) return false;
+                    failure = "window-capture-unavailable";
+                }
+                if (!GameWindowCapture.CanUseDesktopFallback(failure)) return false;
+                stability.Reset(); windowFallbackUntil = now + 5000; windowWaitingSince = 0; windowCaptureActive = false;
+            }
+            bool success = CaptureDesktop(expected, out bitmap, out titlesVisible, out failure);
+            if (success) capturedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            return success;
+        }
+
+        private static bool CaptureDesktop(OwnedPanelContext expected, out Bitmap bitmap, out bool titlesVisible, out string failure)
         {
             bitmap = null; titlesVisible = false; failure = "capture-unavailable";
             IntPtr previous = IntPtr.Zero;

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {sanitizeOcrMeasurements} from '../server/scan-diagnostics.mjs';
 import {readFile} from 'node:fs/promises';
 import {matchOcrProposals,createOcrScanner} from '../server/ocr.mjs';
 
@@ -225,6 +226,28 @@ test('native failures retain only fixed codes, stages and bounded numeric diagno
   assert.equal(arbitrary.code,'ocr-unavailable');
   assert.equal(arbitrary.stage,'native');
   assert.deepEqual(arbitrary.diagnostics,{});
+});
+
+test('matching preserves bounded DPI and language class through the scanner without locale text or screen data',async()=>{
+  const scan=createOcrScanner({applicationDirectory:'H:/fixture',platform:'win32',augments,
+    executeScript:async()=>({stdout:JSON.stringify({status:'recognized',code:'ok',stage:'result',
+      diagnostics:{width:2560,height:1440,dpi:144,language:'zh-Hans-CN',passesCompleted:7,passesFailed:0},
+      lines:[],text:'PRIVATE-OCR',frameId:'PRIVATE-FRAME'})})});
+  const result=await scan();
+  assert.equal(result.code,'ocr-no-text');
+  assert.equal(result.diagnostics.dpi,144);
+  assert.equal(result.diagnostics.language,'zh-Hans');
+  assert.equal(result.diagnostics.passesCompleted,7);
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE|zh-Hans-CN/);
+});
+
+test('OCR measurement sanitizing remains stable across repeated boundaries for every language class',()=>{
+  for (const [language,expected] of [['zh-Hans-CN','zh-Hans'],['zh-TW','zh-Hant'],['en-GB','en'],['de-DE','other']]) {
+    const once=sanitizeOcrMeasurements({language,dpi:144,text:'PRIVATE-OCR',path:'PRIVATE-PATH'});
+    assert.equal(once.language,expected);
+    assert.deepEqual(sanitizeOcrMeasurements(sanitizeOcrMeasurements(once)),once);
+    assert.doesNotMatch(JSON.stringify(once),/PRIVATE/);
+  }
 });
 
 test('offline scanner wrapper failures expose fixed causes without exception or output contents',async()=>{

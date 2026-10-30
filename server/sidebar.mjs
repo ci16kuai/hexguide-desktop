@@ -5,7 +5,7 @@ import {buildLivePlan} from '../dist/adaptive.js';
 import {selectBuildEvidence} from '../dist/build-evidence.js';
 import {rankAugmentCandidates} from '../dist/recommendation-policy.js';
 import {SelectionObserver, SelectionValidationError, SelectionConflictError, createOfferToken, sanitizeSelectionCapture} from './selection.mjs';
-import {OCR_SCAN_CODES, sanitizeScanCode} from './scan-diagnostics.mjs';
+import {OCR_SCAN_CODES, sanitizeScanCode, sanitizeOcrMeasurements} from './scan-diagnostics.mjs';
 import {OcrScanSchedule} from './ocr-schedule.mjs';
 import {OcrScheduleDiagnostics} from './ocr-schedule-diagnostics.mjs';
 import {ScreenLifeSource, ScreenLifeValidationError, ScreenLifeConflictError} from './screen-life.mjs';
@@ -47,15 +47,7 @@ const OCR_CODES = new Set([...OCR_SCAN_CODES, 'scan-loop-failed']);
 function publicOcrDetails(raw) {
   const details = {};
   if (OCR_CODES.has(raw?.code)) details.code = raw.code;
-  const diagnostics = {};
-  for (const key of ['width', 'height', 'lineCount', 'passCount', 'titleRegionCount', 'exactTitleCount', 'layoutCount', 'passesCompleted', 'passesFailed']) {
-    if (Number.isSafeInteger(raw?.diagnostics?.[key]) && raw.diagnostics[key] >= 0 && raw.diagnostics[key] <= 100_000) diagnostics[key] = raw.diagnostics[key];
-  }
-  for (const key of ['elapsedMs', 'initializationMs', 'captureMs', 'recognitionMs', 'totalMs']) {
-    if (Number.isFinite(raw?.diagnostics?.[key]) && raw.diagnostics[key] >= 0 && raw.diagnostics[key] <= 60_000) diagnostics[key] = raw.diagnostics[key];
-  }
-  if (typeof raw?.diagnostics?.runtimeReused === 'boolean') diagnostics.runtimeReused = raw.diagnostics.runtimeReused;
-  if (typeof raw?.diagnostics?.budgetReached === 'boolean') diagnostics.budgetReached = raw.diagnostics.budgetReached;
+  const diagnostics = sanitizeOcrMeasurements(raw?.diagnostics);
   if (Object.keys(diagnostics).length) details.diagnostics = diagnostics;
   return details;
 }
@@ -364,7 +356,7 @@ export class BackgroundSidebar {
     const eligible = this.selectionEligible(live);
     const selection = this.selectionObserver.get(this.selectionContext(), eligible);
     const selectionResult = this.selectionObserver.getResultLease(this.selectionContext(), eligible);
-    return {version:'1.17.14', recognitionAt:this.now(), updatedAt:live.observedAt || new Date(this.now()).toISOString(), connection:live.connection,
+    return {version:'1.17.16', recognitionAt:this.now(), updatedAt:live.observedAt || new Date(this.now()).toISOString(), connection:live.connection,
       phase:live.phase, stage:live.stage || 'waiting', gameId:this.session.gameId,
       gameEpoch:this.gameEpoch, sessionRevision:this.session.revision,
       mode:live.mode || {queueId:null,isMayhem:false,known:false},
@@ -485,7 +477,9 @@ export class BackgroundSidebar {
         || capture.capturedAt <= this.candidateInvalidatedAt || capture.capturedAt > this.now() + 1000
         || this.now() - capture.capturedAt > this.selectionObserver.maxAge) { metadataStatus = 'stale'; scanCode = 'scan-capture-stale'; }
     }
-    this.selectionAttempt = {metadataStatus, scanCode, capturedAt:capture?.capturedAt ?? null, completedAt:this.now()};
+    this.selectionAttempt = {metadataStatus, scanCode, capturedAt:capture?.capturedAt ?? null, completedAt:this.now(),
+      status:!contextCurrent ? 'waiting' : complete ? 'recognized' : raw?.status === 'waiting' ? 'waiting' : 'unavailable',
+      diagnostics:publicOcrDetails(raw).diagnostics || {}};
   }
 
   selectionDiagnostics(selection) {
@@ -872,7 +866,9 @@ export class BackgroundSidebar {
   publishScanDiagnostics(live) {
     try {
       return this.scanDiagnostics.publish({...this.scanScheduleState(live), scanCount:this.scanCount,
-        failureCount:this.scanFailureCount, lastDurationMs:this.lastScanDuration});
+        failureCount:this.scanFailureCount, lastDurationMs:this.lastScanDuration,
+        lastScan:{completedAt:this.selectionAttempt.completedAt, status:this.selectionAttempt.status,
+          code:this.selectionAttempt.scanCode, diagnostics:this.selectionAttempt.diagnostics}});
     } catch { return Promise.resolve(); }
   }
 

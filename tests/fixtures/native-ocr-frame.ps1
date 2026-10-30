@@ -1,4 +1,4 @@
-param([string]$Source, [switch]$StageWorker, [switch]$BlankFrame,
+param([string]$Source, [switch]$StageWorker, [switch]$BlankFrame, [switch]$SmallOverflowTitles,
     [int]$Width = 2560, [int]$Height = 1440, [switch]$WrappedTitle, [int]$MaximumDimension = 0)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -62,7 +62,8 @@ $scanClock = [Diagnostics.Stopwatch]::StartNew()
 $scanDeadlineMs = 25000
 $bitmap = New-Object System.Drawing.Bitmap($Width, $Height)
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-$font = New-Object System.Drawing.Font('Microsoft YaHei UI', ([single](32 * $Height / 1440.0)), [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+$fontPixels = if ($SmallOverflowTitles) { 20 } else { 32 }
+$font = New-Object System.Drawing.Font('Microsoft YaHei UI', ([single]($fontPixels * $Height / 1440.0)), [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
 $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(238, 224, 181))
 try {
     $graphics.Clear([System.Drawing.Color]::FromArgb(22, 33, 44))
@@ -70,6 +71,11 @@ try {
     # The same three headings and approximate coordinates observed in the real
     # match. This generated image is deliberately NOT claimed as a game capture.
     $names = @(([string][char]0x5347 + [char]0x7ea7 + [char]0xff1a + [char]0x8000 + [char]0x5149), ([string][char]0x8d2a + [char]0x6b32 + [char]0x675f + [char]0x7f1a), ([string][char]0x6025 + [char]0x6025 + [char]0x5c0f + [char]0x5b50))
+    if ($SmallOverflowTitles) {
+        # Generated 20px typography exposes a local OCR failure for a two-glyph
+        # heading. This is not a saved game frame or proof of its live font.
+        $names = @(([string][char]0x738b + [char]0x51a0 + [char]0x4e4b + [char]0x91cd), ([string][char]0x6ea2 + [char]0x6d41), ([string][char]0x94a2 + [char]0x5316 + [char]0x4f60 + [char]0x5fc3))
+    }
     $viewportWidth = [Math]::Min($Width, $Height * 16.0 / 9.0)
     $viewportLeft = ($Width - $viewportWidth) / 2.0
     $xs = @(721, 1228, 1715) | ForEach-Object {$viewportLeft + $_ * $viewportWidth / 2560.0}
