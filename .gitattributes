@@ -1,0 +1,2 @@
+# Announcement hashes cover exact published bytes, including line endings.
+dist/announcements/*.json -text
