@@ -146,8 +146,8 @@
         "145b22e51e28003f698bf76fd64898bc": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/BriarE.png",
         "7b455967334246dc84c4aea411f0c15b": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/BriarE.png",
         "0be441d245ce6beff32a4b78bdfbc80b": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/EliseHumanE.png",
-        "e8b6d6cc74bb3c569214dc134dc3388b": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/EliseHumanW.png",
-        "5f5448a4dd15fa2333225aab48284bc9": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/EliseHumanW.png",
+        "e8b6d6cc74bb3c569214dc134dc3388b": "https://raw.communitydragon.org/16.21/game/assets/characters/elise/hud/icons2d/elisespiderw.png",
+        "5f5448a4dd15fa2333225aab48284bc9": "https://raw.communitydragon.org/16.21/game/assets/characters/elise/hud/icons2d/elisespiderw.png",
         "4548d9a9af49e37bb686fcdf94c0819c": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/EzrealR.png",
         "c2805c3bb581552fe914aba08277bc49": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/spell/EzrealR.png",
         "2c8fdf02e79a9511e02bc1c941ef9ec3": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/passive/Fiora_P.png",
@@ -277,7 +277,7 @@
         "Zoe": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Zoe.png",
         "Kled": "https://ddragon.leagueoflegends.com/cdn/16.21.1/img/champion/Kled.png"
       },
-      "updatedAt": "2026-10-30T17:38:44.149Z"
+      "updatedAt": "2026-10-30T17:44:34.228Z"
     },
     {
       "id": "b381a5fcc116ea97048fa99b",
