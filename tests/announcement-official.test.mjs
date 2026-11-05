@@ -4,7 +4,7 @@ import {readFile,writeFile,mkdtemp,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {parseOfficialChanges,officialCatalog} from '../tools/version-maintenance/official-sources.mjs';
-import {runOfficialMaintenance,validateOfficialAudit} from '../tools/version-maintenance/official-maintenance.mjs';
+import * as officialMaintenance from '../tools/version-maintenance/official-maintenance.mjs';
 import {digest,fetchText} from '../tools/version-maintenance/sources.mjs';
 import {validateArticle,validIconUrl} from '../dist/announcements-contract.js';
 import {validateFeed} from '../tools/version-maintenance/validate-feed.mjs';
@@ -16,7 +16,8 @@ const version='16.21.1',url='https://lol.qq.com/gicp/news/410/37099805.html';
 const parse=body=>parseOfficialChanges(body,{url,version,catalog});
 const hotfixHtml=await readFile(new URL('./fixtures/official-hotfix-2026-10-23.html',import.meta.url),'utf8');
 const hotfixUrl='https://lol.qq.com/news/detail.shtml?docid=14514250113535829185';
-const accept=changes=>({acceptedKeys:changes.map(row=>row.key),rejectedKeys:[],summary:'官网范围与条目覆盖完整。'});
+const {runOfficialMaintenance,validateOfficialFormatting,officialFormattingSchema}=officialMaintenance;
+const formatted=changes=>({processedKeys:changes.map(row=>row.key),summary:'已按官网正文整理完整条目。'});
 test('the official GBK HTML is decoded before section matching, while JSON remains UTF-8',async()=>{
   const body=Buffer.concat([Buffer.from('<meta charset="gbk"><h3>'),Buffer.from([0xd3,0xa2,0xd0,0xdb]),Buffer.from('</h3>')]);
   assert.ok((await fetchText(url,{fetchImpl:async()=>new Response(body,{headers:{'content-type':'text/html'}})})).includes('英雄'));
@@ -62,41 +63,43 @@ test('hotfixes preserve hero passive/Q facts and ARAM W fixes while excluding th
   assert.equal(result.changes.filter(row=>row.text.includes('双重触发')).length,1);assert.equal(result.changes.find(row=>row.text.includes('双重触发')).entityId,'Upgrade_Stormsurge');
   assert.ok(!result.changes.some(row=>row.entityId==='Mordekaiser'));
 });
-test('AI audit cannot drop an entry, duplicate keys, reject valid scope or invent keys',()=>{
-  const rows=parse(html).changes.slice(0,3);assert.equal(validateOfficialAudit(rows,accept(rows)).acceptedKeys.length,3);
-  for(const bad of [{acceptedKeys:rows.slice(1).map(row=>row.key),rejectedKeys:[],summary:''},{acceptedKeys:[rows[0].key,rows[0].key,rows[2].key],rejectedKeys:[],summary:''},{...accept(rows),rejectedKeys:[rows[0].key]},{...accept(rows),acceptedKeys:['invented',rows[1].key,rows[2].key]}])assert.throws(()=>validateOfficialAudit(rows,bad),/coverage/);
+test('formatting coverage cannot drop, duplicate or invent keys and cannot reuse the truth-audit protocol',()=>{
+  const rows=parse(html).changes.slice(0,3);assert.equal(validateOfficialFormatting(rows,formatted(rows)).processedKeys.length,3);
+  const schema=officialFormattingSchema(rows);assert.deepEqual(Object.keys(schema.properties).sort(),['processedKeys','summary']);assert.equal(schema.additionalProperties,false);
+  for(const bad of [{processedKeys:rows.slice(1).map(row=>row.key),summary:''},{processedKeys:[rows[0].key,rows[0].key,rows[2].key],summary:''},{...formatted(rows),processedKeys:['invented',rows[1].key,rows[2].key]},{acceptedKeys:rows.map(row=>row.key),rejectedKeys:[],summary:'旧审核结果'}])assert.throws(()=>validateOfficialFormatting(rows,bad),/coverage/);
 });
 async function fixture(){
   const root=await mkdtemp(path.join(os.tmpdir(),'hexguide-official-announcement-')),feedDirectory=path.join(root,'feed'),stateDirectory=path.join(root,'state');await mkdir(feedDirectory);
   const previous={schemaVersion:1,id:'a'.repeat(24),title:'旧资源差异记录',publishedAt:'2026-10-30T13:00:00.000Z',fromVersion:'16.20.1',toVersion:version,summary:'一项数值',scopeNote:'旧版静态数据',itemCount:1,augmentCount:0,changeCount:1,changes:[{key:'item:3008:gold.total',kind:'item',entityId:'3008',name:'暴食胫甲',field:'gold.total',label:'总费用',before:1000,after:1100,unit:'金币',scale:1}],sources:[{name:'Riot',url:'https://ddragon.leagueoflegends.com/data.json',sha256:'c'.repeat(64)}]};
   const body=JSON.stringify(previous),row={...Object.fromEntries(['id','title','publishedAt','fromVersion','toVersion','itemCount','augmentCount','changeCount'].map(key=>[key,previous[key]])),sha256:digest(body)};
   const indexBody=JSON.stringify({schemaVersion:1,revision:digest([row]),publishedAt:previous.publishedAt,entries:[row]});await writeFile(path.join(feedDirectory,'index.json'),indexBody);await writeFile(path.join(feedDirectory,'index-v2.json'),indexBody);await writeFile(path.join(feedDirectory,`${previous.id}.json`),body);
-  let calls=0;const options={stateDirectory,feedDirectory,versionsProvider:async()=>[version],documentProvider:async()=>({url,html}),iconCatalogProvider:async()=>catalog,auditor:async rows=>{calls++;return accept(rows);}};
-  return {root,options,previous,body,indexBody,calls:()=>calls};
+  let calls=0;const sources=[];const options={stateDirectory,feedDirectory,versionsProvider:async()=>[version],documentProvider:async()=>({url,html}),iconCatalogProvider:async()=>catalog,formatter:async(rows,source)=>{calls++;sources.push(structuredClone(source));return formatted(rows);}};
+  return {root,options,previous,body,indexBody,sources,calls:()=>calls};
 }
 test('cloud publication backfills a complete official article once and preserves old immutable bytes and read history',async()=>{
   const f=await fixture(),receipt=await runOfficialMaintenance(f.options);assert.equal(receipt.changeCount,198);assert.equal(f.calls(),1);
   assert.equal(await readFile(path.join(f.options.feedDirectory,'index.json'),'utf8'),f.indexBody);assert.equal(await readFile(path.join(f.options.feedDirectory,`${f.previous.id}.json`),'utf8'),f.body);
   const full=await validateFeed(f.options.feedDirectory);assert.equal(full.entries.length,2);const article=validateArticle(JSON.parse(await readFile(path.join(f.options.feedDirectory,receipt.announcementId+'.json'))));
   assert.equal(article.schemaVersion,2);assert.ok(article.supersedes.includes(f.previous.id));assert.ok(article.changes.some(row=>row.name==='狂妄'));
+  assert.deepEqual(article.changes,parse(html).changes);assert.deepEqual(f.sources,[{url,title:parse(html).title,date:'2026-10-21',sha256:digest(html)}]);
   const dataDirectory=path.join(f.root,'data');await mkdir(path.join(dataDirectory,'announcements-v1'),{recursive:true});await writeFile(path.join(dataDirectory,'announcements-v1/read.json'),JSON.stringify([f.previous.id]));
   const store=await new AnnouncementStore({dataDirectory,bundledDirectory:f.options.feedDirectory,fetchImpl:async()=>{throw Error('offline');}}).load();
   assert.equal(store.getList().unreadCount,1);assert.equal(store.getList().entries.find(row=>row.id===f.previous.id).supersededBy,receipt.announcementId);
   assert.ok((await store.getArticle(receipt.announcementId)).changes.some(row=>row.name==='破垒者'));await store.markRead(receipt.announcementId);await store.close();
   assert.equal((await runOfficialMaintenance(f.options)).changeCount,0);assert.equal(f.calls(),1);
 });
-test('audit or source parsing failures do not advance the checkpoint; invalid modes and missing skill images are rejected',async()=>{
-  const f=await fixture();await assert.rejects(runOfficialMaintenance({...f.options,auditor:async()=>({acceptedKeys:[],rejectedKeys:[],summary:''})}),/coverage/);
+test('formatting or source parsing failures do not advance the checkpoint; invalid modes and missing skill images are rejected',async()=>{
+  const f=await fixture();await assert.rejects(runOfficialMaintenance({...f.options,formatter:async()=>({processedKeys:[],summary:''})}),/coverage/);
   await assert.rejects(readFile(path.join(f.options.stateDirectory,'official-state.json')),{code:'ENOENT'});
   await assert.rejects(runOfficialMaintenance({...f.options,documentProvider:async()=>({url,html:'<div id="article">broken</div>'})}));
   await runOfficialMaintenance(f.options);const full=await validateFeed(f.options.feedDirectory),article=JSON.parse(await readFile(path.join(f.options.feedDirectory,full.entries[0].id+'.json')));
   const bad=structuredClone(article);bad.changes[0].mode='classic';assert.throws(()=>validateArticle(bad));
   const skill=article.changes.findIndex(row=>row.ability);const missing=structuredClone(article);delete missing.changes[skill].icon;assert.throws(()=>validateArticle(missing));
 });
-test('independent hotfixes stay alongside the main patch and API verification uses the official audit path',async()=>{
+test('independent hotfixes stay alongside the main patch and API verification formats the existing official source',async()=>{
   const f=await fixture(),result=await runOfficialMaintenance({...f.options,documentProvider:async()=>[{url,html,kind:'patch'},{url:hotfixUrl,html:hotfixHtml,kind:'hotfix'}]});assert.equal(result.announcementIds.length,2);
   const index=await validateFeed(f.options.feedDirectory),main=index.entries.find(row=>row.sourceUrl===url),hotfix=index.entries.find(row=>row.sourceUrl===hotfixUrl);assert.ok(!hotfix.supersedes.includes(main.id));
-  let audited=0;await verifyOpenAi({feedDirectory:f.options.feedDirectory,translator:async()=>{throw Error('Wrong verification protocol');},auditor:async rows=>{audited++;assert.ok(rows[0].text);assert.equal(rows[0].kind,'champion');return {model:'test',usage:{total_tokens:10}};}});assert.equal(audited,1);
+  let calls=0;const verified=await verifyOpenAi({feedDirectory:f.options.feedDirectory,translator:async()=>{throw Error('Wrong verification protocol');},formatter:async(rows,source)=>{calls++;assert.ok(rows[0].text);assert.equal(rows[0].kind,'champion');const indexEntry=index.entries.find(row=>row.sourceUrl===source.url),article=JSON.parse(await readFile(path.join(f.options.feedDirectory,indexEntry.id+'.json'),'utf8'));assert.deepEqual(source,article.official);return {model:'test',usage:{total_tokens:10}};}});assert.equal(calls,1);assert.equal(verified.task,'official-format');
 });
 test('a real official rollback A to B to A creates a new effective revision, while unchanged checks stay idempotent',async()=>{
   const f=await fixture(),a=await runOfficialMaintenance(f.options),changed=html.replace('15(近战) / 10(远程)','16(近战) / 10(远程)');assert.notEqual(changed,html);

@@ -11,16 +11,16 @@ export async function fetchOfficialCatalog(version,options={}){
   const [champions,items,augments]=await Promise.all([root+'championFull.json',root+'item.json',`https://raw.communitydragon.org/${clientVersion(version)}/plugins/rcp-be-lol-game-data/global/zh_cn/v1/cherry-augments.json`].map(async url=>JSON.parse(await fetchText(url,options))));
   return officialCatalog({version,champions,items,augments});
 }
-export function officialAuditSchema(changes){return {type:'object',additionalProperties:false,properties:{acceptedKeys:{type:'array',items:{type:'string',enum:changes.map(row=>row.key)}},rejectedKeys:{type:'array',items:{type:'string',enum:changes.map(row=>row.key)}},summary:{type:'string'}},required:['acceptedKeys','rejectedKeys','summary']};}
-export function validateOfficialAudit(changes,output){
+export function officialFormattingSchema(changes){return {type:'object',additionalProperties:false,properties:{processedKeys:{type:'array',minItems:changes.length,maxItems:changes.length,items:{type:'string',enum:changes.map(row=>row.key)}},summary:{type:'string'}},required:['processedKeys','summary']};}
+export function validateOfficialFormatting(changes,output){
   const result=typeof output==='string'?JSON.parse(output):output,wanted=new Set(changes.map(row=>row.key));
-  if(!Array.isArray(result?.acceptedKeys)||!Array.isArray(result.rejectedKeys)||result.rejectedKeys.length||result.acceptedKeys.length!==wanted.size||new Set(result.acceptedKeys).size!==wanted.size||result.acceptedKeys.some(key=>!wanted.has(key))||typeof result.summary!=='string'||result.summary.length>700)throw Error('Official announcement audit coverage mismatch or excluded-mode content.');
+  if(wanted.size!==changes.length||!Array.isArray(result?.processedKeys)||result.processedKeys.length!==wanted.size||new Set(result.processedKeys).size!==wanted.size||result.processedKeys.some(key=>!wanted.has(key))||typeof result.summary!=='string'||result.summary.length>700||Object.keys(result).some(key=>!['processedKeys','summary'].includes(key)))throw Error('Official announcement formatting coverage mismatch.');
   return result;
 }
 const factualRows=rows=>rows.map(({icon,championIcon,...row})=>row);
 export async function runOfficialMaintenance({stateDirectory,feedDirectory,now=new Date().toISOString(),versionsProvider=listVersions,
-  documentProvider=fetchOfficialDocuments,iconCatalogProvider=fetchOfficialCatalog,auditor}={}){
-  if(typeof auditor!=='function')throw Error('An official announcement auditor is required.');
+  documentProvider=fetchOfficialDocuments,iconCatalogProvider=fetchOfficialCatalog,formatter}={}){
+  if(typeof formatter!=='function')throw Error('An official announcement formatter is required.');
   await mkdir(stateDirectory,{recursive:true});await mkdir(feedDirectory,{recursive:true});
   const lockPath=path.join(stateDirectory,'maintenance.lock');let lock;
   try{lock=await open(lockPath,'wx');}catch(error){if(error.code!=='EEXIST')throw error;if(Date.now()-(await stat(lockPath)).mtimeMs<3600000)throw Error('Another maintenance run is active.');await unlink(lockPath);lock=await open(lockPath,'wx');}
@@ -45,7 +45,9 @@ export async function runOfficialMaintenance({stateDirectory,feedDirectory,now=n
       if(!index.entries.some(row=>row.id===id)){
         const draftPath=path.join(stateDirectory,`draft-official-${id}.json`);let article=await optionalJson(draftPath);
         if(!article){
-          validateOfficialAudit(parsed.changes,await auditor(parsed.changes));
+          const source=Object.fromEntries(['url','title','date','sha256'].map(key=>[key,parsed[key]]));
+          const formatted=validateOfficialFormatting(parsed.changes,await formatter(parsed.changes,source));
+          receipt.formatting??=[];receipt.formatting.push({sourceUrl:parsed.url,processedCount:formatted.processedKeys.length,summary:formatted.summary});
           const counts={itemCount:new Set(parsed.changes.filter(row=>row.kind==='item').map(row=>row.entityId)).size,augmentCount:new Set(parsed.changes.filter(row=>row.kind==='augment').map(row=>row.entityId)).size,championCount:new Set(parsed.changes.filter(row=>row.kind==='champion').map(row=>row.entityId)).size};
           const supersedes=index.entries.filter(row=>(row.format!==2&&clientVersion(row.toVersion)===clientVersion(version))||row.sourceUrl===parsed.url).map(row=>row.id).slice(0,100);
           article=validateArticle({schemaVersion:2,id,title:`${parsed.kind==='hotfix'?parsed.title:`${Number(version.split('.')[0])+10}.${Number(version.split('.')[1])} 官网更新公告`}（不含经典模式）`,publishedAt:now,fromVersion:prior?.version??version,toVersion:version,

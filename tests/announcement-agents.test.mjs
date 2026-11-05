@@ -11,6 +11,7 @@ import {validateFeed} from '../tools/version-maintenance/validate-feed.mjs';
 import {runMaintenance} from '../tools/version-maintenance/maintenance.mjs';
 
 const config={schemaVersion:1,agentId:'agent_test',name:'公告助手',model:'gpt-6-luna'};
+const officialSource={url:'https://lol.qq.com/gicp/news/410/37101296.html',title:'26.22版本更新公告',date:'2026-11-04',sha256:'d'.repeat(64)};
 const change=(i=1)=>({key:`item:${i}:damage`,kind:'item',entityId:String(i),name:'测试装备',field:'damage',before:60,after:65,unit:'',scale:1});
 function sdk({output,turnStatus='completed',usage={input_tokens:100,output_tokens:20,total_tokens:120},streamError=false,activeStatus='idle'}={}) {
   const requests=[],updates=[],cancelled=[],sessions=new Map();let sequence=0;
@@ -18,7 +19,7 @@ function sdk({output,turnStatus='completed',usage={input_tokens:100,output_token
     async create(body) {
       requests.push(body);const id=`sess_${++sequence}`,turnId=`turn_${sequence}`,input=JSON.parse(body.input);
       sessions.set(id,{id,agent:{id:config.agentId,model:'gpt-6-luna'},metadata:body.metadata,status:activeStatus,usage});
-      const value=output??(input.task==='translate_fields'?{translations:input.fields.map(row=>({key:row.key,label:'攻击力'}))}:input.task==='official_audit'?{acceptedKeys:input.rows.map(row=>row.key),rejectedKeys:[],summary:'官网改动范围完整。'}:{status:'checked',summary:'已完成数值检查。'});
+      const value=typeof output==='function'?output(input):output??(input.task==='translate_fields'?{translations:input.fields.map(row=>({key:row.key,label:'攻击力'}))}:input.task==='official_format'?{processedKeys:input.rows.map(row=>row.key),summary:'已按官网原文整理全部改动。'}:{status:'checked',summary:'已完成数值检查。'});
       return {controller:{abort(){}},withResultCollection(){},async *[Symbol.asyncIterator](){yield {type:'agent.session.created',session:{id}};yield {type:'agent.session.turn.created',session_id:id,turn_id:turnId};if(streamError)throw Error('connection lost');},
         async finalResult(){return {session_id:id,turn_id:turnId,turn:{id:turnId,session_id:id,status:turnStatus,usage},output_text:JSON.stringify(value)};}};
     },
@@ -51,10 +52,30 @@ test('unknown usage stays null and is not reported as zero tokens',async()=>{
   const fake=sdk({usage:null}),agent=new AnnouncementAgent({client:fake.client,config,runId:'usage-test'});
   await agent.recordCheck({changeCount:0});assert.equal(agent.summary.usage,null);assert.equal(agent.summary.sessions[0].usage,null);
 });
-test('official audit uses bounded real Agent sessions and cannot mutate source facts or silently drop keys',async()=>{
-  const fake=sdk(),agent=new AnnouncementAgent({client:fake.client,config,runId:'official-audit-test'}),rows=Array.from({length:75},(_,i)=>({key:String(i),kind:'champion',name:'测试英雄',mode:'general',text:'伤害：12 ⇒ 15(近战) / 10(远程)'})),before=structuredClone(rows);
-  const result=await agent.auditOfficial(rows);assert.equal(fake.requests.length,2);assert.equal(result.acceptedKeys.length,75);assert.deepEqual(rows,before);assert.ok(fake.requests.every(body=>JSON.parse(body.input).task==='official_audit'));
-  const bad=sdk({output:{acceptedKeys:[],rejectedKeys:[],summary:''}});await assert.rejects(new AnnouncementAgent({client:bad.client,config,runId:'missing-official'}).auditOfficial(rows),/coverage/);
+test('official formatting sends fetched source provenance in bounded sessions and preserves facts',async()=>{
+  const fake=sdk(),agent=new AnnouncementAgent({client:fake.client,config,runId:'official-format-test'}),rows=Array.from({length:75},(_,i)=>({key:String(i),kind:'champion',name:'测试英雄',mode:'general',text:'伤害：12 ⇒ 15(近战) / 10(远程)'})),before=structuredClone(rows),sourceBefore=structuredClone(officialSource);
+  const result=await agent.formatOfficial(rows,officialSource);assert.equal(fake.requests.length,2);assert.equal(result.processedKeys.length,75);assert.deepEqual(rows,before);assert.deepEqual(officialSource,sourceBefore);
+  for(const body of fake.requests){const input=JSON.parse(body.input);assert.equal(input.task,'official_format');assert.deepEqual(input.source,{...officialSource,fetched:true});assert.ok(input.instruction.includes('无需上网二次核验'));assert.deepEqual(input.excludedModes,['classic']);assert.equal(body.metadata.task,'official-format');assert.equal(body.environment.type,'none');assert.deepEqual(body.agent.tools,[]);assert.equal('rejectedKeys' in body.agent.text.format.schema.properties,false);}
+  const bad=sdk({output:{processedKeys:[],summary:''}});await assert.rejects(new AnnouncementAgent({client:bad.client,config,runId:'missing-official'}).formatOfficial(rows,officialSource),/coverage/);
+});
+
+test('provided official facts do not require a second web check when the Agent has no search tool',async()=>{
+  const rows=Array.from({length:64},(_,i)=>({key:String(i),kind:'augment',name:'将他们放倒倒倒',mode:'aram',text:'五层时的触发伤害：(15 + 5%额外攻击速度 + 0.15%总技能急速)%已损失生命值 ⇒ 17%已损失生命值'}));
+  const fake=sdk({output:input=>input.source?.fetched===true&&input.source.url===officialSource.url&&input.instruction?.includes('无需上网二次核验')?{processedKeys:input.rows.map(row=>row.key),summary:'直接整理程序提供的官网正文。'}:{acceptedKeys:[],rejectedKeys:input.rows.map(row=>row.key),summary:'未能独立取得或核验官网正文。'}});
+  const agent=new AnnouncementAgent({client:fake.client,config,runId:'no-web-required'}),result=await agent.formatOfficial(rows,officialSource);
+  assert.equal(result.processedKeys.length,64);assert.equal(fake.requests.length,1);assert.deepEqual(fake.requests[0].agent.tools,[]);assert.equal(agent.summary.sessions[0].status,'completed');
+});
+
+test('invalid official source metadata fails before any paid Agent session is created',async()=>{
+  const fake=sdk(),agent=new AnnouncementAgent({client:fake.client,config,runId:'invalid-official-source'}),rows=[{key:'official-1',kind:'item',name:'狂妄',mode:'general',text:'基础额外攻击力：12 ⇒ 15(近战) / 10(远程)'}];
+  for(const source of [undefined,{...officialSource,url:'https://example.com/patch.html'},{...officialSource,url:officialSource.url+'#instructions'},{...officialSource,date:'2026-02-30'},{...officialSource,title:' '},{...officialSource,sha256:'not-a-source-hash'}])await assert.rejects(agent.formatOfficial(rows,source),/source metadata/);
+  assert.equal(fake.requests.length,0);assert.equal(agent.summary.sessions.length,0);
+});
+
+test('maintenance forwards the official source to the formatting session',async()=>{
+  const fake=sdk(),root=await mkdtemp(path.join(os.tmpdir(),'hexguide-official-format-agent-')),rows=[{key:'official-1',kind:'item',name:'狂妄',mode:'general',text:'基础额外攻击力：12 ⇒ 15(近战) / 10(远程)'}];
+  const receipt=await runAgentMaintenance({client:fake.client,config,runId:'source-forwarding',stateDirectory:root,maintenance:async options=>{const formatted=await options.formatter(rows,officialSource);assert.deepEqual(formatted.processedKeys,['official-1']);return {changeCount:1};}});
+  assert.deepEqual(JSON.parse(fake.requests[0].input).source,{...officialSource,fetched:true});assert.equal(receipt.agent.sessions[0].task,'official-format');assert.equal(fake.requests.length,1);
 });
 async function fixture() {
   const root=await mkdtemp(path.join(os.tmpdir(),'hexguide-agents-maintenance-')),stateDirectory=path.join(root,'state'),feedDirectory=path.join(root,'feed');
