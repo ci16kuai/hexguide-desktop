@@ -1,44 +1,54 @@
 {
-  "checkedAt": "2026-11-03T19:43:44.883Z",
-  "fromVersion": "16.21.1",
-  "toVersion": "16.21.1",
-  "changeCount": 0,
+  "checkedAt": "2026-11-05T03:29:21.114Z",
+  "fromVersion": "16.22.1",
+  "toVersion": "16.22.1",
+  "changeCount": 89,
   "warnings": [],
   "sourceType": "official-cn",
   "sources": [
     {
-      "url": "https://lol.qq.com/gicp/news/410/37099805.html",
-      "date": "2026-10-21",
-      "articleId": "98ca58513af1cd4269cbb5c8",
-      "changeCount": 198
-    },
-    {
-      "url": "https://lol.qq.com/news/detail.shtml?docid=14514250113535829185",
-      "date": "2026-10-23",
-      "articleId": "b381a5fcc116ea97048fa99b",
-      "changeCount": 7
+      "url": "https://lol.qq.com/gicp/news/410/37101296.html",
+      "date": "2026-11-04",
+      "articleId": "fc3f8333232e77d11e417660",
+      "changeCount": 89
     }
   ],
-  "excludedClassicBlocks": 86,
+  "excludedClassicBlocks": 108,
   "sectionCounts": {
-    "英雄": 61,
-    "装备": 8,
-    "海克斯大乱斗": 48,
-    "斗魂竞技场": 75,
-    "BUG修复及品质级改动": 9,
-    "海克斯大乱斗 BUG修复": 4
+    "英雄": 44,
+    "装备": 3,
+    "海克斯大乱斗": 32,
+    "BUG修复及品质级改动": 10
   },
-  "announcementIds": [],
-  "reused": true,
+  "announcementIds": [
+    "fc3f8333232e77d11e417660"
+  ],
+  "formatting": [
+    {
+      "sourceUrl": "https://lol.qq.com/gicp/news/410/37101296.html",
+      "processedCount": 89,
+      "summary": "已逐条整理提供的全部 63 条通用模式英雄、装备及海克斯大乱斗强化符文公告内容。 已整理全部25条公告记录，涵盖海克斯大乱斗条目与通用英雄BUG修复。"
+    }
+  ],
+  "announcementId": "fc3f8333232e77d11e417660",
+  "reused": false,
   "agent": {
     "agentId": "agent_29a1151c93594fbc81dff44d9ed748c67eadc3cc7e1f406ab4",
-    "runId": "gha-41705921049-1",
+    "runId": "gha-41961881055-1",
     "sessions": [
       {
-        "task": "check-receipt",
+        "task": "official-format",
         "status": "completed",
-        "sessionId": "sess_005baf37775b0c1b006aea39744e988197bf126b27b2b67833",
-        "turnId": "turn_005baf37775b0c1b006aea3977a8fc8197a00fa82e63028add",
+        "sessionId": "sess_06e644e09ba73f52006aebf814e23c8194888a4df253851610",
+        "turnId": "turn_06e644e09ba73f52006aebf817e0788194bff31ab61114bb7b",
+        "usage": null,
+        "model": "gpt-6-luna"
+      },
+      {
+        "task": "official-format",
+        "status": "completed",
+        "sessionId": "sess_0043184dafe1e696006aebf824fea4819696fe0a55a0f20726",
+        "turnId": "turn_0043184dafe1e696006aebf82842788196a2740b88bb7f0f84",
         "usage": null,
         "model": "gpt-6-luna"
       }
