@@ -1,8 +1,8 @@
 {
-  "checkedAt": "2026-11-05T03:29:21.114Z",
+  "checkedAt": "2026-11-05T03:51:41.556Z",
   "fromVersion": "16.22.1",
   "toVersion": "16.22.1",
-  "changeCount": 89,
+  "changeCount": 0,
   "warnings": [],
   "sourceType": "official-cn",
   "sources": [
@@ -20,35 +20,17 @@
     "海克斯大乱斗": 32,
     "BUG修复及品质级改动": 10
   },
-  "announcementIds": [
-    "fc3f8333232e77d11e417660"
-  ],
-  "formatting": [
-    {
-      "sourceUrl": "https://lol.qq.com/gicp/news/410/37101296.html",
-      "processedCount": 89,
-      "summary": "已逐条整理提供的全部 63 条通用模式英雄、装备及海克斯大乱斗强化符文公告内容。 已整理全部25条公告记录，涵盖海克斯大乱斗条目与通用英雄BUG修复。"
-    }
-  ],
-  "announcementId": "fc3f8333232e77d11e417660",
-  "reused": false,
+  "announcementIds": [],
+  "reused": true,
   "agent": {
     "agentId": "agent_29a1151c93594fbc81dff44d9ed748c67eadc3cc7e1f406ab4",
-    "runId": "gha-41961881055-1",
+    "runId": "gha-41964177269-1",
     "sessions": [
       {
-        "task": "official-format",
+        "task": "check-receipt",
         "status": "completed",
-        "sessionId": "sess_06e644e09ba73f52006aebf814e23c8194888a4df253851610",
-        "turnId": "turn_06e644e09ba73f52006aebf817e0788194bff31ab61114bb7b",
-        "usage": null,
-        "model": "gpt-6-luna"
-      },
-      {
-        "task": "official-format",
-        "status": "completed",
-        "sessionId": "sess_0043184dafe1e696006aebf824fea4819696fe0a55a0f20726",
-        "turnId": "turn_0043184dafe1e696006aebf82842788196a2740b88bb7f0f84",
+        "sessionId": "sess_09ead97fb22bcf90006aebfd52587c8193a307efb92fd2520a",
+        "turnId": "turn_09ead97fb22bcf90006aebfd5659148193979a0b6db9124695",
         "usage": null,
         "model": "gpt-6-luna"
       }
