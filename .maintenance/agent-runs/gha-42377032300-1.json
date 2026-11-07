@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-11-07T13:27:43.869Z",
+  "githubRunUrl": "https://github.com/ci16kuai/hexguide-desktop/actions/runs/42377032300",
+  "agentId": "agent_29a1151c93594fbc81dff44d9ed748c67eadc3cc7e1f406ab4",
+  "runId": "gha-42377032300-1",
+  "sessions": [
+    {
+      "task": "check-receipt",
+      "status": "completed",
+      "sessionId": "sess_06662b57a4ef3405006aef2748b9488193914f86e5ddbd210c",
+      "turnId": "turn_06662b57a4ef3405006aef274d13388193a0b7128d43e2938d",
+      "usage": null,
+      "model": "gpt-6-luna"
+    }
+  ],
+  "usage": null,
+  "outcome": "ready-to-publish"
+}
