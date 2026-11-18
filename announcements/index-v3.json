@@ -1,8 +1,23 @@
 {
   "schemaVersion": 1,
-  "revision": "37579a988f989b4060f2b7a7a2890611550da135ca759836c797ebc47bb59c53",
-  "publishedAt": "2026-11-05T03:29:21.114Z",
+  "revision": "f406f1e4794ad86ad159a203bb2983f7d3dad921c2c5f564700ccd2f4dd2808e",
+  "publishedAt": "2026-11-18T20:50:47.478Z",
   "entries": [
+    {
+      "id": "627bbc903b04ee8cca75b08f",
+      "sha256": "7c35a22415ef3cdf26c537e252c28c5fbd70c8827a95777403fccb1dc47d065a",
+      "title": "26.23 官网更新公告（不含经典模式）",
+      "publishedAt": "2026-11-18T20:50:47.478Z",
+      "fromVersion": "16.23.1",
+      "toVersion": "16.23.1",
+      "itemCount": 8,
+      "augmentCount": 7,
+      "changeCount": 62,
+      "championCount": 28,
+      "format": 2,
+      "supersedes": [],
+      "sourceUrl": "https://lol.qq.com/gicp/news/410/37102797.html"
+    },
     {
       "id": "fc3f8333232e77d11e417660",
       "sha256": "d4d9b917a7cd7ecc6f495ba69c5e607d235af74fe27b0c4f1afbe0ecc8bf8de8",

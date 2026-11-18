@@ -1,36 +1,53 @@
 {
-  "checkedAt": "2026-11-17T21:15:18.913Z",
-  "fromVersion": "16.22.1",
-  "toVersion": "16.22.1",
-  "changeCount": 0,
-  "warnings": [],
+  "checkedAt": "2026-11-18T20:50:47.478Z",
+  "fromVersion": "16.23.1",
+  "toVersion": "16.23.1",
+  "changeCount": 62,
+  "warnings": [
+    {
+      "kind": "item",
+      "name": "斗魂竞技场 全局增益",
+      "reason": "官网及当前资源未提供可确认的对应图标。"
+    }
+  ],
   "sourceType": "official-cn",
   "sources": [
     {
-      "url": "https://lol.qq.com/gicp/news/410/37101296.html",
-      "date": "2026-11-04",
-      "articleId": "fc3f8333232e77d11e417660",
-      "changeCount": 89
+      "url": "https://lol.qq.com/gicp/news/410/37102797.html",
+      "date": "2026-11-18",
+      "articleId": "627bbc903b04ee8cca75b08f",
+      "changeCount": 62
     }
   ],
-  "excludedClassicBlocks": 108,
+  "excludedClassicBlocks": 35,
   "sectionCounts": {
-    "英雄": 44,
-    "装备": 3,
-    "海克斯大乱斗": 32,
-    "BUG修复及品质级改动": 10
+    "英雄": 25,
+    "装备": 2,
+    "海克斯大乱斗": 7,
+    "斗魂竞技场": 27,
+    "BUG修复及品质级改动": 1
   },
-  "announcementIds": [],
-  "reused": true,
+  "announcementIds": [
+    "627bbc903b04ee8cca75b08f"
+  ],
+  "formatting": [
+    {
+      "sourceUrl": "https://lol.qq.com/gicp/news/410/37102797.html",
+      "processedCount": 62,
+      "summary": "已整理全部 61 条非经典模式公告条目，保留通用、海克斯大乱斗与斗魂竞技场的具体内容及数值。"
+    }
+  ],
+  "announcementId": "627bbc903b04ee8cca75b08f",
+  "reused": false,
   "agent": {
     "agentId": "agent_29a1151c93594fbc81dff44d9ed748c67eadc3cc7e1f406ab4",
-    "runId": "gha-44177802500-1",
+    "runId": "gha-44395201641-1",
     "sessions": [
       {
-        "task": "check-receipt",
+        "task": "official-format",
         "status": "completed",
-        "sessionId": "sess_089a2f97755ad6c8006afcc3eb8aec8196b2a03b646f6c0f87",
-        "turnId": "turn_089a2f97755ad6c8006afcc3f2814881968a89379dfc66af21",
+        "sessionId": "sess_07b740c02ccdeacb006afe0facb4088196993b0b075fe786dc",
+        "turnId": "turn_07b740c02ccdeacb006afe0fb246dc819693c83106bc4d55ae",
         "usage": null,
         "model": "gpt-6-luna"
       }

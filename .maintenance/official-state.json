@@ -21,6 +21,13 @@
       "articleId": "fc3f8333232e77d11e417660",
       "factsHash": "72329bfce30bc2240aafa7baa290790e4cdb34a78d6c9bff254ba4b1fb307b00",
       "checkedAt": "2026-11-17T21:15:18.913Z"
+    },
+    "https://lol.qq.com/gicp/news/410/37102797.html": {
+      "version": "16.23.1",
+      "kind": "patch",
+      "articleId": "627bbc903b04ee8cca75b08f",
+      "factsHash": "4d81b9e88c9c01b72040b05b1026b26e5cf5d7b8eb9d911998b212add9456b9d",
+      "checkedAt": "2026-11-18T20:50:47.478Z"
     }
   }
 }
