@@ -2,7 +2,7 @@ import {readFile,mkdir,open,unlink,stat} from 'node:fs/promises';
 import path from 'node:path';
 import {atomicJson} from './maintenance.mjs';
 import {digest,fetchText,listVersions,clientVersion} from './sources.mjs';
-import {parseOfficialChanges,officialCatalog,fetchOfficialDocuments} from './official-sources.mjs';
+import {parseOfficialChanges,officialCatalog,fetchOfficialDocuments,OfficialPatchPending} from './official-sources.mjs';
 import {validateArticle,validateIndex,validatePresentation} from '../../dist/announcements-contract.js';
 
 const optionalJson=async file=>{try{return JSON.parse(await readFile(file,'utf8'));}catch(error){if(error.code==='ENOENT')return null;throw error;}};
@@ -29,7 +29,16 @@ export async function runOfficialMaintenance({stateDirectory,feedDirectory,now=n
     const versions=await versionsProvider(),version=versions[0];
     const state=await optionalJson(path.join(stateDirectory,'official-state.json'))??{schemaVersion:1,sources:{}};
     if(state.schemaVersion!==1||!state.sources||Array.isArray(state.sources))throw Error('Invalid official source checkpoint.');
-    const [provided,catalog]=await Promise.all([documentProvider(version,{knownSources:state.sources}),iconCatalogProvider(version)]);
+    let provided;
+    try {
+      provided=await documentProvider(version,{knownSources:state.sources});
+    } catch (error) {
+      if (!(error instanceof OfficialPatchPending)) throw error;
+      const receipt={checkedAt:now,toVersion:version,sourceType:'official-cn',status:'waiting-for-official-patch',changeCount:0,announcementIds:[],warnings:[]};
+      await atomicJson(path.join(stateDirectory,'last-run.json'),receipt);
+      return receipt;
+    }
+    const catalog=await iconCatalogProvider(version);
     const documents=Array.isArray(provided)?provided:[provided];if(!documents.length||documents.length>8||new Set(documents.map(row=>row.url)).size!==documents.length)throw Error('Invalid official document set.');
     const parsedDocuments=documents.map(document=>({...parseOfficialChanges(document.html,{url:document.url,version,catalog}),kind:document.kind??'patch'}));
     const existing=await optionalJson(path.join(feedDirectory,'index-v3.json'))??await optionalJson(path.join(feedDirectory,'index-v2.json'))??await optionalJson(path.join(feedDirectory,'index.json'));

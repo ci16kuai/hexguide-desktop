@@ -13,7 +13,7 @@ export async function runAgentMaintenance({client,config,runId=randomUUID(),gith
   const agent=new AnnouncementAgent({client,config,runId,githubRunUrl,purpose,onRecord:save});
   try {
     const receipt=await maintenance({...options,translator:changes=>agent.translate(changes),formatter:(changes,source)=>agent.formatOfficial(changes,source)});
-    if(!agent.records.length)await agent.recordCheck(receipt);
+    if(!agent.records.length && receipt.status!=='waiting-for-official-patch')await agent.recordCheck(receipt);
     receipt.agent=agent.summary;
     await atomicJson(path.join(options.stateDirectory,'last-run.json'),receipt);
     await save({...agent.summary,outcome:'ready-to-publish'});

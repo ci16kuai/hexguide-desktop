@@ -137,7 +137,7 @@ function upstreamFixture({ provisional = false } = {}) {
     documents['augments.json'] = encode(input.sourceAugments);
     input.meta.files = Object.fromEntries(Object.entries(documents).filter(([name]) => !['meta.json', 'latest.json'].includes(name)).map(([name, bytes]) => [name, digest(bytes)]));
     documents['meta.json'] = encode(input.meta);
-    latest = { schema_version: 1, patch: '16.21', mode: 'normal', path: 'patches/16.21/normal', seq: 11,
+    latest = { schema_version: 1, patch: input.meta.patch, mode: 'normal', path: `patches/${input.meta.patch}/normal`, seq: 11,
       matches: input.meta.matches.valid, snapshot_at: input.meta.snapshot_at, window: input.meta.window,
       files: Object.fromEntries(Object.entries(documents).filter(([name]) => name !== 'latest.json').map(([name, bytes]) => [name, { sha256: digest(bytes), size: bytes.length }])) };
     documents['latest.json'] = encode(latest);
@@ -152,7 +152,7 @@ function upstreamFixture({ provisional = false } = {}) {
     if (url === 'https://api.github.com/repos/czgreat/aramhex-data/git/ref/heads/main') return new Response(encode({ object: { type: 'commit', sha: commit } }));
     const base = `https://raw.githubusercontent.com/czgreat/aramhex-data/${commit}/`;
     assert(url.startsWith(base), `Unexpected source URL: ${url}`);
-    const name = url.slice(base.length).replace('patches/16.21/normal/', '');
+    const name = url.slice(base.length).replace(`patches/${input.meta.patch}/normal/`, '');
     assert(Object.hasOwn(documents, name), `Unexpected source table: ${name}`);
     return new Response(documents[name]);
   };
@@ -198,9 +198,23 @@ test('same-time corrected table hashes trigger revalidation instead of skipping 
   assert.notEqual(result.meta.source.hashes['hero_augments.json'], currentSnapshot.meta.source.hashes['hero_augments.json']);
 });
 
-test('runtime rejects incompatible client patches and PBE/activity/band source paths before requesting tables', async () => {
+test('runtime follows a newer verified patch and preserves the source rules label', async () => {
+  const upstream=upstreamFixture();
+  const previous=await fetchLatestStatistics(upstream.options);
+  upstream.input.meta.patch='16.22';
+  upstream.rebuild();
+  const next=await fetchLatestStatistics({...upstream.options,currentSnapshot:previous});
+  assert.equal(next.meta.rulesPatch,'26.22');
+  assert.equal(next.meta.patch,'16.22');
+  assert.match(next.meta.cohortId,/^aramhex-cn-16\.22-/);
+  upstream.input.meta.patch='16.21';
+  upstream.rebuild();
+  await assert.rejects(fetchLatestStatistics({...upstream.options,currentSnapshot:next}),/Unsupported source cohort/);
+});
+
+test('runtime rejects older client patches and PBE/activity/band source paths before requesting tables', async () => {
   for (const change of [
-    latest => { latest.patch = '16.22'; latest.path = 'patches/16.22/normal'; },
+    latest => { latest.patch = '16.20'; latest.path = 'patches/16.20/normal'; },
     latest => { latest.mode = 'first-prismatic'; },
     latest => { latest.path = 'patches/16.21-pbe/normal'; },
     latest => { latest.path = 'patches/16.21/normal/bands/high'; },

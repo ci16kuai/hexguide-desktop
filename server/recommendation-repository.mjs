@@ -326,8 +326,17 @@ export class RecommendationRepository {
     this.#static = localStatistics(statisticsSnapshot, this.#ids, this.#catalog, patch) ?? new Map();
   }
   replaceStatistics(snapshot) {
-    const next = localStatistics(snapshot, this.#ids, this.#catalog, this.#patch);
+    const patch = snapshot?.meta?.patch;
+    if (!(comparePatches(patch, this.#patch) >= 0)) throw new TypeError('Invalid statistics patch.');
+    const next = localStatistics(snapshot, this.#ids, this.#catalog, patch);
     if (!next?.size) throw new TypeError('Invalid replacement statistics snapshot.');
+    if (patch !== this.#patch) {
+      this.#patch = patch;
+      this.#entries.clear();
+      this.#failures.clear();
+      this.#referenceFailures.clear();
+      this.#persist();
+    }
     this.#static = next;
   }
   #time() { return integer(this.#now(), 1); }
@@ -425,11 +434,13 @@ export class RecommendationRepository {
     finally { this.#pending.delete(id); }
   }
   async #refresh(id) {
+    const patch = this.#patch;
     try {
       // Recreate the default client's memory cache after our 24-hour TTL;
       // otherwise its champion LRU would keep returning the same stale object.
       const client = this.#client ?? createConditionalStatisticsClient({fetcher:boundedFetch, now:this.#now});
-      const raw = await client.load({championId:this.#ids.get(id), patch:this.#patch});
+      const raw = await client.load({championId:this.#ids.get(id), patch});
+      if (patch !== this.#patch) return;
       const time = this.#time();
       const snapshot = validateRecommendationSnapshot(raw, {championId:this.#ids.get(id), patch:this.#patch, now:time});
       // A reused provider client may itself serve an old in-memory snapshot.
@@ -439,9 +450,8 @@ export class RecommendationRepository {
       this.#failures.delete(id);
       this.#persist();
     } catch (failure) {
-      this.#failed(this.#failures, id, failure);
-    }
-    this.#mayhemPending.delete(id);
+      if (patch === this.#patch) this.#failed(this.#failures, id, failure);
+    } finally { this.#mayhemPending.delete(id); }
     return this.get(id);
   }
   #failed(map, id, failure) {
@@ -450,6 +460,7 @@ export class RecommendationRepository {
     this.#touch(map, id, {attempts, code, retryAt:this.#time() + Math.min(LIMITS.maxRetryMs, LIMITS.retryMs * 2 ** (attempts - 1))});
   }
   async #refreshReference(id) {
+    const patch = this.#patch;
     try {
       // Loading this module is deferred too: load()/get() never start network
       // work, and Mayhem stays usable independently of the reference provider.
@@ -458,7 +469,8 @@ export class RecommendationRepository {
       // before awaiting it so simultaneous heroes cannot create separate clients.
       const client = this.#referenceClient ?? await (this.#referenceClientPromise ??=
         import('./reference-build-source.mjs').then(module => module.createReferenceBuildSource({now:this.#now})));
-      const raw = await client.load({championId:id, championSlug:id.toLowerCase(), patch:this.#patch});
+      const raw = await client.load({championId:id, championSlug:id.toLowerCase(), patch});
+      if (patch !== this.#patch) return;
       if (raw == null) throw Object.assign(new Error('Reference data unavailable.'), {code:'unavailable'});
       const time = this.#time();
       let reference = validateReferenceBuildSnapshot(raw, {championId:id, patch:this.#patch, now:time});
@@ -475,8 +487,9 @@ export class RecommendationRepository {
       } else this.#referenceFailures.delete(id);
       this.#touch(this.#entries, id, {...this.#entries.get(id), referenceStoredAt:time, reference});
       this.#persist();
-    } catch (failure) { this.#failed(this.#referenceFailures, id, failure); }
-    this.#referencePending.delete(id);
+    } catch (failure) {
+      if (patch === this.#patch) this.#failed(this.#referenceFailures, id, failure);
+    } finally { this.#referencePending.delete(id); }
     return this.get(id);
   }
   #persist() {
@@ -505,3 +518,4 @@ export class RecommendationRepository {
     await this.#writeTail.catch(() => {});
   }
 }
+import {comparePatches} from '../dist/version.js';

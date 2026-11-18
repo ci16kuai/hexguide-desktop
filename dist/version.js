@@ -25,3 +25,11 @@ export function getVersionInfo(meta = {}) {
     statsLag: statsPatch !== rulesPatch
   };
 }
+/** Compare canonical major.minor patch labels numerically. */
+export function comparePatches(left, right) {
+  const pattern = /^(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})$/;
+  const a = pattern.exec(left), b = pattern.exec(right);
+  if (!a || !b) return NaN;
+  return Number(a[1]) - Number(b[1]) || Number(a[2]) - Number(b[2]);
+}
+

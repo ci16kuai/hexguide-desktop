@@ -1,5 +1,5 @@
 import {parse} from 'parse5';
-import {fetchText,digest,plain} from './sources.mjs';
+import {fetchText,digest,plain,clientVersion} from './sources.mjs';
 import {validIconUrl} from '../../dist/announcements-contract.js';
 
 const attr=(node,name)=>node?.attrs?.find(row=>row.name===name)?.value;
@@ -122,26 +122,45 @@ export function parseOfficialChanges(html,{url,version,catalog}={}){
 }
 const modeName=mode=>({general:'通用',aram:'海克斯大乱斗',arena:'斗魂竞技场'})[mode];
 const jsonp=body=>JSON.parse(body.replace(/^\s*\w+\(/,'').replace(/\);?\s*$/,''));
-export async function fetchOfficialDocument(version,options={}){
+async function officialListing(page, options) {
+  const list = jsonp(await fetchText(`https://apps.game.qq.com/cmc/zmMcnTargetContentList?r0=jsonp&page=${page}&num=16&target=24&source=web_pc`, options));
+  const rows = list.data?.result;
+  if (String(list.status) !== '1' || !Array.isArray(rows) || (page === 1 && !rows.length)
+      || rows.some(row => typeof row?.sTitle !== 'string' || !row.sTitle.trim())) throw Error('Official update listing unavailable.');
+  return rows;
+}
+
+export class OfficialPatchPending extends Error {}
+
+export async function fetchOfficialDocument(version,{listing,knownSources={},...options}={}){
   const [major,minor]=version.split('.').map(Number),patch=`${major+10}.${minor}`;
   let url=patch==='26.21'?'https://lol.qq.com/gicp/news/410/37099805.html':null;
   if(!url){
-    const list=jsonp(await fetchText('https://apps.game.qq.com/cmc/zmMcnTargetContentList?r0=jsonp&page=1&num=16&target=24&source=web_pc',options));
-    const note=list?.data?.result?.find(row=>row.sTitle===`${patch}版本更新公告`);if(!note||!/^\d+$/.test(String(note.iDocID)))throw Error('Matching official CN patch announcement not yet available.');
-    const detail=jsonp(await fetchText(`https://apps.game.qq.com/cmc/zmMcnContentInfo?r0=jsonp&source=web_pc&type=0&docid=${note.iDocID}`,options));
-    url=detail?.data?.result?.sRedirectURL;
+    const known=Object.entries(knownSources).find(([,row])=>row.kind==='patch'&&clientVersion(row.version)===clientVersion(version));
+    if(known) url=known[0];
+    else {
+      let rows=listing??await officialListing(1,options), note;
+      for(let page=1;page<=3;page++){
+        note=rows.find(row=>row.sTitle.normalize('NFKC').replace(/\s+/g,'')===`${patch}版本更新公告`);
+        if(note || rows.length<16 || page===3)break;
+        rows=await officialListing(page+1,options);
+      }
+      if(!note)throw new OfficialPatchPending('Matching official CN patch announcement not yet available.');
+      if(!/^\d+$/.test(String(note.iDocID)))throw Error('Invalid official announcement ID.');
+      const detail=jsonp(await fetchText(`https://apps.game.qq.com/cmc/zmMcnContentInfo?r0=jsonp&source=web_pc&type=0&docid=${note.iDocID}`,options));
+      url=detail?.data?.result?.sRedirectURL;
+    }
   }
   if(!/^https:\/\/lol\.qq\.com\/gicp\/news\/\d+\/\d+\.html$/.test(url??''))throw Error('Official patch source URL missing.');
   return {url,html:await fetchText(url,{...options,maxBytes:4*1024*1024})};
 }
 export async function fetchOfficialDocuments(version,{knownSources={},...options}={}){
   const [major,minor]=version.split('.').map(Number),patch=`${major+10}.${minor}`;
-  const list=jsonp(await fetchText('https://apps.game.qq.com/cmc/zmMcnTargetContentList?r0=jsonp&page=1&num=16&target=24&source=web_pc',options));
-  if(String(list.status)!=='1'||!Array.isArray(list.data?.result))throw Error('Official update listing unavailable.');
-  const main=await fetchOfficialDocument(version,options),dom=parse(main.html),dateNode=find(dom,node=>(attr(node,'class')??'').split(' ').includes('art-time'));
+  const listing=await officialListing(1,options);
+  const main=await fetchOfficialDocument(version,{...options,listing,knownSources}),dom=parse(main.html),dateNode=find(dom,node=>(attr(node,'class')??'').split(' ').includes('art-time'));
   const patchDate=(attr(dateNode,'data')??clean(content(dateNode??{}))).slice(0,10);
   if(!/^\d{4}-\d{2}-\d{2}$/.test(patchDate))throw Error('Official patch date unavailable for hotfix discovery.');
-  const candidates=new Set(list.data.result.filter(row=>/^\d{4}年\d+月\d+日\s*不停机更新/.test(row.sTitle)&&row.sCreated?.slice(0,10)>=patchDate&&/^\d+$/.test(String(row.iDocID))).map(row=>String(row.iDocID)));
+  const candidates=new Set(listing.filter(row=>/^\d{4}年\d+月\d+日\s*不停机更新/.test(row.sTitle)&&row.sCreated?.slice(0,10)>=patchDate&&/^\d+$/.test(String(row.iDocID))).map(row=>String(row.iDocID)));
   for(const [url,row] of Object.entries(knownSources))if(row.kind==='hotfix'&&row.version.split('.').slice(0,2).join('.')===version.split('.').slice(0,2).join('.')){const id=/[?&]docid=(\d+)$/.exec(url)?.[1];if(id)candidates.add(id);}
   if(candidates.size>7)throw Error('Too many official hotfix documents; refusing unbounded API work.');
   const documents=[{...main,kind:'patch'}];

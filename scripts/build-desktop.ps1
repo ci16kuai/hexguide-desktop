@@ -4,7 +4,8 @@
     [switch]$Package,
     [string]$ArchivePath,
     [string]$AppVersion,
-    [string]$StagePath
+    [string]$StagePath,
+    [string]$StatisticsSnapshotPath
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -153,6 +154,10 @@ Alt+Shift+H 显示或收起游戏侧栏，支持无边框或窗口模式。
 缺少 WebView2 时从微软官网安装 Evergreen Runtime：
 https://developer.microsoft.com/microsoft-edge/webview2/
 "@ | Set-Content -LiteralPath (Join-Path $stage '开始使用.txt') -Encoding UTF8
+if ($StatisticsSnapshotPath) {
+    & $NodePath (Join-Path $projectRoot 'scripts\stage-statistics.mjs') $stage $StatisticsSnapshotPath
+    if ($LASTEXITCODE -ne 0) { throw 'The supplied statistics snapshot did not pass validation.' }
+}
 $manifest = [ordered]@{ appVersion = $AppVersion; nodeVersion = $nodeVersion; webView2SdkVersion = $sdkVersion; architecture = 'win-x64'; builtAt = (Get-Date).ToUniversalTime().ToString('o') }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'build-info.json') -Encoding UTF8
 Write-Output "Portable app: $stage"

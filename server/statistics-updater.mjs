@@ -1,7 +1,8 @@
 import {open, lstat, mkdir, rename, writeFile, unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
-import {fetchLatestStatistics} from './statistics-source.mjs';
+import {fetchLatestStatistics, rulesPatchForStatistics} from './statistics-source.mjs';
+import {comparePatches} from '../dist/version.js';
 
 export const STATISTICS_REFRESH_INTERVAL = 3 * 24 * 60 * 60 * 1000;
 const SNAPSHOT_LIMIT = 16 * 1024 * 1024;
@@ -22,9 +23,10 @@ const freeze = value => {
 // Check every mapped row before a cached snapshot can replace the bundled one.
 export function validateStoredStatistics(snapshot, {gameData, championCatalog, now = Date.now()} = {}) {
   const meta = snapshot?.meta;
-  const patch = gameData?.meta?.clientDataVersion;
-  if (snapshot?.schemaVersion !== 1 || meta?.mode !== 'aram-mayhem' || meta.patch !== patch
-    || meta.rulesPatch !== gameData.meta.patch || meta.source?.name !== 'AramHex'
+  const patch = meta?.patch;
+  const rulesPatch = rulesPatchForStatistics(patch, gameData?.meta);
+  if (snapshot?.schemaVersion !== 1 || meta?.mode !== 'aram-mayhem' || !rulesPatch
+    || meta.rulesPatch !== rulesPatch || meta.source?.name !== 'AramHex'
     || meta.source.url !== 'https://github.com/czgreat/aramhex-data' || meta.source.license !== 'CC BY-NC 4.0'
     || !/^[a-f0-9]{40}$/.test(meta.source.commit) || !validCount(meta.validGames, 1)
     || !timestamp(meta.statsUpdatedAt) || !timestamp(meta.observedFrom) || !timestamp(meta.observedTo)
@@ -64,7 +66,8 @@ export function validateStoredStatistics(snapshot, {gameData, championCatalog, n
   }
   if (games !== meta.validGames * 10 || wins !== meta.validGames * 5
     || meta.coverage?.championsWithStats !== seen.size || meta.coverage.augmentRows !== rows
-    || meta.coverage.mappedAugmentRows !== mapped || meta.coverage.provisionalRows !== provisional) invalid();
+    || meta.coverage.mappedAugmentRows !== mapped || meta.coverage.provisionalRows !== provisional
+    || provisional && patch !== '16.21') invalid();
   return snapshot;
 }
 
@@ -114,7 +117,8 @@ export class StatisticsUpdater {
     if (!this.#directory) return this;
     try {
       const snapshot = validateStoredStatistics(await readBounded(path.join(this.#directory, SNAPSHOT_FILE), SNAPSHOT_LIMIT), {...this.#options, now:this.#now()});
-      if (Date.parse(snapshot.meta.statsUpdatedAt) >= Date.parse(this.#snapshot.meta.statsUpdatedAt)) this.#accept(snapshot);
+      if (comparePatches(snapshot.meta.patch, this.#snapshot.meta.patch) >= 0
+        && Date.parse(snapshot.meta.statsUpdatedAt) >= Date.parse(this.#snapshot.meta.statsUpdatedAt)) this.#accept(snapshot);
     } catch { /* Missing, corrupt, incompatible, or older caches keep the bundled data. */ }
     try {
       const state = await readBounded(path.join(this.#directory, STATE_FILE), 4096);
@@ -151,7 +155,8 @@ export class StatisticsUpdater {
       if (this.#closed) return this.getStatus();
       if (snapshot) {
         validateStoredStatistics(snapshot, {...this.#options, now:this.#now()});
-        if (Date.parse(snapshot.meta.statsUpdatedAt) < Date.parse(this.#snapshot.meta.statsUpdatedAt)) invalid();
+        if (comparePatches(snapshot.meta.patch, this.#snapshot.meta.patch) < 0
+          || Date.parse(snapshot.meta.statsUpdatedAt) < Date.parse(this.#snapshot.meta.statsUpdatedAt)) invalid();
         if (Buffer.byteLength(JSON.stringify(snapshot)) > SNAPSHOT_LIMIT) invalid();
         if (this.#directory) await atomicJson(path.join(this.#directory, SNAPSHOT_FILE), snapshot);
         if (this.#closed) return this.getStatus();

@@ -17,7 +17,7 @@ function equalToken(received, expected) {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-export async function createLocalServer({collector, scanner, sidebar, appearance, layout, statistics, announcements, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
+export async function createLocalServer({collector, scanner, sidebar, appearance, layout, statistics, announcements, dataset, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
   if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
   const root = await realpath(staticDirectory);
   let expectedHost;
@@ -135,6 +135,11 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
       if (pathname === '/api/layout') return layout ? send(response, 200, layout.get()) : send(response, 503, {error:'Interface layout settings are unavailable.'});
       if (pathname === '/api/statistics/status') return statistics ? send(response, 200, statistics.getStatus()) : send(response, 503, {error:'Statistics updates are unavailable.'});
       return send(response, 404, {error:'Unknown endpoint.'});
+    }
+    if (pathname === '/data.json' && dataset) {
+      const content=JSON.stringify(dataset);
+      response.writeHead(200, {'Content-Type':MIME['.json'], 'Cache-Control':'no-store', 'Content-Length':Buffer.byteLength(content)});
+      return response.end(request.method==='HEAD' ? undefined : content);
     }
     if (pathname === '/statistics.json' && statistics) {
       try {

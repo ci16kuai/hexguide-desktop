@@ -98,7 +98,7 @@ export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args),
   const observationKey=c=>`${index?.meta?.patch||''}:${c?.sourceChampionId||''}`;
   function ensureObservations(retry=false){
     const c=champion(),row=rows().find(entry=>String(entry.id)===state.expanded);
-    if(!c||!state.expanded||!row||!/^\d+$/.test(c.sourceChampionId||'')||!/^\d+$/.test(row.sourceAugmentId||'')||!row.canAdopt)return;
+    if(!c||!state.expanded||!row||!/^\d+$/.test(c.sourceChampionId||'')||!/^\d+$/.test(row.sourceAugmentId||'')||!row.canQueryObservations)return;
     const key=observationKey(c),previous=observations.get(key);
     if(previous&&(!retry||previous.status==='loading'||previous.status==='ready'))return;
     const entry={status:'loading',data:null,error:''};
@@ -124,7 +124,7 @@ export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args),
   }
   function build(row,c){
     const wrapper=body=>`<tr class="stats-build-row"><td colspan="6"><section class="stats-build stats-observations" aria-label="实战联动与出装" ${target('stats-build','实战联动与出装')}><div class="stats-observation-heading"><h3>${esc(c.name)} · ${esc(row.name)}</h3><span>实战联动与出装</span></div>${body}</section></td></tr>`;
-    if(!row.canAdopt||!/^\d+$/.test(c.sourceChampionId||'')||!/^\d+$/.test(row.sourceAugmentId||''))return wrapper('<p class="stats-build-empty">这条记录尚未映射到当前正式服英雄与海克斯，暂不查询条件出装。</p>');
+    if(!row.canQueryObservations||!/^\d+$/.test(c.sourceChampionId||'')||!/^\d+$/.test(row.sourceAugmentId||''))return wrapper('<p class="stats-build-empty">这条记录尚未映射到当前正式服英雄与海克斯，暂不查询条件出装。</p>');
     const entry=observations.get(observationKey(c));
     if(!entry||entry.status==='loading')return wrapper('<p class="stats-build-empty" role="status">正在查询这个英雄选择该海克斯后的实战数据…</p>');
     const sourceLink='<a href="https://aramkit.com/zh-CN/champions" target="_blank" rel="noopener noreferrer">查看 ARAMKit 原站 ↗</a>';

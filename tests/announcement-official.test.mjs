@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile,writeFile,mkdtemp,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {parseOfficialChanges,officialCatalog} from '../tools/version-maintenance/official-sources.mjs';
+import {parseOfficialChanges,officialCatalog,fetchOfficialDocument,OfficialPatchPending} from '../tools/version-maintenance/official-sources.mjs';
 import * as officialMaintenance from '../tools/version-maintenance/official-maintenance.mjs';
 import {digest,fetchText} from '../tools/version-maintenance/sources.mjs';
 import {validateArticle,validIconUrl} from '../dist/announcements-contract.js';
@@ -18,6 +18,26 @@ const hotfixHtml=await readFile(new URL('./fixtures/official-hotfix-2026-10-23.h
 const hotfixUrl='https://lol.qq.com/news/detail.shtml?docid=14514250113535829185';
 const {runOfficialMaintenance,validateOfficialFormatting,officialFormattingSchema}=officialMaintenance;
 const formatted=changes=>({processedKeys:changes.map(row=>row.key),summary:'已按官网正文整理完整条目。'});
+test('CN publication lag keeps the feed intact and a later listing page can supply the official note',async()=>{
+  const f=await fixture();
+  const initial=await readFile(path.join(f.options.feedDirectory,'index.json'),'utf8');
+  const api=rows=>new Response('jsonp('+JSON.stringify({status:1,data:{result:rows}})+');');
+  const other=()=>({sTitle:'其他更新'});
+  const pending=await runOfficialMaintenance({...f.options,versionsProvider:async()=>['16.23.1'],
+    documentProvider:v=>fetchOfficialDocument(v,{fetchImpl:async()=>api([other()])}),
+    iconCatalogProvider:()=>assert.fail('Pending announcements do not request icons')});
+  assert.equal(pending.status,'waiting-for-official-patch');
+  assert.equal(await readFile(path.join(f.options.feedDirectory,'index.json'),'utf8'),initial);
+  const fetched=await fetchOfficialDocument('16.23.1',{fetchImpl:async link=>{
+    if(link.includes('page=1'))return api(Array.from({length:16},other));
+    if(link.includes('page=2'))return api([{sTitle:'26.23 版本更新公告',iDocID:'123'}]);
+    if(link.includes('docid=123'))return api({sRedirectURL:url});
+    assert.equal(link,url);return new Response(html);
+  }});
+  assert.equal(fetched.url,url);
+  await assert.rejects(fetchOfficialDocument('16.23.1',{fetchImpl:async()=>api([])}),
+    e=>!(e instanceof OfficialPatchPending)&&/listing unavailable/.test(e.message));
+});
 test('the official GBK HTML is decoded before section matching, while JSON remains UTF-8',async()=>{
   const body=Buffer.concat([Buffer.from('<meta charset="gbk"><h3>'),Buffer.from([0xd3,0xa2,0xd0,0xdb]),Buffer.from('</h3>')]);
   assert.ok((await fetchText(url,{fetchImpl:async()=>new Response(body,{headers:{'content-type':'text/html'}})})).includes('英雄'));

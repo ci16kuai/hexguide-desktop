@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import {comparePatches} from '../dist/version.js';
 
 export const SOURCE = Object.freeze({
   commit: '899b65acd4474878a82d86bad365a4ecbbcf04d8',
@@ -107,17 +108,30 @@ export function validateSourceDocuments({ latest, meta, source = SOURCE }) {
   }
 }
 
+// Keep Riot's display label tied to the catalog's verified numbering convention.
+export function rulesPatchForStatistics(patch, catalog) {
+  if (!(comparePatches(patch, catalog?.clientDataVersion) >= 0)
+      || !Number.isFinite(comparePatches(catalog.patch, catalog.patch))) return null;
+  const [major, minor] = patch.split('.');
+  const [catalogMajor, catalogMinor] = catalog.clientDataVersion.split('.');
+  const [rulesMajor, rulesMinor] = catalog.patch.split('.');
+  if (catalogMinor !== rulesMinor) return null;
+  return `${Number(major) + Number(rulesMajor) - Number(catalogMajor)}.${minor}`;
+}
+
 /** Fetch one current live cohort; never merge snapshots, bands, or PBE observations. */
 export async function fetchLatestStatistics({ championCatalog, gameData, currentSnapshot, fetcher = fetch, signal } = {}) {
   const version = gameData?.meta?.clientDataVersion;
   const match = typeof version === 'string' && /^(\d+\.\d+)(?:\.\d+)?$/.exec(version);
   assert(match, 'Missing compatible client data version');
-  const patch = match[1];
   const ref = await boundedJson('https://api.github.com/repos/czgreat/aramhex-data/git/ref/heads/main', { maxBytes: manifestLimit, fetcher, signal });
   assert(ref.json?.object?.type === 'commit' && commitPattern.test(ref.json.object.sha), 'Invalid upstream main revision');
   const commit = ref.json.object.sha;
-  const manifest = await fetchSourceFile(commit, 'latest.json', { patch, fetcher, signal });
+  const manifest = await fetchSourceFile(commit, 'latest.json', { fetcher, signal });
   const latest = manifest.json;
+  const patch = latest?.patch;
+  const rulesPatch = rulesPatchForStatistics(patch, gameData.meta);
+  assert(rulesPatch && comparePatches(patch, currentSnapshot?.meta?.patch ?? match[1]) >= 0, 'Unsupported source cohort');
   validateSourceManifest(latest, { patch });
   const current = currentSnapshot?.meta;
   assert(!current || Date.parse(latest.snapshot_at) >= Date.parse(current.statsUpdatedAt), 'Source snapshot is older than current statistics');
@@ -125,7 +139,7 @@ export async function fetchLatestStatistics({ championCatalog, gameData, current
   // A documentation-only upstream commit can retain the exact same data manifest.
   if (current?.mode === 'aram-mayhem' && current.patch === patch && current.statsUpdatedAt === latest.snapshot_at && current.source?.hashes
     && tableNames.every(filename => current.source.hashes[filename] === hashes[filename])) return null;
-  const source = { commit, seq: latest.seq, patch, rulesPatch: gameData.meta.patch, path: latest.path,
+  const source = { commit, seq: latest.seq, patch, rulesPatch, path: latest.path,
     hashes: { 'latest.json': manifest.sha256, ...hashes } };
   const readVerified = async filename => {
     const document = await fetchSourceFile(commit, filename, { patch, fetcher, signal });

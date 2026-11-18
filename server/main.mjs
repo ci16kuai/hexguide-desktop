@@ -9,6 +9,7 @@ import {AppearanceStore} from './appearance.mjs';
 import {LayoutStore} from './layout.mjs';
 import {RecommendationRepository} from './recommendation-repository.mjs';
 import {StatisticsUpdater} from './statistics-updater.mjs';
+import {loadRules} from './rules.mjs';
 import {AnnouncementStore} from './announcements.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -22,13 +23,14 @@ try {
   if (!/^\d+$/.test(requestedPort) || Number(requestedPort) > 65535) throw new Error('Invalid port.');
   const dataDirectory = argument('--data-dir');
   if (dataDirectory) await mkdir(path.resolve(dataDirectory), {recursive:true});
-  const [dataset, championResource, ca, itemsCatalog, statisticsSnapshot] = await Promise.all([
+  const [bundledData, championResource, ca, itemsCatalog, statisticsSnapshot] = await Promise.all([
     readFile(path.join(directory, '../dist/data.json'), 'utf8').then(JSON.parse),
     readFile(path.join(directory, 'resources/champions-16.21.1.json'), 'utf8').then(JSON.parse),
     readFile(path.join(directory, 'resources/riotgames.pem')),
     readFile(path.join(directory, '../dist/items.json'), 'utf8').then(JSON.parse),
     readFile(path.join(directory, '../dist/statistics.json'), 'utf8').then(JSON.parse).catch(() => null),
   ]);
+  const dataset = await loadRules(bundledData, dataDirectory);
   const collector = new LiveCollector({champions:dataset.champions, officialChampions:championResource.champions, augments:dataset.augments, ca});
   const scanner = createOcrScanner({applicationDirectory:path.resolve(directory, '..'), dataDirectory, augments:dataset.augments});
   const appearance = await new AppearanceStore({dataDirectory}).load();
@@ -37,13 +39,14 @@ try {
   let recommendationRepository;
   let statistics;
   try {
-    statistics = await new StatisticsUpdater({dataDirectory, bundledSnapshot:statisticsSnapshot, gameData:dataset,
+    statistics = await new StatisticsUpdater({dataDirectory, bundledSnapshot:statisticsSnapshot, gameData:{...dataset,meta:bundledData.meta},
       championCatalog:championResource, onUpdate:snapshot => recommendationRepository?.replaceStatistics(snapshot)}).load();
   } catch { /* Optional statistics must never prevent the assistant from opening. */ }
   recommendationRepository = await new RecommendationRepository({dataDirectory, statisticsSnapshot:statistics?.getSnapshot() ?? statisticsSnapshot,
-    champions:dataset.champions, augments:dataset.augments, patch:dataset.meta.clientDataVersion || '16.21'}).load();
+    champions:dataset.champions, augments:dataset.augments,
+    patch:statistics?.getSnapshot().meta.patch ?? dataset.meta.clientDataVersion ?? '16.21'}).load();
   const sidebar = await new BackgroundSidebar({collector, scanner, data:dataset, itemsCatalog, dataDirectory, appearance, recommendationRepository}).load();
-  const local = await createLocalServer({collector, scanner, sidebar, appearance, layout, statistics, announcements, staticDirectory:path.join(directory, '../dist'), port:Number(requestedPort)});
+  const local = await createLocalServer({collector, scanner, sidebar, appearance, layout, statistics, announcements, dataset, staticDirectory:path.join(directory, '../dist'), port:Number(requestedPort)});
   // This is the sole stdout bootstrap line; the native parent owns the token.
   process.stdout.write(JSON.stringify({port:local.port, token:local.token}) + '\n');
   collector.start();

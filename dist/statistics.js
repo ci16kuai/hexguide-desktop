@@ -1,4 +1,5 @@
 import {buildLivePlan} from './adaptive.js';
+import {comparePatches} from './version.js';
 
 // Rates in this module are percentages. A difference between two rates is in
 // percentage points; neither a pick rate nor a mechanism score is a win rate.
@@ -56,7 +57,9 @@ export function createStatistics(raw, catalogData = {}) {
     sourceHeroes.set(id, row);
   }
   const rulesPatch = text(catalogData.meta?.augmentPatch) || text(catalogData.meta?.patch);
-  const snapshotOutdated = Boolean(rulesPatch && text(meta.rulesPatch) && rulesPatch !== text(meta.rulesPatch));
+  const differentPatch = Boolean(rulesPatch && text(meta.rulesPatch) && rulesPatch !== text(meta.rulesPatch));
+  const newerStats = differentPatch && comparePatches(meta.rulesPatch, rulesPatch) > 0;
+  const snapshotOutdated = differentPatch && !newerStats;
   const champions = asArray(catalogData.champions).map(champion => {
     const championId = String(champion.id);
     const row = sourceHeroes.get(championId);
@@ -92,7 +95,8 @@ export function createStatistics(raw, catalogData = {}) {
         rarity:text(entry.rarity) || text(augment?.rarity), icon:text(augment?.icon) || text(entry.icon),
         cohortId:entryCohort, ...observed, augment,
         lowSample:lowSample(entry, meta), provisional:entryProvisional,
-        isCurrent, canAdopt:isCurrent && !entryProvisional && !snapshotOutdated,
+        isCurrent, canAdopt:isCurrent && !entryProvisional && !differentPatch,
+        canQueryObservations:isCurrent && !entryProvisional && !outdated && sameCohort,
         outdated, sameCohort, comparable, deltaPp, delta:deltaPp, comparisonReason,
         sourceUrl:text(entry.sourceUrl) || hero.sourceUrl,
         builds:asArray(entry.builds).map(build => record(build) ? {...build} : build)};
