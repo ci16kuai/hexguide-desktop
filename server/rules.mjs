@@ -23,6 +23,7 @@ export function applyRules(catalog, manifest, bytes) {
   const rulesPatch = (Number(major) + 10) + '.' + minor;
   if (comparePatches(rulesPatch, catalog.meta.augmentPatch) < 0) throw Error('Older rules pack.');
   const base = 'https://raw.communitydragon.org/' + patch + '/game/';
+  const sourceLabel = manifest.origin==='installed-riot-client' ? '本机英雄联盟客户端 ' + patch : 'CommunityDragon ' + patch;
   const prior = new Map(catalog.augments.filter(a=>a.gameDataId!=null).map(a=>[a.gameDataId,a]));
   const ids = new Set(), keys = new Set(), localIds = new Set();
   const augments = pack.augments.map(row => {
@@ -46,7 +47,7 @@ export function applyRules(catalog, manifest, bytes) {
       tags:old?.tags ?? [], aliases:[...new Set([...(old?.aliases??[]),name,enName].filter(Boolean))],
       patch:rulesPatch, descriptionPatch:rulesPatch, icon:base + iconPath, availability:'current',
       sourceUrl:base + 'maps/modespecificdata/kiwi.bin.json', localizationSourceUrl:base + 'zh_cn/data/menu/en_us/lol.stringtable.json',
-      descriptionSource:'CommunityDragon ' + patch + ' 正式客户端 KIWI 定义及简体中文字符串表',
+      descriptionSource:sourceLabel + ' KIWI 定义及官方简体中文字符串表',
       retiredPatch:null, acquisition:event?'headliner-only':'regular', recommendable:!event, isInternalTemplate:internal};
   });
   for (const old of catalog.augments) {
@@ -69,7 +70,7 @@ export function applyRules(catalog, manifest, bytes) {
   return {...catalog, augments, meta:{...catalog.meta, augmentPatch:rulesPatch, patch:rulesPatch,
     gameVersion:'', rulesetName:'海克斯大乱斗', updatedAt:manifest.updatedAt, counts, officialChanges:null,
     rulesSource:sourceUrl, notes:[`强化符文名单和效果取自 ${patch} 正式客户端。选择率、英雄及装备保留各自来源版本。`],
-    sources:[{name:'当前 KIWI 强化规则',url:sourceUrl},...catalog.meta.sources.filter(s=>!s.url?.includes('raw.communitydragon.org/'))]}};
+    sources:[{name:sourceLabel+' 强化规则（同补丁公开资源）',url:sourceUrl},...catalog.meta.sources.filter(s=>!s.url?.includes('raw.communitydragon.org/'))]}};
 }
 
 async function download(filename, maximum, fetcher, signal) {

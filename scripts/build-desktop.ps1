@@ -5,7 +5,9 @@
     [string]$ArchivePath,
     [string]$AppVersion,
     [string]$StagePath,
-    [string]$StatisticsSnapshotPath
+    [string]$StatisticsSnapshotPath,
+    [string]$RulesPackPath,
+    [string]$RulesManifestPath
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -154,8 +156,13 @@ Alt+Shift+H 显示或收起游戏侧栏，支持无边框或窗口模式。
 缺少 WebView2 时从微软官网安装 Evergreen Runtime：
 https://developer.microsoft.com/microsoft-edge/webview2/
 "@ | Set-Content -LiteralPath (Join-Path $stage '开始使用.txt') -Encoding UTF8
+if ($RulesPackPath -or $RulesManifestPath) {
+    if (-not ($RulesPackPath -and $RulesManifestPath -and $StatisticsSnapshotPath)) { throw 'Stage rules together with their manifest and a compatible statistics snapshot.' }
+}
 if ($StatisticsSnapshotPath) {
-    & $NodePath (Join-Path $projectRoot 'scripts\stage-statistics.mjs') $stage $StatisticsSnapshotPath
+    $inputs = @($stage, $StatisticsSnapshotPath)
+    if ($RulesPackPath) { $inputs += @($RulesPackPath, $RulesManifestPath) }
+    & $NodePath (Join-Path $projectRoot 'scripts\stage-statistics.mjs') @inputs
     if ($LASTEXITCODE -ne 0) { throw 'The supplied statistics snapshot did not pass validation.' }
 }
 $manifest = [ordered]@{ appVersion = $AppVersion; nodeVersion = $nodeVersion; webView2SdkVersion = $sdkVersion; architecture = 'win-x64'; builtAt = (Get-Date).ToUniversalTime().ToString('o') }
