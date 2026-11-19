@@ -88,23 +88,31 @@ def make_pack(patch, lists, definitions, english, chinese, strings):
     return {"schemaVersion": 1, "clientPatch": patch, "augments": sorted(result, key=lambda row: row["gameDataId"])}
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("publisher", type=Path)
-    args = parser.parse_args()
-    notices = json.loads((args.publisher / "announcements/index-v3.json").read_bytes())
-    versions = [tuple(map(int, r["toVersion"].split(".")[:2])) for r in notices["entries"] if r.get("format") == 2]
-    major, minor = max(versions)
+def publish(publisher):
+    notices = json.loads((publisher / "announcements/index-v3.json").read_bytes())
+    official = [r for r in notices["entries"] if r.get("format") == 2]
+    major, minor = max(tuple(map(int, r["toVersion"].split(".")[:2])) for r in official)
     patch = f"{major}.{minor}"
-    directory = args.publisher / "rules"
+    current = [r for r in official if r["toVersion"].startswith(patch + ".")]
+    patch_title = f"{major + 10}.{minor} 官网更新公告"
+    patch_notice = next((r for r in current if r["title"].startswith(patch_title)
+                         and re.fullmatch(r"https://lol\.qq\.com/gicp/news/\d+/\d+\.html",
+                                          r.get("sourceUrl") or "")), None)
+    if not patch_notice:
+        raise ValueError(f"Missing official patch notice for {patch}")
+    facts = sorted((r["id"], r["sha256"]) for r in current)
+    announcement_revision = hashlib.sha256(json.dumps(facts).encode()).hexdigest()
+    directory = publisher / "rules"
     directory.mkdir(exist_ok=True)
     index = directory / "index.json"
-    if index.exists():
-        prior = json.loads(index.read_bytes())
-        if tuple(map(int, prior["clientPatch"].split("."))) >= (major, minor):
-            existing = directory / (prior["sha256"] + ".json")
-            if hashlib.sha256(existing.read_bytes()).hexdigest() != prior["sha256"]:
-                raise ValueError("Published rules digest mismatch")
+    prior = json.loads(index.read_bytes()) if index.exists() else {}
+    if prior:
+        existing = directory / (prior["sha256"] + ".json")
+        if hashlib.sha256(existing.read_bytes()).hexdigest() != prior["sha256"]:
+            raise ValueError("Published rules digest mismatch")
+        prior_patch = tuple(map(int, prior["clientPatch"].split(".")))
+        if prior_patch > (major, minor) or (prior_patch == (major, minor)
+                and prior.get("announcementRevision") == announcement_revision):
             return
     base = f"https://raw.communitydragon.org/{patch}"
     client = "plugins/rcp-be-lol-game-data/global/"
@@ -113,14 +121,21 @@ def main():
                      download(base, client+"default/v1/cherry-augments.json"),
                      download(base, client+"zh_cn/v1/cherry-augments.json"),
                      download(base, "game/zh_cn/data/menu/en_us/lol.stringtable.json"))
+    pack["officialAnnouncement"] = {"version": patch_notice["toVersion"], "url": patch_notice["sourceUrl"]}
     body = json.dumps(pack, ensure_ascii=False, separators=(",", ":")).encode()
     digest = hashlib.sha256(body).hexdigest()
-    (directory / (digest + ".json")).write_bytes(body)
-    manifest = dict(schemaVersion=1, clientPatch=patch, sha256=digest, updatedAt=datetime.now(timezone.utc).isoformat())
+    updated_at = prior.get("updatedAt")
+    if digest != prior.get("sha256"):
+        (directory / (digest + ".json")).write_bytes(body)
+        updated_at = datetime.now(timezone.utc).isoformat()
+    manifest = dict(schemaVersion=1, clientPatch=patch, sha256=digest, updatedAt=updated_at,
+                    announcementRevision=announcement_revision)
     temp = directory / "index.tmp"
     temp.write_text(json.dumps(manifest, indent=2)+"\n", encoding="utf-8")
     os.replace(temp, index)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("publisher", type=Path)
+    publish(parser.parse_args().publisher)
