@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import {createHash} from 'node:crypto';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {BackgroundSidebar, SessionValidationError, SessionConflictError} from '../server/sidebar.mjs';
 import {createLocalServer} from '../server/http.mjs';
 
 const data = JSON.parse(await readFile(new URL('../dist/data.json', import.meta.url), 'utf8'));
 const itemsCatalog = JSON.parse(await readFile(new URL('../dist/items.json', import.meta.url), 'utf8'));
+const {version:appVersion} = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const noAttack = {id:'fixture_no_attack', name:'隔离测试：无法普攻', description:'你无法进行普通攻击。', availability:'current', recommendable:true};
 const offers = [noAttack.id, 'with_haste', 'ravenous_bind'];
 function setup(options = {}) {
@@ -25,6 +28,77 @@ async function folder(t) {
   t.after(() => rm(directory, {recursive:true, force:true}));
   return directory;
 }
+
+test('new browsing rules are visible immediately while the active game keeps its offers and confirmed choices', async t => {
+  const {sidebar, collector, update} = setup();
+  const retired = {...noAttack, availability:'retired-in-source', recommendable:false, retiredPatch:'26.22'};
+  const fresh = {...noAttack, id:'fixture_new_augment', name:'新资料强化符文'};
+  const catalog = (augmentPatch, augments) => {
+    const content = JSON.stringify({meta:{augmentPatch}, augments});
+    return {content, augmentPatch, revision:createHash('sha256').update(content).digest('hex')};
+  };
+  const original = catalog('26.21', [...data.augments, noAttack]);
+  const nextAugments = [...data.augments, retired, fresh];
+  const next = catalog('26.22', nextAugments);
+  let browsing = original, match = original;
+  const server = await createLocalServer({collector, sidebar, getCatalog:scope => scope === 'match' ? match : browsing,
+    staticDirectory:fileURLToPath(new URL('../dist', import.meta.url))});
+  t.after(() => server.close());
+  const request = (endpoint, options) => fetch(`http://127.0.0.1:${server.port}${endpoint}`, options);
+  const authorization = {headers:{'X-HexGuide-Session':server.token}};
+  const status = () => request('/api/status', authorization).then(response => response.json());
+
+  await sidebar.scan();
+  await sidebar.confirmOffer(confirmation(sidebar.getModel()));
+  sidebar.scanner = async () => ({status:'recognized', proposals:['recursion','firebrand','thread_the_needle'].map(id => ({id}))});
+  await sidebar.scan();
+  const before = sidebar.getModel();
+  assert.equal(before.pendingOffers.length, 1);
+  browsing = next;
+  sidebar.stageCatalog(nextAugments, () => { match = next; });
+  assert.equal((await request('/api/status')).status, 401);
+  assert.deepEqual(await status(), {appVersion, catalogRevision:next.revision, augmentPatch:'26.22', matchCatalogRevision:original.revision, matchAugmentPatch:'26.21'});
+  assert.deepEqual(await request('/api/health', authorization).then(response => response.json()), {ok:true, version:appVersion, localOnly:true});
+  for (const [endpoint, expected] of [['/data.json', next], ['/data.json?scope=match', original]]) {
+    const response = await request(endpoint);
+    assert.equal(response.headers.get('X-HexGuide-Catalog-Revision'), expected.revision);
+    assert.equal(await response.text(), expected.content);
+  }
+  assert.equal(sidebar.getModel().sessionRevision, before.sessionRevision);
+  assert.deepEqual(sidebar.getModel().owned.map(augment => augment.id), [noAttack.id]);
+  assert.deepEqual(sidebar.getModel().pendingOffers, before.pendingOffers);
+
+  update({connection:{status:'waiting'}, phase:'None', gameId:null, gameTime:null});
+  assert.deepEqual(sidebar.getSession().owned, [noAttack.id]);
+  assert.equal((await status()).matchCatalogRevision, original.revision);
+  update({connection:{status:'connected'}, phase:'InProgress', stage:'live', gameId:'new-game', gameTime:1});
+  const current = sidebar.getModel();
+  assert.equal(current.gameId, 'new-game');
+  assert.deepEqual(current.owned, []);
+  assert.deepEqual(current.pendingOffers, []);
+  assert.equal((await status()).matchCatalogRevision, next.revision);
+  assert.equal((await request('/data.json?scope=match', {method:'HEAD'})).headers.get('X-HexGuide-Catalog-Revision'), next.revision);
+  const staleSelection = await request('/api/session', {method:'POST', headers:authorization.headers,
+    body:JSON.stringify({owned:[noAttack.id], route:'auto', expectedGameId:before.gameId,
+      expectedGameEpoch:before.gameEpoch, expectedRevision:before.sessionRevision})});
+  assert.equal(staleSelection.status, 409);
+  assert.deepEqual((await staleSelection.json()).session, sidebar.getSession());
+  await assert.rejects(sidebar.setSession({owned:[noAttack.id], route:'auto'}), SessionValidationError);
+  assert.deepEqual((await sidebar.setSession({owned:[fresh.id], route:'auto'})).owned, [fresh.id]);
+});
+
+test('restart with a newer catalog retains already owned retired augments from the same game', async t => {
+  const dataDirectory = await folder(t);
+  await writeFile(path.join(dataDirectory, 'session.json'), JSON.stringify({gameId:'fixture-123', revision:4, route:'tank', owned:[noAttack.id]}));
+  const retired = {...noAttack, availability:'retired-in-source', recommendable:false, retiredPatch:'26.22'};
+  const {sidebar} = setup({dataDirectory, data:{...data, augments:[...data.augments, retired]}});
+  await sidebar.load();
+  t.after(() => sidebar.stop());
+  assert.deepEqual(sidebar.getModel().owned.map(augment => augment.id), [noAttack.id]);
+  assert.deepEqual((await sidebar.setSession({owned:[noAttack.id], route:'spell'})).owned, [noAttack.id]);
+  await sidebar.setSession({owned:[], route:'auto'});
+  await assert.rejects(sidebar.setSession({owned:[noAttack.id], route:'auto'}), SessionValidationError);
+});
 
 test('atomic confirmation returns a recalculated build and next list, then reacts to opponent equipment', async t => {
   const dataDirectory = await folder(t);

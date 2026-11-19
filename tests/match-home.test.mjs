@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 import {enrichData,recommend,getSynergy,getChampionTags,TAG_LABELS} from '../dist/engine.js';
-import {getVersionInfo} from '../dist/version.js';
+import {formatDataTime,getVersionInfo} from '../dist/version.js';
 import {replacePreservingFocus} from '../dist/focus-preservation.js';
 import {getStaticAugmentStatistics} from '../dist/build-evidence.js';
 import {rankAugmentCandidates} from '../dist/recommendation-policy.js';
@@ -16,20 +16,20 @@ const active=catalog.augments.filter(a=>!a.isInternalTemplate&&a.availability===
 async function appHarness(hash='',options={}){
   const storage=new Map(),nodes=new Map(),clicks=[],changes=[],hashListeners=[];
   const document=focusDocument();
-  let liveContext,syncContext,manualChanges=0,loading=false,pulls=0;
+  let liveContext,syncContext,manualChanges=0,loading=false,pulls=0,catalogChanges=0;
   const node=selector=>{if(!nodes.has(selector))nodes.set(selector,focusElement(document,{id:selector.startsWith('#')?selector.slice(1):'',textContent:'',hidden:false,value:'',open:false,scrolls:0,classList:{add(){},remove(){},toggle(){}},addEventListener(){},setAttribute(){},removeAttribute(){},showModal(){this.open=true;},close(){this.open=false;},querySelector(){return null;},insertAdjacentHTML(_position,html){this.innerHTML+=html;},scrollIntoView(){this.scrolls++;}}));return nodes.get(selector);};
   const nav=['live','library','champions','stats','synergy','compare'].map(tab=>({...node(`nav-${tab}`),dataset:{nav:tab}}));
   const location={hash};
   const context=vm.createContext({
-    enrichData,recommend,getSynergy,getChampionTags,TAG_LABELS,getVersionInfo,replacePreservingFocus,getStaticAugmentStatistics,rankAugmentCandidates,
-    createStatisticsView:()=>({html:()=>'<div class="statistics-fixture">英雄胜率</div>'}),
-    createLiveController:controllerOptions=>{liveContext=controllerOptions;return {isLoadingPreview:()=>loading,html:()=>`<div class="live-fixture">已确认 ${controllerOptions.getOwned().length} 个海克斯 · ${controllerOptions.getChampion()?.name}</div>`,manualChampion(){manualChanges++;},confirmCandidate:options.confirmCandidate,resetSession:options.resetSession};},
+    enrichData,recommend,getSynergy,getChampionTags,TAG_LABELS,formatDataTime,getVersionInfo,replacePreservingFocus,getStaticAugmentStatistics,rankAugmentCandidates,
+    createStatisticsView:()=>({html:()=>'<div class="statistics-fixture">英雄胜率</div>',replaceCatalog(){}}),
+    createLiveController:controllerOptions=>{liveContext=controllerOptions;return {isLoadingPreview:()=>loading,html:()=>`<div class="live-fixture">已确认 ${controllerOptions.getOwned().length} 个海克斯 · ${controllerOptions.getChampion()?.name}</div>`,catalogChanged(){catalogChanges++;},getItemMetadata:()=>({version:'16.21.1'}),manualChampion(){manualChanges++;},confirmCandidate:options.confirmCandidate,resetSession:options.resetSession};},
     createSessionSync:options=>{syncContext=options;return {publish(){},pull(){pulls++;},close(){}};},
     localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},
-    sessionStorage:{getItem:()=>null},location,
+    sessionStorage:{getItem:()=>options.fetcher?'fixture-token':null},location,
     document:Object.assign(document,{title:'',querySelector:node,querySelectorAll:selector=>selector==='[data-nav]'?nav:selector==='dialog'?[node('#detail-dialog'),node('#picker-dialog')]:[],addEventListener:(name,callback)=>{if(name==='click')clicks.push(callback);if(name==='change')changes.push(callback);}}),
     window:{addEventListener:(name,callback)=>{if(name==='hashchange')hashListeners.push(callback);},scrollTo(){}},
-    fetch:async url=>{if(url==='./statistics.json'){if(options.statistics instanceof Error)throw options.statistics;return {ok:Boolean(options.statistics),json:async()=>structuredClone(options.statistics)};}assert.equal(url,'./data.json');return {ok:true,json:async()=>structuredClone(options.catalog||catalog)};},
+    fetch:async(url,request)=>{if(options.fetcher)return options.fetcher(url,request);if(url==='./statistics.json'){if(options.statistics instanceof Error)throw options.statistics;return {ok:Boolean(options.statistics),json:async()=>structuredClone(options.statistics)};}assert.equal(url,'./data.json');return {ok:true,json:async()=>structuredClone(options.catalog||catalog)};},
     setTimeout:()=>1,clearTimeout(){},matchMedia:()=>({matches:true}),console
   });
   vm.runInContext(source.replace(/^import .*;\r?\n/gm,''),context);
@@ -48,13 +48,128 @@ async function appHarness(hash='',options={}){
     pendingConfirmed(){liveContext.onPendingConfirmed();},
     sessionReset(){liveContext.onSessionReset();},
     refreshLive(){liveContext.renderLive();},
+    refreshCatalog:()=>context.refreshCatalog(),
     stage(value){loading=value;liveContext.onStageChange();},
     get buildExpanded(){return liveContext.getBuildExpanded();},
     get selectedAugment(){return liveContext.getSelectedAugment();},
     get manualChanges(){return manualChanges;},
-    get pulls(){return pulls;}
+    get pulls(){return pulls;},
+    get catalogChanges(){return catalogChanges;}
   };
 }
+
+test('live catalog polling keeps the match pinned, updates open sources, and adopts a new revision at the match boundary',async()=>{
+  const previous=structuredClone(catalog),updated=structuredClone(catalog);
+  previous.meta.augmentPatch='26.22';updated.meta.augmentPatch='26.23';
+  updated.meta.updatedAt='2026-11-20T15:00:00Z';
+  updated.meta.sources=[{name:'新版海克斯库规则来源',url:'https://example.test/rules'}];
+  const [owned,first,second,third,retired]=active;
+  const added={...first,id:'new_catalog_aug',name:'新版海克斯'};
+  // Put both cards at the top of the paginated reference list.
+  updated.augments=updated.augments.filter(augment=>augment.id!==retired.id);
+  updated.augments.unshift(added,{...retired,availability:'retired-in-source',retiredPatch:'26.23',recommendable:false});
+  Object.assign(updated.augments.find(augment=>augment.id===owned.id),{availability:'retired-in-source',retiredPatch:'26.23',recommendable:false});
+  const samePatch=structuredClone(updated);
+  samePatch.meta.updatedAt='2026-11-20T21:00:00Z';
+  let browsing='before',match='before',appVersion;
+  const requests=[];
+  const app=await appHarness('#live',{async fetcher(url,request){
+    requests.push(url);
+    if(url==='/api/status'){
+      assert.equal(request.headers['X-Hexguide-Session'],'fixture-token');
+      return {ok:true,json:async()=>({catalogRevision:browsing,matchCatalogRevision:match,appVersion})};
+    }
+    if(url.startsWith('/api/')||url==='./statistics.json')return {ok:false};
+    assert.ok(['./data.json','./data.json?scope=match'].includes(url));
+    const revision=url.endsWith('?scope=match')?match:browsing;
+    return {ok:true,headers:new Headers({'X-HexGuide-Catalog-Revision':revision}),json:async()=>structuredClone(revision==='before'?previous:revision==='same-patch'?samePatch:updated)};
+  }});
+  app.sync({owned:[owned.id],route:'tank',gameId:'fixture-game'});
+  app.offers([first.id,second.id,third.id],{pendingId:'scope-before',gameId:'fixture-game',revision:4});
+  app.click('sources');
+  assert.match(app.node('#detail-content').innerHTML,/<dt>桌面程序<\/dt><dd>版本待核实<\/dd>/);
+  assert.match(app.node('#detail-content').innerHTML,/<dt>本局海克斯规则<\/dt><dd>26\.22<\/dd>/);
+  appVersion='7.8.9';await app.refreshCatalog();
+  assert.match(app.node('#detail-content').innerHTML,/<dt>桌面程序<\/dt><dd>7\.8\.9<\/dd>/);
+  browsing='after';await app.refreshCatalog();
+  assert.match(app.node('#version-label').textContent,/26\.22/);
+  assert.match(app.html(),/data-pending-id="scope-before"/);
+  assert.equal(app.catalogChanges,0);
+  assert.match(app.node('#detail-content').innerHTML,/<dt>海克斯库规则<\/dt><dd>26\.23<\/dd>/);
+  assert.match(app.node('#detail-content').innerHTML,/<dt>装备资源<\/dt><dd>16\.21\.1<\/dd>/);
+  assert.match(app.node('#detail-content').innerHTML,/新版海克斯库规则来源/);
+  assert.match(app.node('#detail-content').innerHTML,new RegExp(`海克斯库收录 <strong>${updated.augments.filter(augment=>!augment.isInternalTemplate).length} 条`));
+  app.click('close-detail');
+  app.navigate('library');
+  assert.match(app.node('#version-label').textContent,/26\.23/);
+  app.change('scope-filter','all');
+  const libraryAction=id=>app.node('#library-results').innerHTML.match(new RegExp(`<button[^>]*data-action="toggle-owned" data-id="${id}"[^>]*>`))?.[0]||'';
+  assert.match(libraryAction(added.id),/disabled title="本局规则中不可选"/);
+  assert.match(libraryAction(retired.id),/data-action="toggle-owned"/);
+  assert.doesNotMatch(libraryAction(retired.id),/disabled/);
+  app.click('toggle-owned',{id:added.id});
+  assert.deepEqual(JSON.parse(app.storage.get('hexguide-session')).owned,[owned.id]);
+  app.navigate('compare');
+  assert.match(app.node('#version-label').textContent,/26\.22/);
+  assert.match(app.html(),/data-pending-id="scope-before"/);
+  app.click('pick-candidate',{slot:'0'});
+  assert.doesNotMatch(app.node('#picker-list').innerHTML,/data-id="new_catalog_aug"/);
+  app.click('close-picker');
+  const dataRequests=requests.filter(url=>url.includes('data.json')).length;
+  await app.refreshCatalog();
+  assert.equal(requests.filter(url=>url.includes('data.json')).length,dataRequests);
+  match='after';await app.refreshCatalog();
+  app.navigate('live');
+  assert.match(app.node('#version-label').textContent,/26\.23/);
+  assert.match(app.html(),/已确认 1 个海克斯/);
+  assert.deepEqual(JSON.parse(app.storage.get('hexguide-session')),{gameId:'fixture-game',championId:'Ahri',owned:[owned.id],route:'tank'});
+  assert.equal(app.catalogChanges,1);
+  app.click('pick-candidate',{slot:'0'});
+  assert.match(app.node('#picker-list').innerHTML,/data-id="new_catalog_aug"/);
+  app.click('close-picker');
+  app.click('sources');
+  assert.doesNotMatch(app.node('#detail-content').innerHTML,/本局规则同步时间/);
+  browsing='same-patch';await app.refreshCatalog();
+  const sources=app.node('#detail-content').innerHTML;
+  assert.ok(sources.includes(`<dt>海克斯库规则同步时间</dt><dd>${formatDataTime(samePatch.meta.updatedAt)}</dd>`));
+  assert.ok(sources.includes(`<dt>本局规则同步时间</dt><dd>${formatDataTime(updated.meta.updatedAt)}</dd>`));
+  assert.equal(app.catalogChanges,1);
+});
+
+test('overlapping catalogue checks accept the exact fetched revision and keep an open picker current',async()=>{
+  const previous=structuredClone(catalog),updated=structuredClone(catalog);
+  previous.meta.augmentPatch='26.22';updated.meta.augmentPatch='26.24';
+  const removed=active[0];
+  Object.assign(updated.augments.find(augment=>augment.id===removed.id),{availability:'retired-in-source',retiredPatch:'26.24',recommendable:false});
+  let statusRevision='before',fetchedRevision='before',loads=0,responseGate;
+  const app=await appHarness('#live',{async fetcher(url){
+    if(url==='/api/status')return {ok:true,json:async()=>({catalogRevision:statusRevision,matchCatalogRevision:statusRevision})};
+    if(url.startsWith('/api/')||url==='./statistics.json')return {ok:false};
+    loads++;
+    if(responseGate)await responseGate;
+    const revision=fetchedRevision;
+    return {ok:true,headers:new Headers({'X-HexGuide-Catalog-Revision':revision}),json:async()=>structuredClone(revision==='before'?previous:updated)};
+  }});
+  app.click('pick-candidate',{slot:'0'});
+  assert.ok(app.node('#picker-list').innerHTML.includes(removed.name));
+  app.node('#picker-search').value=removed.name;
+  let release;
+  responseGate=new Promise(resolve=>{release=resolve;});
+  statusRevision='advertised';fetchedRevision='newer';
+  const check=app.refreshCatalog();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(loads,2);
+  await app.refreshCatalog();
+  assert.equal(loads,2);
+  release();await check;
+  assert.match(app.node('#version-label').textContent,/26\.24/);
+  assert.equal(app.node('#picker-search').value,removed.name);
+  assert.doesNotMatch(app.node('#picker-list').innerHTML,new RegExp(`data-id="${removed.id}"`));
+  statusRevision='newer';
+  const loadsAfterCheck=loads;
+  await app.refreshCatalog();
+  assert.equal(loads,loadsAfterCheck);
+});
 
 test('match home prioritizes decisions and keeps secondary session controls accessible across updates',async()=>{
   const app=await appHarness();

@@ -304,7 +304,7 @@ async function boundedFetch(url, options) {
 /** No background refresh: only ensure(currentChampion) can make a request. */
 export class RecommendationRepository {
   #entries = new Map(); #failures = new Map(); #referenceFailures = new Map(); #pending = new Map(); #static;
-  #mayhemPending = new Set(); #referencePending = new Set(); #catalog;
+  #mayhemPending = new Set(); #referencePending = new Set(); #catalog; #statisticsSnapshot;
   #ids = new Map(); #numbers = new Map(); #loadPromise; #writeTail = Promise.resolve();
   #client; #referenceClient; #referenceClientPromise; #now; #patch; #file; #closed = false; #storageStatus;
   constructor({dataDirectory, statisticsSnapshot, champions = [], augments = [], client, referenceClient, now = Date.now, patch = '16.21'} = {}) {
@@ -321,9 +321,13 @@ export class RecommendationRepository {
       if (champion.key != null && Number(champion.key) !== numeric) continue;
       this.#ids.set(champion.id, numeric); this.#numbers.set(String(numeric), champion.id);
     }
+    this.#statisticsSnapshot = statisticsSnapshot;
+    this.replaceAugments(augments);
+  }
+  replaceAugments(augments) {
     this.#catalog = new Map(augments.filter(row => SLUG.test(row?.id) && row.recommendable !== false
       && !row.isInternalTemplate && !row.retiredPatch && (!row.availability || row.availability === 'current')).map(row => [row.id, {...row}]));
-    this.#static = localStatistics(statisticsSnapshot, this.#ids, this.#catalog, patch) ?? new Map();
+    this.#static = localStatistics(this.#statisticsSnapshot, this.#ids, this.#catalog, this.#patch) ?? new Map();
   }
   replaceStatistics(snapshot) {
     const patch = snapshot?.meta?.patch;
@@ -337,6 +341,7 @@ export class RecommendationRepository {
       this.#referenceFailures.clear();
       this.#persist();
     }
+    this.#statisticsSnapshot = snapshot;
     this.#static = next;
   }
   #time() { return integer(this.#now(), 1); }

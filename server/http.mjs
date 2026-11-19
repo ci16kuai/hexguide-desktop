@@ -17,9 +17,13 @@ function equalToken(received, expected) {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-export async function createLocalServer({collector, scanner, sidebar, appearance, layout, statistics, announcements, dataset, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
+export async function createLocalServer({collector, scanner, sidebar, appearance, layout, statistics, announcements, dataset, getCatalog, staticDirectory, port = 0, token = randomBytes(32).toString('hex')} = {}) {
   if (!collector?.getSnapshot) throw new TypeError('A collector is required.');
-  const root = await realpath(staticDirectory);
+  const [root, packageJson] = await Promise.all([
+    realpath(staticDirectory),
+    readFile(new URL('../package.json', import.meta.url), 'utf8'),
+  ]);
+  const {version:appVersion} = JSON.parse(packageJson);
   let expectedHost;
   const send = (response, status, payload) => {
     response.writeHead(status, {'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store'});
@@ -33,8 +37,8 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
     if (request.headers.host !== expectedHost) return send(response, 403, {error:'Invalid host.'});
     const origin = request.headers.origin;
     if (origin && origin !== `http://${expectedHost}`) return send(response, 403, {error:'Foreign origin is not permitted.'});
-    let pathname;
-    try { pathname = decodeURIComponent(new URL(request.url, `http://${expectedHost}`).pathname); }
+    let url, pathname;
+    try { url = new URL(request.url, `http://${expectedHost}`); pathname = decodeURIComponent(url.pathname); }
     catch { return send(response, 400, {error:'Invalid URL.'}); }
     const writeRequest = ['/api/ocr', '/api/recognize-once', '/api/session', '/api/session/confirm', '/api/session/reset', '/api/sidebar/ocr', '/api/sidebar/selection', '/api/sidebar/panel', '/api/sidebar/life', '/api/appearance', '/api/layout', '/api/announcements/check', '/api/announcements/read'].includes(pathname) && request.method === 'POST';
     if (!writeRequest && (!['GET', 'HEAD'].includes(request.method) || request.headers['transfer-encoding'] || Number(request.headers['content-length'] || 0) !== 0)) {
@@ -111,7 +115,12 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
           return send(response, conflict ? 409 : error instanceof SessionValidationError ? 400 : 500, {error:conflict ? 'The current assistant session has changed.' : error instanceof SessionValidationError ? 'Invalid assistant state.' : 'Assistant state could not be saved.', ...(conflict ? {session:sidebar.getSession()} : {})});
         }
       }
-      if (pathname === '/api/health') return send(response, 200, {ok:true, version:'1.17.16', localOnly:true});
+      if (pathname === '/api/health') return send(response, 200, {ok:true, version:appVersion, localOnly:true});
+      if (pathname === '/api/status' && getCatalog) {
+        const catalog = getCatalog(), match = getCatalog('match');
+        return send(response, 200, {appVersion, catalogRevision:catalog.revision, augmentPatch:catalog.augmentPatch,
+          matchCatalogRevision:match.revision, matchAugmentPatch:match.augmentPatch});
+      }
       if (pathname === '/api/live') return send(response, 200, collector.getSnapshot());
       if (pathname === '/api/sidebar') {
         if (!sidebar) return send(response, 503, {error:'Sidebar is unavailable.'});
@@ -136,9 +145,11 @@ export async function createLocalServer({collector, scanner, sidebar, appearance
       if (pathname === '/api/statistics/status') return statistics ? send(response, 200, statistics.getStatus()) : send(response, 503, {error:'Statistics updates are unavailable.'});
       return send(response, 404, {error:'Unknown endpoint.'});
     }
-    if (pathname === '/data.json' && dataset) {
-      const content=JSON.stringify(dataset);
-      response.writeHead(200, {'Content-Type':MIME['.json'], 'Cache-Control':'no-store', 'Content-Length':Buffer.byteLength(content)});
+    if (pathname === '/data.json' && (getCatalog || dataset)) {
+      const catalog = getCatalog?.(url.searchParams.get('scope'));
+      const content = catalog?.content ?? JSON.stringify(dataset);
+      response.writeHead(200, {'Content-Type':MIME['.json'], 'Cache-Control':'no-store', 'Content-Length':Buffer.byteLength(content),
+        ...(catalog ? {'X-HexGuide-Catalog-Revision':catalog.revision} : {})});
       return response.end(request.method==='HEAD' ? undefined : content);
     }
     if (pathname === '/statistics.json' && statistics) {

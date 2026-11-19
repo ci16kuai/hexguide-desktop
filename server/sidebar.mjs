@@ -66,7 +66,7 @@ export class BackgroundSidebar {
     this.scanFailureCount = 0;
     this.lastScanDuration = null;
     this.champions = new Map((data.champions || []).map(champion => [champion.id, champion]));
-    this.augments = new Map(enrichData({augments:(data.augments || []).filter(eligible)}).augments.map(augment => [augment.id, augment]));
+    this.setAugmentDefinitions(data.augments || []);
     this.session = {owned:[], route:'auto', gameId:null, revision:0};
     this.purchaseTarget = null;
     this.snapshotBlocked = false;
@@ -96,13 +96,43 @@ export class BackgroundSidebar {
   get offers() { return (this.pendingOffers.latest?.ids || []).map(id => ({id,name:this.augments.get(id).name,confidence:'exact'})); }
   get offerToken() { return this.pendingOffers.latest?.offerToken || null; }
 
+  setAugmentDefinitions(augments) {
+    const retired = augment => augment.retiredPatch && !augment.isInternalTemplate && augment.acquisition !== 'headliner-only';
+    const definitions = enrichData({augments:augments.filter(augment => eligible(augment) || retired(augment))}).augments;
+    this.augments = new Map(definitions.filter(eligible).map(augment => [augment.id, augment]));
+    this.retiredAugments = new Map(definitions.filter(retired).map(augment => [augment.id, augment]));
+  }
+
+  getOwnedAugment(id) { return this.augments.get(id) ?? this.retiredAugments.get(id); }
+
+  stageCatalog(augments, onApply) {
+    this.pendingCatalog = {augments, onApply};
+    this.observe();
+  }
+
+  applyPendingCatalog(boundary) {
+    const {augments, onApply} = this.pendingCatalog;
+    this.pendingCatalog = null;
+    this.setAugmentDefinitions(augments);
+    if (!boundary) {
+      this.session.owned = this.session.owned.filter(id => this.augments.has(id));
+      this.session.revision++;
+      this.generation++;
+      this.pendingOffers.clear();
+      this.consumedOfferKey = null;
+      this.revokeCaptureEvidence('强化符文资料已更新，等待下一轮识别。');
+    }
+    onApply();
+  }
+
   async load() {
     if (!this.dataDirectory) return this;
     try {
       const file = path.join(this.dataDirectory, 'session.json');
       const saved = JSON.parse(await readFile(file, 'utf8'));
-      const selected = this.validateSession({owned:saved.owned, route:saved.route});
-      this.session = {...selected, gameId:gameId(saved.gameId), revision:Number.isSafeInteger(saved.revision) && saved.revision >= 0 ? saved.revision : 0};
+      const savedGameId = gameId(saved.gameId);
+      const selected = this.validateSession({owned:saved.owned, route:saved.route}, {restoreGame:Boolean(savedGameId)});
+      this.session = {...selected, gameId:savedGameId, revision:Number.isSafeInteger(saved.revision) && saved.revision >= 0 ? saved.revision : 0};
       const target = saved.purchaseTarget;
       if (this.session.gameId && target && isPurchaseTarget(target.itemId,this.champions.get(target.championId),this.itemsCatalog)) {
         const ownedAugmentIds = purchaseAugmentIds(target.ownedAugmentIds,this.augments);
@@ -127,11 +157,18 @@ export class BackgroundSidebar {
     return this;
   }
 
-  validateSession(value) {
+  validateSession(value, {restoreGame = false, checkGuards = false} = {}) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['owned', 'route', 'expectedRevision', 'expectedGameEpoch', 'expectedGameId'].includes(key)) || !Array.isArray(value.owned) || value.owned.length > 12 || !ROUTES.has(value.route)) throw new SessionValidationError('Invalid session.');
-    if (value.owned.some(id => typeof id !== 'string' || !this.augments.has(id)) || new Set(value.owned).size !== value.owned.length) throw new SessionValidationError('Unknown or duplicate augment.');
+    if (value.owned.some(id => typeof id !== 'string') || new Set(value.owned).size !== value.owned.length) throw new SessionValidationError('Invalid or duplicate augment ID.');
     for (const key of ['expectedRevision', 'expectedGameEpoch']) if (key in value && (!Number.isSafeInteger(value[key]) || value[key] < 0)) throw new SessionValidationError('Invalid session guard.');
     if ('expectedGameId' in value && value.expectedGameId !== null && gameId(value.expectedGameId) !== value.expectedGameId) throw new SessionValidationError('Invalid game guard.');
+    // A concurrent catalog activation can retire IDs from a stale write. Send
+    // the current session so the client can reconcile the old edit once.
+    if (checkGuards && ('expectedRevision' in value && value.expectedRevision !== this.session.revision
+      || 'expectedGameEpoch' in value && value.expectedGameEpoch !== this.gameEpoch
+      || 'expectedGameId' in value && value.expectedGameId !== this.session.gameId)) throw new SessionConflictError('The assistant state has changed.');
+    const ownsRetired = id => this.retiredAugments.has(id) && (restoreGame || this.session.owned.includes(id));
+    if (value.owned.some(id => !(this.augments.has(id) || ownsRetired(id)))) throw new SessionValidationError('Unknown augment.');
     return {owned:[...value.owned], route:value.route};
   }
 
@@ -191,7 +228,7 @@ export class BackgroundSidebar {
   }
 
   observe() {
-    const live = this.collector.getSnapshot();
+    let live = this.collector.getSnapshot();
     const currentId = gameId(live.gameId);
     const inGame = ['GameStart', 'InProgress', 'Reconnect'].includes(live.phase);
     const last = this.previous;
@@ -207,7 +244,15 @@ export class BackgroundSidebar {
     // that fallback while retaining the existing recognition reset boundary.
     const recoveringTarget = loadingStarted && !changedGame && !leftGame && !timeReset && currentId && currentId === this.session.gameId
       ? this.purchaseTarget : null;
+    const newMatch = changedGame || timeReset || (loadingStarted && live.phase === 'GameStart' && !recoveringTarget
+      && (!this.session.gameId || currentId && currentId !== this.session.gameId));
+    const catalogChanged = this.pendingCatalog && (leftGame || newMatch || (!inGame && !last?.inGame && !this.session.gameId));
     if (boundary) { this.clearGame(); this.purchaseTarget = recoveringTarget; changed = true; }
+    if (catalogChanged) {
+      this.applyPendingCatalog(boundary);
+      live = this.collector.getSnapshot();
+      changed = true;
+    }
     if (inGame && currentId && this.session.gameId !== currentId) {
       this.session.gameId = currentId;
       this.session.revision++;
@@ -224,7 +269,7 @@ export class BackgroundSidebar {
     // erase choices, and a manual correction blocks future snapshot additions.
     const observedTime = Date.parse(live.observedAt || '');
     const selectedIds = live.augments?.ids;
-    if (!this.snapshotBlocked && currentId && currentId === this.session.gameId && live.phase === 'InProgress'
+    if (!catalogChanged && !this.snapshotBlocked && currentId && currentId === this.session.gameId && live.phase === 'InProgress'
       && live.stage === 'live' && live.connection?.status === 'connected' && live.mode?.known === true && live.mode.isMayhem === true
       && this.champions.has(live.championId) && live.augments?.status === 'detected'
       && Number.isFinite(observedTime) && this.now() - observedTime <= 10000 && observedTime - this.now() <= 1000
@@ -430,7 +475,7 @@ export class BackgroundSidebar {
     const live = this.observe(), scope = this.getPanelSelection(live), lease = this.panelLease;
     if (scope.status !== 'watching' || !lease) throw new SessionConflictError('The current panel scope has changed.');
     const champion = this.champions.get(live.championId);
-    const owned = this.session.owned.map(id => this.augments.get(id)).filter(Boolean);
+    const owned = this.session.owned.map(id => this.getOwnedAugment(id)).filter(Boolean);
     const {ranked, patch} = this.rankOffers(lease.ids, champion, owned);
     const ranks = new Map(ranked.map(row => [row.offer.id,row.rank]));
     const identity = id => ({id, iconKey:this.augments.get(id)?.icon || '', kind:'augment'});
@@ -509,11 +554,8 @@ export class BackgroundSidebar {
   }
 
   async setSession(value, {reset = false} = {}) {
-    const selected = this.validateSession(value);
     const live = this.observe();
-    if ('expectedRevision' in value && value.expectedRevision !== this.session.revision
-      || 'expectedGameEpoch' in value && value.expectedGameEpoch !== this.gameEpoch
-      || 'expectedGameId' in value && value.expectedGameId !== this.session.gameId) throw new SessionConflictError('The assistant state has changed.');
+    const selected = this.validateSession(value, {checkGuards:true});
     // A late main-window write must not carry a previous game's choices into
     // the opening preset. Return authoritative state so clients can reconcile.
     if (live.stage === 'loading') return this.getSession();
@@ -783,7 +825,7 @@ export class BackgroundSidebar {
   getModel() {
     const live = this.observe();
     const champion = this.champions.get(live.championId) || null;
-    const owned = this.session.owned.map(id => this.augments.get(id)).filter(Boolean);
+    const owned = this.session.owned.map(id => this.getOwnedAugment(id)).filter(Boolean);
     const recommendationData = champion ? this.recommendationRepository?.get(champion.id) : null;
     const {ranked} = this.rankOffers(this.offers.map(offer => offer.id), champion, owned, recommendationData);
     const rank = new Map(ranked.map((entry, index) => [entry.offer.id, index + 1]));

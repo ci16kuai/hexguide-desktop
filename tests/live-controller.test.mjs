@@ -5,7 +5,6 @@ import {UI_ELEMENTS} from '../dist/layout-elements.js';
 
 const data = JSON.parse(await readFile(new URL('../dist/data.json', import.meta.url), 'utf8'));
 const items = JSON.parse(await readFile(new URL('../dist/items.json', import.meta.url), 'utf8'));
-const appVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 const champions = new Map(data.champions.map(champion => [champion.id, champion]));
 const augments = new Map(data.augments.map(augment => [augment.id, augment]));
 let instance = 0;
@@ -23,7 +22,7 @@ const snapshot = (overrides = {}) => ({
   mode: {known: true, isMayhem: true, queueId: 2400}, ...overrides
 });
 
-async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', owned = ['firebrand'], stored = {}, gameId = null, initialHash = '#live'} = {}) {
+async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', owned = ['firebrand'], stored = {}, gameId = null, initialHash = '#live', appVersion} = {}) {
   const globals = ['location', 'sessionStorage', 'history', 'window', 'document', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'Date', 'AbortSignal'];
   const original = new Map(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const realSetTimeout = globalThis.setTimeout;
@@ -74,6 +73,7 @@ async function browserHarness(t, {initial = snapshot(), championId = 'Ahri', own
   });
   const {createLiveController} = await import(`../dist/live.js?test-instance=${++instance}`);
   const controller = createLiveController({
+    getAppVersion: () => appVersion,
     getChampion: () => champions.get(state.championId),
     getChampionById: id => champions.get(id),
     getOwned: () => state.owned.map(id => augments.get(id)).filter(Boolean),
@@ -127,6 +127,12 @@ test('local session bootstrap opens match home and removes the token from the vi
   assert.equal(location.hash,'#live');
   assert.equal(h.session.get('hexguide-local-session'),'fixture-local-session');
   assert.match(h.html(),/data-ui-id="live-title"[^>]*>我的这一局/);
+  assert.match(h.html(),/Windows 桌面版 · 测试版/);
+});
+
+test('live intro renders the running app version supplied by the current status', {concurrency:false}, async t=>{
+  const h=await browserHarness(t,{appVersion:'7.8.9-beta.1'});
+  assert.match(h.html(),/Windows 桌面版 7\.8\.9-beta\.1 · 测试版/);
 });
 
 const pendingGroup=(pendingId,sequence,ids,active=false)=>({pendingId,sequence,active,createdAt:Date.now()-360000,offers:ids.map(id=>{const a=augments.get(id);return {id,name:a.name,icon:a.icon,rarity:a.rarity};})});
@@ -136,7 +142,6 @@ const pendingModel=(groups,overrides={})=>({gameId:'game-one',gameEpoch:4,sessio
 test('one recognition click keeps the return-to-game delay and only displays recognized candidates', {concurrency:false}, async t=>{
   const h=await browserHarness(t,{owned:[]}),resolve=h.deferOcr(),reads=h.state.sidebarRequests;
   assert.match(h.html(),/data-live-action="ocr-scan"[^>]*>识别一次<\/button>/);
-  assert.ok(h.html().includes(`Windows 桌面版 ${appVersion} · 测试版`));
   assert.match(h.html(),/最小化保留任务栏入口/);
   await h.click('ocr-scan');await h.click('ocr-scan');
   assert.equal(h.state.ocrRequests,0);

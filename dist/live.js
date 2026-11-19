@@ -43,10 +43,10 @@ export function createLiveController(context){
   let manualRecognition=null,recognitionGeneration=0,toolsExpanded=false;
   // One opportunity per game, shared by loading and the first valid live plan.
   // Request cancellation (pause/demo) must not reopen a user's collapsed plan.
-  let initialPlanHandled=false,loadingPresentation=false,offerRankingKey='';
+  let initialPlanHandled=false,loadingPresentation=false,offerRankingKey='',catalogGeneration=0;
   try{const boundary=JSON.parse(sessionStorage.getItem('hexguide-game-boundary')||'{}');lastGame=context.getGameId?.()||boundary.gameId||'';lastPhase=boundary.phase||'';lastTime=boundary.gameTime??null;}catch{}
   const phaseNames={None:'客户端未连接',Lobby:'游戏大厅',Matchmaking:'匹配中',ReadyCheck:'确认对局',ChampSelect:'英雄选择',InProgress:'对局进行中',GameStart:'正在载入',WaitingForStats:'等待结算',EndOfGame:'对局已结束'};
-  fetch('./items.json').then(r=>r.ok?r.json():{}).then(x=>{catalog=x;refresh();}).catch(()=>{});
+  fetch('./items.json').then(r=>r.ok?r.json():{}).then(x=>{catalog=x;context.onItemCatalog?.();refresh();}).catch(()=>{});
   function expireOffers(){if(!pendingState&&ocrResult?.proposals?.length&&Date.now()-lastProposalAt>=60000){ocrResult={status:'waiting',message:'识别结果已过期，等待当前三选一卡片。',proposals:[]};ocrNotice='';context.onOffersExpired?.();}}
   function refresh(){expireOffers();const nextLoading=!sample&&live.stage==='loading';if(nextLoading!==loadingPresentation){loadingPresentation=nextLoading;context.onStageChange?.();}if(location.hash==='#live')context.renderLive();}
   function ownedIds(values){if(!Array.isArray(values))return null;const ids=values.map(value=>typeof value==='string'?value:value?.id);return ids.every(id=>typeof id==='string'&&id.length>0)&&new Set(ids).size===ids.length?[...ids]:null;}
@@ -145,12 +145,13 @@ export function createLiveController(context){
     }else if(!ocrResult?.proposals?.length&&observed.message){offerRankingKey='';ocrResult={status:observed.status,message:observed.message,proposals:[]};}
   }
   async function syncSidebar(){
-    const started=epoch;
+    const started=epoch,generation=catalogGeneration;
+    const current=()=>started===epoch&&generation===catalogGeneration;
     try{
       const r=await fetch('/api/sidebar',{headers:{'X-Hexguide-Session':token},signal:AbortSignal.timeout(4500),cache:'no-store'});
-      if(r.ok){const model=await r.json();if(started===epoch&&!sample&&!paused){acceptSidebar(model);refresh();}}
-      else if(started===epoch){authoritativeModel=null;refresh();}
-    }catch{if(started===epoch){authoritativeModel=null;refresh();}/* Live observations remain usable when the sidebar is unavailable. */}
+      if(r.ok){const model=await r.json();if(current()&&!sample&&!paused){acceptSidebar(model);refresh();}}
+      else if(current()){authoritativeModel=null;refresh();}
+    }catch{if(current()){authoritativeModel=null;refresh();}/* Live observations remain usable when the sidebar is unavailable. */}
   }
   async function setAuto(enabled){
     const previous=ocrAuto,started=epoch;ocrAuto=enabled;refresh();
@@ -275,6 +276,8 @@ export function createLiveController(context){
     }
   });
   return {
+    catalogChanged(){catalogGeneration++;authoritativeModel=null;offerRankingKey='';publishedOfferKey='';},
+    getItemMetadata(){return catalog?.meta;},
     isLoadingPreview(){return !sample&&live.stage==='loading';},
     manualChampion(){follow=false;},
     resetSession(){const session=context.getSessionContext?.(),scope=session&&(!pendingState||session.gameEpoch!==pendingState.gameEpoch||session.revision>=pendingState.revision)?session:pendingState;if(sample||!scope||!Number.isSafeInteger(scope.revision))return false;void resetPending({gameId:scope.gameId,revision:scope.revision});return true;},
@@ -294,6 +297,7 @@ export function createLiveController(context){
       return offers.map(offer=>({id:offer.id,rankingEvidence:offer.rankingEvidence?{...offer.rankingEvidence}:null}));
     },
     html(){
+      const version=context.getAppVersion?.();
       const c=sample?context.getChampionById('Ahri'):context.getChampion(),loading=!sample&&live.stage==='loading',owned=sample||loading?[]:context.getOwned(),route=sample||loading?'auto':context.getRoute();
       expireOffers();
       const olderPending=sample||loading?[]:list(pendingState?.groups).filter(group=>group.pendingId!==pendingState.primaryId);
@@ -310,7 +314,7 @@ export function createLiveController(context){
       const recognitionBusy=ocrBusy||sharedRecognitionActive(),notice=!ocrBusy&&sharedRecognitionActive()?manualRecognition.message||'正在识别当前画面，请保持待识别内容可见。':ocrNotice;
       const recognitionNotice=notice===ocrResult?.message?'':notice;
       const previewItems=!sample&&(usable||loadingUsable)&&['live','loading-preview'].includes(plan.stage)?list(plan.buildItems).slice(0,2):[];
-      return `<div class="page-intro live-intro" data-ui-id="live-intro" data-ui-label="实战页开场区域" data-ui-container="live-intro"><div data-ui-id="live-intro-copy" data-ui-label="实战页标题文案" data-ui-container="live-intro-copy"><h1 data-ui-id="live-title" data-ui-label="实战页大标题">我的这一局</h1><span class="live-kicker" data-ui-id="live-kicker" data-ui-label="桌面版版本提示">Windows 桌面版 1.18.1 · 测试版</span><p data-ui-id="live-subtitle" data-ui-label="实战页说明文字">${sample?'演示布局 · 不代表正在读取你的对局。':paused?'同步已暂停；恢复后继续更新本局状态。':loading?'正在载入：先看双方阵容与开局出装。':connected?'本局状态自动同步，选择确认后更新推荐。':'打开英雄联盟后自动尝试同步；当前英雄仅作离线参考。'}</p></div><span class="local-badge" data-ui-id="live-local-badge" data-ui-label="仅在本机处理标签">仅在本机处理</span></div>
+      return `<div class="page-intro live-intro" data-ui-id="live-intro" data-ui-label="实战页开场区域" data-ui-container="live-intro"><div data-ui-id="live-intro-copy" data-ui-label="实战页标题文案" data-ui-container="live-intro-copy"><h1 data-ui-id="live-title" data-ui-label="实战页大标题">我的这一局</h1><span class="live-kicker" data-ui-id="live-kicker" data-ui-label="桌面版版本提示">Windows 桌面版${version?' '+esc(version):''} · 测试版</span><p data-ui-id="live-subtitle" data-ui-label="实战页说明文字">${sample?'演示布局 · 不代表正在读取你的对局。':paused?'同步已暂停；恢复后继续更新本局状态。':loading?'正在载入：先看双方阵容与开局出装。':connected?'本局状态自动同步，选择确认后更新推荐。':'打开英雄联盟后自动尝试同步；当前英雄仅作离线参考。'}</p></div><span class="local-badge" data-ui-id="live-local-badge" data-ui-label="仅在本机处理标签">仅在本机处理</span></div>
       <section class="live-connection ${connected?'connected':''}" aria-label="游戏连接状态" data-ui-id="live-connection" data-ui-label="游戏连接状态栏" data-ui-container="live-connection"><div class="connection-symbol" data-ui-id="live-connection-symbol" data-ui-label="连接状态图标">${connected?'◉':'◌'}</div><div data-ui-id="live-connection-copy" data-ui-label="连接状态文字" data-ui-container="live-connection-copy"><strong data-ui-id="live-connection-title" data-ui-label="连接状态标题">${esc(status)}</strong><p data-ui-id="live-connection-message" data-ui-label="连接状态详情">${esc(live.connection?.message||'等待英雄联盟游戏启动')} · ${esc(phaseNames[live.phase]||live.phase||'等待对局')}</p></div><button class="text-button" data-live-action="pause" data-ui-id="live-pause" data-ui-label="暂停恢复同步按钮">${paused?'恢复同步':'暂停同步'}</button><button class="secondary-button" data-live-action="refresh" data-ui-id="live-refresh" data-ui-label="重新检测按钮" ${sample?'disabled':''}>重新检测</button></section>
       <section class="live-champion" data-ui-id="live-champion" data-ui-label="实战英雄信息" data-ui-container="live-champion"><div class="live-champion-name" data-ui-id="live-champion-identity" data-ui-label="英雄头像与名称" data-ui-container="live-champion-identity">${c?`<img src="${esc(c.icon)}" alt="" onerror="this.style.display='none'" data-ui-id="live-champion-avatar" data-ui-label="英雄头像">`:''}<div data-ui-id="live-champion-copy" data-ui-label="英雄名称文字" data-ui-container="live-champion-copy"><span data-ui-id="live-champion-mode" data-ui-label="英雄模式标签">${sample?'演示英雄 · '+esc(mode):preview?'本局英雄 · 正在载入':usable?esc(mode):connected?'参考英雄 · 等待对局核验':'离线参考英雄 · 未同步对局'}</span><h2 data-ui-id="live-champion-name" data-ui-label="英雄姓名与称号">${esc(c?.name||'请选择英雄')}<small>${esc(c?.title||'')}</small></h2></div></div><div class="live-follow" data-ui-id="live-follow" data-ui-label="自动跟随英雄设置" data-ui-container="live-follow"><button class="follow-button ${follow?'on':''}" data-live-action="follow" aria-pressed="${follow}" data-ui-id="live-follow-button" data-ui-label="自动跟随英雄按钮">${follow?'✓ 自动跟随英雄':'手动选择英雄'}</button><small data-ui-id="live-follow-hint" data-ui-label="跟随英雄说明">${follow?'选人阶段与进入游戏后同步':'切换为自动后跟随真实英雄'}</small>${loading?'':'<button class="text-button live-session-link" data-action="focus-session">手动修正 / 离线参考</button>'}</div></section>
       ${sample?'<div class="live-notice" data-ui-id="live-sample-notice" data-ui-label="演示模式提示">这是一组虚构示例，用于预览实战布局，不代表正在读取你的对局。退出演示后恢复本机检测。</div>':''}

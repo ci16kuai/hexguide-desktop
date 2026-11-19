@@ -335,15 +335,16 @@ export function createOcrScanner({applicationDirectory, dataDirectory, augments 
     if (busy) return result('waiting', '上一次识别尚未完成，请稍候。', [], {code:'scan-busy'});
     if (platform !== 'win32') return result('unavailable', '屏幕识别目前仅支持 Windows，可手动选择海克斯。', [], {code:'scan-platform-unsupported'});
     busy = true;
+    const catalog = augments;
     try {
       if (!executeScript) {
         worker ||= workerFactory({applicationDirectory,dataDirectory});
         const raw = await worker.scan(payload => {
-          const matched = matchOcrProposals(payload, augments);
+          const matched = matchOcrProposals(payload, catalog);
           return matched.status === 'recognized' && matched.proposals.length === 3 && matched.selectionMetadataStatus === 'accepted';
         });
         if (closed) return result('unavailable', '屏幕识别已停止。', [], {code:'scan-execution-failed'});
-        return matchOcrProposals(raw, augments);
+        return matchOcrProposals(raw, catalog);
       }
       const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(applicationDirectory, 'native/scan-augments.ps1')];
       if (dataDirectory) args.push('-DataDir', dataDirectory);
@@ -354,7 +355,7 @@ export function createOcrScanner({applicationDirectory, dataDirectory, augments 
         if (Buffer.byteLength(text) > 1024 * 1024) return result('unavailable', '识别结果过长，请手动选择。', [], {code:'scan-output-too-large'});
         const parsed = JSON.parse(text);
         if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new TypeError('Invalid capture result.');
-        return closed ? result('unavailable', '屏幕识别已停止。', [], {code:'scan-execution-failed'}) : matchOcrProposals(parsed, augments);
+        return closed ? result('unavailable', '屏幕识别已停止。', [], {code:'scan-execution-failed'}) : matchOcrProposals(parsed, catalog);
       } catch {
         return result('unavailable', '本次屏幕识别结果无效，可手动选择。', [], {code:'scan-output-invalid'});
       }
@@ -363,6 +364,7 @@ export function createOcrScanner({applicationDirectory, dataDirectory, augments 
       return result('unavailable', '本次屏幕识别未完成，可检查游戏窗口或手动选择。', [], {code});
     } finally { busy = false; }
   };
+  scan.replaceAugments = next => { augments = next; };
   scan.close = () => {
     if (closing) return closing;
     closed = true;

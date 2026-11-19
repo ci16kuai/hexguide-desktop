@@ -15,7 +15,7 @@ function harness({token='local-token'}={}){
   const context=vm.createContext({
     statisticsSnapshot:null,statisticsRevision:null,statisticsRefreshPending:false,statisticsRefreshTimer:null,statisticsRefreshClosed:false,
     statisticsIndexes:new Map([['Ahri',{cached:true}]]),
-    statisticsView:{replaceSnapshot:value=>applied.push(value)},renderKeepingFocus:()=>{renders++;},
+    statisticsView:{replaceSnapshot:value=>applied.push(value)},renderKeepingFocus:()=>{renders++;},refreshOpenDetail(){},
     sessionStorage:{getItem:()=>token},
     document:{visibilityState:'visible',addEventListener:(type,fn)=>listeners.set(type,fn),removeEventListener:type=>listeners.delete(type)},
     window:{addEventListener:(type,fn)=>windowListeners.set(type,fn)},

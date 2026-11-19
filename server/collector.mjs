@@ -263,12 +263,9 @@ export async function discoverLcu({read = readFile, platform = process.platform,
 export class LiveCollector {
   constructor({champions = [], officialChampions = [], augments = [], ca, request = requestLocalJson, discover = discoverLcu, now = () => new Date(), interval = 2000, idleInterval = 5000, maxBackoff = 15000} = {}) {
     this.index = buildChampionIndex(champions, officialChampions);
-    this.augmentIndex = new Map();
-    for (const augment of augments.filter(a => a.availability === 'current' && a.recommendable !== false && !a.isInternalTemplate)) {
-      for (const key of [augment.id, augment.sourceGameId, augment.gameDataId]) if (key != null) this.augmentIndex.set(String(key), augment.id);
-    }
     Object.assign(this, {ca, request, discover, now, interval, idleInterval, maxBackoff});
     this.snapshot = emptySnapshot(now());
+    this.replaceAugments(augments);
     this.stopped = true;
     this.failures = 0;
     this.lastDiscovery = 0;
@@ -279,6 +276,16 @@ export class LiveCollector {
   }
 
   getSnapshot() { return structuredClone(this.snapshot); }
+
+  replaceAugments(augments) {
+    const index = new Map();
+    for (const augment of augments) {
+      if (augment.availability !== 'current' || augment.recommendable === false || augment.retiredPatch || augment.isInternalTemplate) continue;
+      for (const key of [augment.id, augment.sourceGameId, augment.gameDataId]) if (key != null) index.set(String(key), augment.id);
+    }
+    this.augmentIndex = index;
+    this.snapshot = {...this.snapshot, augments:{status:'unavailable', ids:[]}};
+  }
 
   async readLcu() {
     if (!this.lcu || this.now().getTime() - this.lastDiscovery > 15000) {

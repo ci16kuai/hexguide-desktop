@@ -1,6 +1,6 @@
 /** Confirmed assistant state is shared by the main window and the tray service. */
 export function createSessionSync({token,getState,applyState,request=fetch,onError=()=>{}}){
-  let ready=false,hydrated=false,applying=false,writing=false,closed=false,pending=null,generation=0,authoritative=null;
+  let ready=false,hydrated=false,applying=false,writing=false,closed=false,pending=null,generation=0,authoritative=null,rejectedWrite=null;
   const selection=value=>({owned:[...(value.owned||[])],route:value.route||'auto'});
   const signature=value=>JSON.stringify(selection(value));
   const sameOwned=(a,b)=>JSON.stringify(a.owned)===JSON.stringify(b.owned);
@@ -15,11 +15,34 @@ export function createSessionSync({token,getState,applyState,request=fetch,onErr
     if(!validSession(value))throw Error('本局记录同步返回了无效状态');
     return value;
   }
+  function applySelection(value){
+    local=selection(value);
+    if(signature(getState())!==signature(local)){applying=true;try{applyState(value);}finally{applying=false;}}
+  }
   function accept(value,{apply=true}={}){
     authoritative=value;known=signature(value);
-    if(!apply)return;
-    local=selection(value);
-    if(signature(getState())!==known){applying=true;try{applyState(value);}finally{applying=false;}}
+    if(apply)applySelection(value);
+  }
+  function recoverRejectedWrite(value){
+    const {edit,base}=rejectedWrite;
+    const queued=pending,next=selection(value);
+    rejectedWrite=null;
+    if(value.gameEpoch===base.gameEpoch&&value.gameId===base.gameId){
+      if(queued?.touchesOwned){
+        // Rebase only changes made after the rejected write. In particular, a
+        // newer choice may still show a rejected item in its optimistic list.
+        const attempted=new Set(edit.owned),latest=new Set(queued.owned);
+        next.owned=next.owned.filter(id=>!attempted.has(id)||latest.has(id));
+        for(const id of latest)if(!attempted.has(id)&&!next.owned.includes(id))next.owned.push(id);
+      }
+      if(queued?.touchesRoute)next.route=queued.route;
+      else if(edit.touchesOwned&&edit.touchesRoute)next.route=edit.route;
+    }
+    const touchesOwned=!sameOwned(next,value),touchesRoute=next.route!==value.route;
+    pending=touchesOwned||touchesRoute?{...next,touchesOwned,touchesRoute}:null;
+    accept(value,{apply:!pending});
+    if(pending)applySelection({...value,...next});
+    onError('本局选择没有保存，已同步最新记录；请核对后再修改。');
   }
   async function pull(){
     if(closed||writing||(ready&&pending))return;
@@ -27,11 +50,13 @@ export function createSessionSync({token,getState,applyState,request=fetch,onErr
     try{
       const value=await request('/api/session',{headers,cache:'no-store',signal:AbortSignal.timeout(4500)}).then(readSession);
       if(closed||writing)return;
+      if(rejectedWrite&&started<rejectedWrite.generation)return;
       // A read started before a completed write cannot move its revision back.
       if(authoritative&&value.revision<authoritative.revision)return;
       const first=!hydrated;hydrated=true;
       ready=true;
-      if(first&&pending?.touchesOwned&&!sameOwned(value,initial)){
+      if(rejectedWrite)recoverRejectedWrite(value);
+      else if(first&&pending?.touchesOwned&&!sameOwned(value,initial)){
         // Before hydration, local storage cannot establish which owned list is
         // current. Do not give an old full array the fresh server's guards.
         const edit=pending;pending=null;generation++;
@@ -54,7 +79,11 @@ export function createSessionSync({token,getState,applyState,request=fetch,onErr
     let conflict=false;
     try{
       const response=await request('/api/session',{method:'POST',headers,body:JSON.stringify(value),signal:AbortSignal.timeout(4500)});
-      if(response.status===409){
+      if(response.status===400){
+        generation++;
+        rejectedWrite={edit,base,generation};
+        ready=false;
+      }else if(response.status===409){
         conflict=true;
         const payload=await response.json();
         const queued=pending;pending=null;generation++;

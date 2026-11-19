@@ -133,6 +133,9 @@ export class StatisticsUpdater {
     return this;
   }
   getSnapshot() { return this.#snapshot; }
+  replaceAugments(augments) {
+    this.#options.gameData = {...this.#options.gameData, augments};
+  }
   getStatus() {
     return {revision:this.#revision, patch:this.#snapshot.meta.patch, statsUpdatedAt:this.#snapshot.meta.statsUpdatedAt,
       intervalDays:3, lastCheckedAt:this.#state.lastCheckedAt || null, nextCheckAt:this.#state.nextCheckAt || null,

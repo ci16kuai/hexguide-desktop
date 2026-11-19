@@ -19,3 +19,7 @@ dialog{color:var(--text);background:#111f2e;border:1px solid #3a5063;border-radi
 .version-panel{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:14px 24px;padding:14px 18px;border:1px solid #2c4355;border-radius:8px;background:#11212e;margin-bottom:23px;color:#b8ccda;font-size:11px}.version-panel>div{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.version-caption{font-size:10px;color:#819cad;white-space:nowrap}.version-panel strong{font-size:13px;font-weight:500;color:#d4e5ed}.version-panel time{font-size:11px;font-variant-numeric:tabular-nums}.version-panel>button{color:#91c7d0;font-size:10px;white-space:nowrap;padding:5px}.version-updated{justify-content:flex-end}
 @media(max-width:1000px){.version-panel{grid-template-columns:1fr auto;gap:7px 12px}.version-updated{grid-row:2;grid-column:1/-1;justify-content:flex-start}.version-panel>button{grid-row:1;grid-column:2}.version-panel strong{font-size:12px}}
 @media(max-width:760px){.version-panel{padding:12px 13px;margin-bottom:16px;gap:7px 9px}.version-panel>div{gap:5px 8px}.version-panel strong{font-size:11px}.version-caption,.version-panel>button{font-size:9px}.version-panel time{font-size:10px}.source-button{max-width:160px;white-space:normal;text-align:right}}
+.source-versions{display:grid;gap:5px;margin:12px 0}
+.source-versions>div{display:grid;grid-template-columns:minmax(7rem,1fr) 2fr;gap:10px}
+.source-versions dt{font-weight:600}
+.source-versions dd{margin:0;overflow-wrap:anywhere}

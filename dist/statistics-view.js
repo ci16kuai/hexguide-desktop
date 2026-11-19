@@ -50,7 +50,7 @@ export function equipmentCards(advice,itemsCatalog){
 
 // This page only browses statistics and equipment catalog entries.
 export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args),conditionalClient}={}){
-  let index=null,itemsCatalog={},loading=false,error='',loaded=false,generation=0,itemsPromise=null;
+  let index=null,rawSnapshot=null,itemsCatalog={},loading=false,error='',loaded=false,generation=0,itemsPromise=null;
   const conditional=conditionalClient||createConditionalStatisticsClient({fetcher});
   const observations=new Map();
   const state={query:'',sort:'winRate',championId:'',augmentQuery:'',rarity:'all',includeLowSample:false,includeUnavailable:false,expanded:''};
@@ -68,9 +68,10 @@ export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args),
     try{
       const response=await fetcher('./statistics.json',{cache:'no-store'});
       if(!response.ok)throw Error(`统计资料请求失败（${response.status}）`);
-      const next=createStatistics(await response.json(),catalog);
+      const snapshot=await response.json();
       if(started!==generation)return;
-      index=next;
+      index=createStatistics(snapshot,catalog);
+      rawSnapshot=snapshot;
       await loadItems();
       loaded=true;
     }catch(cause){if(started===generation)error=cause?.message||'未能读取统计资料';}
@@ -79,16 +80,20 @@ export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args),
   function replaceSnapshot(snapshot){
     const next=createStatistics(snapshot,catalog);
     generation++;
-    index=next;loaded=true;error='';
+    index=next;rawSnapshot=snapshot;loaded=true;error='';
     redraw();
+  }
+  function replaceCatalog(nextCatalog){
+    if(rawSnapshot)index=createStatistics(rawSnapshot,nextCatalog);
+    catalog=nextCatalog;
   }
   function provenance(){
     const meta=index.meta||{},source=meta.sourceName||meta.source?.name||'AramHex',sourceUrl=meta.sourceUrl||meta.source?.url||'https://aramhex.com/';
     const cohorts=Array.isArray(meta.cohorts)?meta.cohorts:[],cohort=cohorts.find(c=>c.id===meta.defaultCohortId)||cohorts[0]||{};
-    const patch=meta.patch||meta.statsPatch||cohort.patch||'16.21',date=meta.statsUpdatedAt||meta.sourceUpdatedAt||meta.sourceDate||meta.statsDate||meta.sampleDate||cohort.updatedAt||'';
+    const patch=meta.rulesPatch||meta.patch||meta.statsPatch||cohort.patch||'待核实',date=meta.statsUpdatedAt||meta.sourceUpdatedAt||meta.sourceDate||meta.statsDate||meta.sampleDate||cohort.updatedAt||'';
     const imported=meta.fetchedAt||meta.importedAt||'';
     const formatDate=value=>{if(!value)return '来源未注明';const parsed=new Date(value);return Number.isNaN(parsed.getTime())?String(value):parsed.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});};
-    return `<section class="stats-provenance" ${target('stats-provenance','英雄胜率数据来源')}><div><b>${esc(source)} 正式服统计</b><span>统计版本 ${esc(patch)}</span><span>${esc(meta.region||'国服 7 区合并')}</span><span>${number(meta.validGames||meta.totalMatches)} 场有效对局</span></div><div><span>来源统计更新：${esc(formatDate(date))}</span><span>本站同步：${esc(formatDate(imported))}（北京时间）</span></div><div><a href="${link(sourceUrl)}" target="_blank" rel="noopener noreferrer">查看统计来源 ↗</a><a href="${link(meta.source?.licenseUrl||'https://creativecommons.org/licenses/by-nc/4.0/deed.zh-hans')}" target="_blank" rel="noopener noreferrer">数据许可 CC BY-NC 4.0</a><span>经整理与中文目录映射；统计版本独立于 4.0 规则资料。</span></div></section>`;
+    return `<section class="stats-provenance" ${target('stats-provenance','英雄胜率数据来源')}><div><b>${esc(source)} 正式服统计</b><span>统计版本 ${esc(patch)}</span><span>${esc(meta.region||'国服 7 区合并')}</span><span>${number(meta.validGames||meta.totalMatches)} 场有效对局</span></div><div><span>来源统计更新：${esc(formatDate(date))}</span><span>本站同步：${esc(formatDate(imported))}（北京时间）</span></div><div><a href="${link(sourceUrl)}" target="_blank" rel="noopener noreferrer">查看统计来源 ↗</a><a href="${link(meta.source?.licenseUrl||'https://creativecommons.org/licenses/by-nc/4.0/deed.zh-hans')}" target="_blank" rel="noopener noreferrer">数据许可 CC BY-NC 4.0</a><span>经整理与中文目录映射；统计版本独立于游戏规则。</span></div></section>`;
   }
   function list(){
     const champions=getChampionRows(index,{query:state.query,sort:state.sort}),available=index.champions.filter(c=>c.hasStats).length;
@@ -179,5 +184,5 @@ export function createStatisticsView({catalog,fetcher=(...args)=>fetch(...args),
     else return;
     redraw();
   });
-  return Object.freeze({html,replaceSnapshot});
+  return Object.freeze({html,replaceSnapshot,replaceCatalog});
 }

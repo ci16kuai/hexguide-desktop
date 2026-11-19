@@ -165,6 +165,55 @@ test('a temporary failed write retains an earlier owned edit when a route edit i
   assert.deepEqual(state.owned,['firebrand']);assert.equal(state.route,'tank');
 });
 
+test('a rejected stale-catalog choice is dropped after a fresh read and never retried',async t=>{
+  let state={owned:[],route:'auto'},remote=session(),reads=0;
+  const writes=[];
+  const sync=createSessionSync({token:'test',getState:()=>state,applyState:value=>{state=value;},request:async(_url,options)=>{
+    if(options.method!=='POST'){reads++;return response(remote);}
+    const value=JSON.parse(options.body);writes.push(value);
+    if(writes.length===1){remote=session({owned:['goliath'],revision:2});return response({error:'Invalid assistant state.'},400);}
+    remote={...remote,owned:value.owned,revision:3};return response(remote);
+  }});t.after(()=>sync.close());await settle();
+  state={...state,owned:['retired']};sync.publish();await settle();await settle();
+  assert.equal(reads,2);
+  assert.deepEqual(state.owned,['goliath']);
+  sync.publish();await sync.pull();await settle();
+  assert.equal(writes.length,1);
+  state={...state,owned:['goliath','recursion']};sync.publish();await settle();
+  assert.deepEqual(writes[1],{owned:['goliath','recursion'],route:'auto',...guards(session({revision:2}))});
+});
+
+test('rejected ownership recovers without overwriting newer edits or retrying the invalid item',async t=>{
+  let state={owned:[],route:'auto'},reads=0,releaseWrite,releaseRead,releaseStaleRead;
+  const writes=[],observed=session({owned:['firebrand'],revision:2});
+  const sync=createSessionSync({token:'test',getState:()=>state,applyState:value=>{state=value;},request:async(_url,options)=>{
+    if(options.method!=='POST'){
+      if(++reads===1)return response(session({owned:['firebrand']}));
+      if(reads===2){await new Promise(resolve=>{releaseStaleRead=resolve;});return response(session({owned:['firebrand']}));}
+      await new Promise(resolve=>{releaseRead=resolve;});
+      return response({...observed,owned:['firebrand','goliath']});
+    }
+    const value=JSON.parse(options.body);writes.push(value);
+    if(writes.length===1){await new Promise(resolve=>{releaseWrite=resolve;});return response({error:'Invalid assistant state.'},400);}
+    return response({...observed,owned:value.owned,route:value.route,revision:3});
+  }});t.after(()=>sync.close());await settle();
+  const staleRead=sync.pull();await settle();
+  state={...state,owned:['firebrand','retired']};sync.publish();await settle();
+  state={...state,owned:['firebrand','retired','recursion'],route:'tank'};sync.publish();
+  releaseWrite();await settle();
+  assert.equal(typeof releaseRead,'function','a fresh authoritative read starts before retrying');
+  releaseStaleRead();await staleRead;
+  assert.equal(writes.length,1,'a read from before the rejected write cannot finish recovery');
+  state={...state,owned:['retired','recursion','thread_the_needle'],route:'tank'};sync.publish();
+  releaseRead();await settle();await settle();
+  assert.deepEqual(writes,[
+    {owned:['firebrand','retired'],route:'auto',...guards(session())},
+    {owned:['goliath','recursion','thread_the_needle'],route:'tank',...guards(observed)},
+  ]);
+  assert.deepEqual(state.owned,['goliath','recursion','thread_the_needle']);
+  assert.equal(state.route,'tank');
+});
+
 
 test('authoritative accessor exposes fresh metadata without requiring a selection change or allowing mutation',async t=>{
   let state={owned:['firebrand'],route:'auto'},release;
