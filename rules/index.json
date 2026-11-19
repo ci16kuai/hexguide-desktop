@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "clientPatch": "16.23",
-  "sha256": "b331ec5f7159af67b4fa8e12919d14966b4ec0e5ff058634cf2e74442e4719f3",
-  "updatedAt": "2026-11-19T12:45:37.578931+00:00"
+  "sha256": "0f1c651a051a0d5266556edf6b4eab1340331bd7239cd3aa41dd6df7a621ae57",
+  "updatedAt": "2026-11-19T15:41:07.891440+00:00",
+  "announcementRevision": "1123884c42431a007bab8cee3d7fefbd0b2b09a8b409cc476b6970bbceeab7e7"
 }
