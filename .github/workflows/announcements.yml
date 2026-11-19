@@ -3,7 +3,6 @@ name: Publish official hero, equipment and augment announcements
 on:
   schedule:
     - cron: '37 */6 * * *'
-    - cron: '6-56/10 15-23 19 11 *'
   workflow_dispatch:
     inputs:
       verify_api:
