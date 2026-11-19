@@ -87,6 +87,20 @@ jobs:
             sleep 5
           done
           exit 1
+      - name: Publish rules for the newest confirmed CN patch
+        if: steps.publish.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --target "$RUNNER_TEMP/hexguide-rule-deps" xxhash==3.6.0
+          export PYTHONPATH="$RUNNER_TEMP/hexguide-rule-deps"
+          python3 -m unittest discover -s source/tests -p test_rules_publisher.py
+          python3 source/scripts/publish-rules.py publisher
+          git -C publisher add -- rules
+          if ! git -C publisher diff --cached --quiet; then
+            git -C publisher commit -m 'Publish verified KIWI rules for the confirmed CN patch'
+            git -C publisher push origin HEAD:refs/heads/codex/announcements-feed
+          fi
       - name: Record publication outcome in Platform sessions
         if: always() && steps.maintain.outcome != 'skipped'
         env:
