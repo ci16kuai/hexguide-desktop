@@ -1,8 +1,8 @@
 {
-  "checkedAt": "2026-11-18T20:50:47.478Z",
+  "checkedAt": "2026-11-19T07:48:18.874Z",
   "fromVersion": "16.23.1",
   "toVersion": "16.23.1",
-  "changeCount": 62,
+  "changeCount": 0,
   "warnings": [
     {
       "kind": "item",
@@ -27,27 +27,17 @@
     "斗魂竞技场": 27,
     "BUG修复及品质级改动": 1
   },
-  "announcementIds": [
-    "627bbc903b04ee8cca75b08f"
-  ],
-  "formatting": [
-    {
-      "sourceUrl": "https://lol.qq.com/gicp/news/410/37102797.html",
-      "processedCount": 62,
-      "summary": "已整理全部 61 条非经典模式公告条目，保留通用、海克斯大乱斗与斗魂竞技场的具体内容及数值。"
-    }
-  ],
-  "announcementId": "627bbc903b04ee8cca75b08f",
-  "reused": false,
+  "announcementIds": [],
+  "reused": true,
   "agent": {
     "agentId": "agent_29a1151c93594fbc81dff44d9ed748c67eadc3cc7e1f406ab4",
-    "runId": "gha-44395201641-1",
+    "runId": "gha-44482390271-1",
     "sessions": [
       {
-        "task": "official-format",
+        "task": "check-receipt",
         "status": "completed",
-        "sessionId": "sess_07b740c02ccdeacb006afe0facb4088196993b0b075fe786dc",
-        "turnId": "turn_07b740c02ccdeacb006afe0fb246dc819693c83106bc4d55ae",
+        "sessionId": "sess_0964d100bd9e54b1006afea9c7ea8881979ecdfc3fae404e30",
+        "turnId": "turn_0964d100bd9e54b1006afea9cc8cf081979b26838158eeef8a",
         "usage": null,
         "model": "gpt-6-luna"
       }
