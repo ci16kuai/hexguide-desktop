@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import re
 from datetime import datetime, timezone
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import xxhash
 
@@ -16,7 +16,8 @@ LIMIT = 64 * 1024 * 1024
 
 
 def download(root, name):
-    with urlopen(f"{root}/{name}", timeout=35) as response:
+    request = Request(f"{root}/{name}", headers={"User-Agent": "HexGuide-rules/1.0"})
+    with urlopen(request, timeout=35) as response:
         body = response.read(LIMIT + 1)
     if len(body) > LIMIT:
         raise ValueError(f"Asset exceeds size limit: {name}")
